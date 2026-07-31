@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { PhCaretDoubleLeft, PhCaretDoubleRight, PhTrash } from '@phosphor-icons/vue';
+import { PhCaretDoubleLeft, PhCaretDoubleRight, PhCircleNotch, PhStopCircle, PhTrash } from '@phosphor-icons/vue';
 
 import {
+  cancelResearchRun,
   createResearchConversation,
   createResearchNote,
   deleteResearchConversation,
@@ -10,7 +11,9 @@ import {
   getResearchConversation,
   listResearchConversations,
   listResearchTools,
-  streamResearchMessage,
+  startResearchMessage,
+  streamResearchRun,
+  type ResearchStreamEvent,
   type ResearchToolInfo
 } from '../api/research';
 import PanelResizeHandle from '../components/common/PanelResizeHandle.vue';
@@ -25,9 +28,11 @@ import WordPreviewDialog from '../components/documents/WordPreviewDialog.vue';
 import { parseWordArtifact, type WordArtifact } from '../types/artifacts';
 import type {
   ResearchConversation,
+  ResearchConversationDetail,
   ResearchMessage,
   ResearchNote,
   ResearchPromptPreview,
+  ResearchRun,
   ResearchSource,
   ResearchStep
 } from '../types/research';
@@ -41,6 +46,8 @@ const notes = ref<ResearchNote[]>([]);
 const promptPreview = ref<ResearchPromptPreview>({ historyMessageCount: 0, currentMessage: '' });
 const input = ref('');
 const loading = ref(false);
+const stopping = ref(false);
+const activeRun = ref<ResearchRun>();
 const error = ref('');
 const collapsed = useCollapsiblePanel('research:sidebar-collapsed');
 const inspectorCollapsed = useCollapsiblePanel('research:inspector-collapsed');
@@ -54,6 +61,7 @@ const availableTools = ref<ResearchToolInfo[]>([]);
 const enabledTools = ref<Record<string, boolean>>({});
 const previewArtifact = ref<WordArtifact>();
 let requestController: AbortController | undefined;
+let subscriptionSequence = 0;
 
 const sidebarBounds: PanelWidthBounds = { defaultWidth: 220, min: 168, max: 420 };
 const inspectorBounds: PanelWidthBounds = { defaultWidth: 400, min: 280, max: 720 };
@@ -107,7 +115,7 @@ function toggleTool(name: string) {
   enabledTools.value[name] = !enabledTools.value[name];
 }
 
-onBeforeUnmount(() => requestController?.abort());
+onBeforeUnmount(disconnectResearchStream);
 
 async function loadConversations() {
   const data = await listResearchConversations();
@@ -115,26 +123,27 @@ async function loadConversations() {
 }
 
 async function createConversation() {
-  requestController?.abort();
+  disconnectResearchStream();
   const { conversation } = await createResearchConversation();
   conversations.value = [conversation, ...conversations.value];
   await selectConversation(conversation.id);
 }
 
 async function selectConversation(id: string) {
-  if (loading.value || id === activeConversationId.value) return;
+  if (id === activeConversationId.value) return;
+  disconnectResearchStream();
+  loading.value = false;
+  stopping.value = false;
+  activeRun.value = undefined;
   const detail = await getResearchConversation(id);
   activeConversationId.value = id;
-  messages.value = detail.messages;
-  steps.value = detail.steps;
-  sources.value = detail.sources;
-  notes.value = detail.notes;
-  promptPreview.value = detail.promptPreview;
+  applyConversationDetail(detail);
   selectedSourceId.value = undefined;
   selectedStep.value = undefined;
   activeRailTab.value = 'timeline';
   activeDetailsTab.value = 'notes';
   error.value = '';
+  if (detail.activeRun) connectToRun(detail.activeRun);
 }
 
 async function send() {
@@ -146,7 +155,6 @@ async function send() {
   error.value = '';
   loading.value = true;
   activeRailTab.value = 'timeline';
-  requestController = new AbortController();
 
   try {
     // Send the restriction only when the user turned something off; undefined = all tools.
@@ -154,23 +162,50 @@ async function send() {
       availableTools.value.length && enabledToolNames.value.length < availableTools.value.length
         ? enabledToolNames.value
         : undefined;
-    await streamResearchMessage(conversationId, content, handleStreamEvent, requestController.signal, allowedTools);
+    const started = await startResearchMessage(conversationId, content, allowedTools);
+    upsert(messages, started.userMessage);
+    upsert(messages, started.assistantMessage);
+    promptPreview.value = started.promptPreview;
+    connectToRun(started.run);
     await loadConversations();
   } catch (err) {
-    if ((err as Error).name !== 'AbortError') {
-      error.value = err instanceof Error ? err.message : '请求失败';
-      await reloadActiveConversation();
-    }
-  } finally {
-    loading.value = false;
-    requestController = undefined;
+    error.value = err instanceof Error ? err.message : '请求失败';
+    await reloadActiveConversation();
+    if (!activeRun.value) loading.value = false;
   }
 }
 
-function handleStreamEvent(event: Parameters<typeof streamResearchMessage>[2] extends (event: infer T) => void ? T : never) {
-  if (event.type === 'research_message_started') {
-    if (event.userMessage) upsert(messages, event.userMessage);
-    upsert(messages, event.message);
+function connectToRun(run: ResearchRun) {
+  disconnectResearchStream();
+  applyRun(run);
+  if (!loading.value) return;
+
+  const controller = new AbortController();
+  const sequence = ++subscriptionSequence;
+  requestController = controller;
+  void streamResearchRun(run.id, handleStreamEvent, controller.signal)
+    .catch(async (err) => {
+      if ((err as Error).name === 'AbortError' || sequence !== subscriptionSequence) return;
+      error.value = err instanceof Error ? `${err.message}，任务仍在后台运行。` : '研究进度连接已断开，任务仍在后台运行。';
+      await reloadActiveConversation();
+    })
+    .finally(() => {
+      if (sequence !== subscriptionSequence) return;
+      requestController = undefined;
+      if (!activeRun.value || isTerminal(activeRun.value)) loading.value = false;
+    });
+}
+
+function disconnectResearchStream() {
+  subscriptionSequence += 1;
+  requestController?.abort();
+  requestController = undefined;
+}
+
+function handleStreamEvent(event: ResearchStreamEvent) {
+  if (event.type === 'snapshot') {
+    applyConversationDetail(event.detail);
+    applyRun(event.run);
   }
   if (event.type === 'research_step' || event.type === 'tool_call_started' || event.type === 'tool_call_completed') upsert(steps, event.step);
   if (event.type === 'research_source_found') upsert(sources, event.source);
@@ -182,10 +217,31 @@ function handleStreamEvent(event: Parameters<typeof streamResearchMessage>[2] ex
     upsert(messages, event.message);
     event.sources.forEach((source) => upsert(sources, source));
     promptPreview.value = event.promptPreview;
+    applyRun(event.run);
   }
+  if (event.type === 'run_updated' || event.type === 'done') applyRun(event.run);
+  if (event.type === 'done') void loadConversations();
   if (event.type === 'error') {
     if (event.assistantMessage) upsert(messages, event.assistantMessage);
-    error.value = event.message;
+    applyRun(event.run);
+    error.value = event.run.status === 'cancelled' ? '' : event.message;
+    void loadConversations();
+  }
+}
+
+async function stopResearch() {
+  const run = activeRun.value;
+  if (!run || stopping.value || isTerminal(run)) return;
+  stopping.value = true;
+  error.value = '';
+  try {
+    const result = await cancelResearchRun(run.id);
+    applyRun(result.run);
+    await reloadActiveConversation();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '停止研究失败';
+  } finally {
+    stopping.value = false;
   }
 }
 
@@ -194,11 +250,12 @@ async function reloadActiveConversation() {
 
   try {
     const detail = await getResearchConversation(activeConversationId.value);
-    messages.value = detail.messages;
-    steps.value = detail.steps;
-    sources.value = detail.sources;
-    notes.value = detail.notes;
-    promptPreview.value = detail.promptPreview;
+    applyConversationDetail(detail);
+    if (detail.activeRun) applyRun(detail.activeRun);
+    else {
+      activeRun.value = undefined;
+      loading.value = false;
+    }
   } catch {
     // Preserve already-rendered stream state when recovery cannot load the conversation.
   }
@@ -217,7 +274,7 @@ async function removeNote(note: ResearchNote) {
 
 async function confirmDeleteConversation() {
   const conversation = deleteTarget.value;
-  if (!conversation || deleting.value || loading.value) return;
+  if (!conversation || deleting.value) return;
 
   deleting.value = true;
   error.value = '';
@@ -241,6 +298,7 @@ async function confirmDeleteConversation() {
 }
 
 function clearConversationDetail() {
+  disconnectResearchStream();
   activeConversationId.value = undefined;
   messages.value = [];
   steps.value = [];
@@ -251,6 +309,27 @@ function clearConversationDetail() {
   selectedStep.value = undefined;
   activeRailTab.value = 'timeline';
   activeDetailsTab.value = 'notes';
+  activeRun.value = undefined;
+  loading.value = false;
+  stopping.value = false;
+}
+
+function applyConversationDetail(detail: ResearchConversationDetail) {
+  messages.value = detail.messages;
+  steps.value = detail.steps;
+  sources.value = detail.sources;
+  notes.value = detail.notes;
+  promptPreview.value = detail.promptPreview;
+}
+
+function applyRun(run: ResearchRun) {
+  activeRun.value = run;
+  loading.value = run.status === 'queued' || run.status === 'running';
+  if (!loading.value) stopping.value = false;
+}
+
+function isTerminal(run: ResearchRun) {
+  return run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled';
 }
 
 function selectCitation(key: string) {
@@ -276,7 +355,7 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
     class="relative grid min-h-0 h-full grid-cols-[var(--sidebar-width)_minmax(0,1fr)_var(--inspector-width)] max-md:grid-cols-1 max-md:grid-rows-[auto_minmax(380px,1fr)_auto]"
     :style="{ '--sidebar-width': sidebarTrack, '--inspector-width': inspectorTrack }"
   >
-    <ResearchConversationSidebar :conversations="conversations" :active-conversation-id="activeConversationId" :collapsed="collapsed" :busy="loading || deleting" @create="createConversation" @select="selectConversation" @delete="deleteTarget = $event" @toggle="collapsed = !collapsed" />
+    <ResearchConversationSidebar :conversations="conversations" :active-conversation-id="activeConversationId" :collapsed="collapsed" :busy="deleting" @create="createConversation" @select="selectConversation" @delete="deleteTarget = $event" @toggle="collapsed = !collapsed" />
 
     <PanelResizeHandle
       v-if="!collapsed"
@@ -316,6 +395,10 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
       </div>
       <footer class="border-t border-[var(--agent-border)] p-4">
         <p v-if="error" class="m-0 mb-2 text-sm font-semibold text-[var(--agent-error-text)]">{{ error }}</p>
+        <div v-if="loading" class="mb-3 flex items-center justify-between gap-3 rounded-md border border-[var(--agent-selected-border)] bg-[var(--agent-selected-bg)] px-3 py-2 text-[var(--agent-selected-text)]">
+          <span class="inline-flex min-w-0 items-center gap-2 text-xs font-semibold"><PhCircleNotch class="shrink-0 animate-spin" :size="15" /><span class="truncate">后台研究中 · 离开页面不会中断</span></span>
+          <button type="button" class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-[var(--agent-error-text)]/30 bg-[var(--agent-surface)] px-2.5 text-xs font-bold text-[var(--agent-error-text)] hover:bg-[var(--agent-error-bg)] disabled:cursor-wait disabled:opacity-60" :disabled="stopping" @click="stopResearch"><PhCircleNotch v-if="stopping" class="animate-spin" :size="14" /><PhStopCircle v-else :size="14" weight="fill" />{{ stopping ? '停止中' : '停止研究' }}</button>
+        </div>
         <div v-if="availableTools.length" class="mb-2.5 flex flex-wrap items-center gap-1.5">
           <span class="mr-1 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--agent-text-muted)]">Tools</span>
           <button
@@ -335,7 +418,7 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
         </div>
         <form class="flex gap-2" @submit.prevent="send">
           <input v-model="input" class="min-w-0 flex-1 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-3 py-2.5 text-sm text-[var(--agent-text)] outline-none focus:border-[var(--agent-selected-border)]" placeholder="输入研究问题..." :disabled="loading" />
-          <button type="submit" class="rounded-md bg-[var(--agent-selected-bg)] px-4 text-sm font-bold text-[var(--agent-selected-text)] disabled:opacity-50" :disabled="loading">{{ loading ? '研究中' : '发送' }}</button>
+          <button type="submit" class="rounded-md bg-[var(--agent-selected-bg)] px-4 text-sm font-bold text-[var(--agent-selected-text)] disabled:opacity-50" :disabled="loading">{{ loading ? '后台运行中' : '发送' }}</button>
         </form>
       </footer>
     </main>

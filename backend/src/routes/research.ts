@@ -1,56 +1,31 @@
 import type { Response } from 'express';
 import { Router } from 'express';
 
-import { runAgentLoop } from '../agent/agentLoop.js';
 import { getToolDefinitions } from '../tools/definitions.js';
 import { toolRegistry } from '../tools/registry.js';
-import { isExplicitWordDocumentRequest } from '../tools/wordDocumentTool.js';
 import { failure, success } from '../response.js';
-import { buildResearchContext, createConversationTitle } from '../research/context.js';
+import { buildResearchContext } from '../research/context.js';
 import {
-  addResearchSource,
+  cancelResearchRun,
+  createAndStartResearchRun,
+  getResearchRunSnapshot,
+  subscribeToResearchRun,
+  type ResearchRunEvent
+} from '../research/service.js';
+import {
   createResearchConversation,
-  createResearchMessage,
   createResearchNote,
-  createResearchStep,
   deleteResearchConversation,
   deleteResearchNote,
+  getActiveResearchRun,
   getResearchConversation,
   getResearchConversationDetail,
+  getResearchRun,
   listResearchConversations,
   listResearchMessages,
-  updateResearchConversation,
-  updateResearchMessage,
-  updateResearchNote,
-  updateResearchStep
+  updateResearchNote
 } from '../research/store.js';
-import type { ResearchPromptPreview, ResearchSource, ResearchStep } from '../research/types.js';
-
-const DEFAULT_MODEL = 'deepseek-v4-flash';
-const MAX_TOOL_ROUNDS = 4;
-const DEFAULT_RESEARCH_TIMEOUT_MS = 90_000;
-const AGENT_SYSTEM_PROMPT = `You are EvidentLoop, an evidence-first durable research agent.
-
-Use tools when they help answer with real local project data.
-
-Rules:
-- Only use tools listed in the provided tools array.
-- Do not write or simulate tool calls in normal text.
-- For knowledge base or documentation questions, call search_knowledge first.
-- Treat search_knowledge.verdict as authoritative retrieval confidence:
-  - sufficient: use the returned sources as evidence.
-  - weak: if rewriteTriggered=true, the automatic rewrite budget is already exhausted; do not search the same intent again and state the evidence limitation. If rewriteTriggered=false, reformulate once with more specific terminology.
-  - empty: do not use or cite the returned candidates as evidence; state that the local knowledge base does not cover the question.
-- Use read_document only when search_knowledge snippets are not enough.
-- Use search_docs only to locate text in a document already identified by a sufficient or weak retrieval; do not use it to override an empty verdict.
-- For external facts the local knowledge base cannot answer (library comparisons, versions, releases, current events), call web_search.
-- web_search snippets are often enough; call fetch_page only for results worth reading in depth, and always pass a focused query so long pages return the relevant parts.
-- When retrieved sources support a claim, cite their provided keys such as [S1].
-- Call generate_word_document only when the user explicitly asks to generate, export, download, or create a Word/DOCX file. Ordinary requests to summarize, analyze, or write content should remain normal chat replies.
-- For generate_word_document, always put the complete body in contentMarkdown. Never construct a blocks array. Use <!-- pagebreak --> for explicit page breaks.
-- When generate_word_document succeeds, call it only once. The client renders the document card from the structured tool result, so do not include downloadUrl, previewUrl, localhost URLs, Markdown download links, or redundant download instructions in the final answer. Give only a concise content summary when useful.
-- If a tool fails, explain the failure based on the tool error instead of pretending it succeeded.
-- Stop calling tools once you have enough information to answer.`;
+import type { ResearchRunStatus } from '../research/types.js';
 
 export const researchRouter = Router();
 
@@ -86,6 +61,10 @@ researchRouter.get('/research/conversations/:conversationId', (req, res) => {
 });
 
 researchRouter.delete('/research/conversations/:conversationId', (req, res) => {
+  if (getActiveResearchRun(req.params.conversationId)) {
+    res.status(409).json(failure('Stop the active research task before deleting this conversation'));
+    return;
+  }
   if (!deleteResearchConversation(req.params.conversationId)) {
     res.status(404).json(failure('Research conversation not found'));
     return;
@@ -135,17 +114,10 @@ researchRouter.delete('/research/notes/:noteId', (req, res) => {
   res.json(success({ deleted: true }));
 });
 
-researchRouter.post('/research/conversations/:conversationId/messages/stream', async (req, res) => {
+researchRouter.post('/research/conversations/:conversationId/messages', (req, res) => {
   const apiKey = process.env.DEEPSEEK_API_KEY;
   if (!apiKey) {
     res.status(500).json(failure('DEEPSEEK_API_KEY is not configured'));
-    return;
-  }
-
-  const conversationId = req.params.conversationId;
-  let conversation = getResearchConversation(conversationId);
-  if (!conversation) {
-    res.status(404).json(failure('Research conversation not found'));
     return;
   }
 
@@ -155,170 +127,66 @@ researchRouter.post('/research/conversations/:conversationId/messages/stream', a
     return;
   }
 
-  // undefined = all tools; an explicit array (even empty) restricts the loop to exactly those tools.
-  const allowedToolsRaw = req.body?.allowedTools;
-  let allowedToolNames: string[] | undefined;
-  if (Array.isArray(allowedToolsRaw)) {
-    const registered = new Set(getToolDefinitions().map((tool) => tool.function.name));
-    allowedToolNames = allowedToolsRaw.filter(
-      (name): name is string => typeof name === 'string' && registered.has(name)
-    );
-  }
-
-  if (conversation.title === '新研究') {
-    conversation = updateResearchConversation(conversationId, {
-      title: createConversationTitle(content),
-      topic: content,
-      summary: conversation.summary
-    }) ?? conversation;
-  }
-
-  const priorMessages = listResearchMessages(conversationId);
-  const { messages: contextMessages, promptPreview } = buildResearchContext(conversation, priorMessages, content);
-  const userMessage = createResearchMessage({ conversationId, role: 'user', content, status: 'complete' });
-  const assistantMessage = createResearchMessage({ conversationId, role: 'assistant', content: '', status: 'streaming' });
-
-  prepareSse(res);
-  sendEvent(res, 'research_message_started', { message: assistantMessage, userMessage });
-
-  const abortController = new AbortController();
-  let completed = false;
-  const abortRequest = () => abortController.abort(new Error('Research request was cancelled'));
-  req.once('aborted', abortRequest);
-  res.once('close', () => {
-    if (!completed) abortRequest();
-  });
-  const timeout = setTimeout(() => abortController.abort(new Error('Research request timed out')), getResearchTimeoutMs());
-
-  let sequence = 0;
-  let citationNumber = 0;
-  const sourceIds = new Set<string>();
-  const researchSources: ResearchSource[] = [];
-  const activeToolSteps = new Map<string, ResearchStep>();
-  let latestPromptPreview: ResearchPromptPreview = promptPreview;
-
   try {
-    const result = await runAgentLoop({
+    const started = createAndStartResearchRun({
+      conversationId: req.params.conversationId,
+      content,
+      allowedToolNames: parseAllowedToolNames(req.body?.allowedTools),
       apiKey,
-      message: content,
-      contextMessages,
-      model: process.env.DEEPSEEK_MODEL ?? DEFAULT_MODEL,
-      systemPrompt: AGENT_SYSTEM_PROMPT,
-      maxToolRounds: MAX_TOOL_ROUNDS,
-      allowedToolNames,
-      requiredToolName: isExplicitWordDocumentRequest(content)
-        ? 'generate_word_document'
-        : undefined,
-      signal: abortController.signal,
-      onEvent: async (event) => {
-        if (abortController.signal.aborted || res.writableEnded) return;
-        if (event.type === 'llm') {
-          const step = createResearchStep({
-            conversationId,
-            messageId: assistantMessage.id,
-            sequence: ++sequence,
-            type: 'llm',
-            status: 'complete',
-            title: event.title,
-            input: { model: event.model, tools: event.tools }
-          });
-          sendEvent(res, 'research_step', { step });
-          return;
-        }
-
-        if (event.type === 'tool_started') {
-          const step = createResearchStep({
-            conversationId,
-            messageId: assistantMessage.id,
-            sequence: ++sequence,
-            type: 'tool',
-            status: 'running',
-            title: event.toolCall.name,
-            input: event.toolCall.arguments
-          });
-          activeToolSteps.set(event.toolCall.id, step);
-          sendEvent(res, 'research_step', { step });
-          sendEvent(res, 'tool_call_started', { step });
-          return;
-        }
-
-        if (event.type === 'tool_completed') {
-          const activeStep = activeToolSteps.get(event.toolCall.id);
-          if (!activeStep) return;
-          const step = updateResearchStep(activeStep.id, {
-            status: event.toolCall.error ? 'error' : 'complete',
-            output: event.toolCall.error ? undefined : event.toolCall.result,
-            error: event.toolCall.error
-          });
-          activeToolSteps.delete(event.toolCall.id);
-          if (step) {
-            sendEvent(res, 'research_step', { step });
-            sendEvent(res, 'tool_call_completed', { step });
-          }
-          return;
-        }
-
-        if (!sourceIds.has(event.source.id)) {
-          sourceIds.add(event.source.id);
-          const source = addResearchSource(assistantMessage.id, event.source, `S${++citationNumber}`);
-          researchSources.push(source);
-          sendEvent(res, 'research_source_found', { messageId: assistantMessage.id, source });
-        }
-      }
+      model: process.env.DEEPSEEK_MODEL
     });
-
-    const replyWithCitations = appendMissingCitations(result.reply, researchSources);
-    const completedMessage = updateResearchMessage(assistantMessage.id, { content: replyWithCitations, status: 'complete' });
-    if (!completedMessage) throw new Error('Research assistant message could not be completed');
-    sendEvent(res, 'assistant_delta', { messageId: completedMessage.id, content: replyWithCitations });
-
-    const updatedConversation = getResearchConversation(conversationId) ?? conversation;
-    latestPromptPreview = buildResearchContext(updatedConversation, listResearchMessages(conversationId), content).promptPreview;
-    sendEvent(res, 'research_message_completed', {
-      message: completedMessage,
-      sources: researchSources,
-      promptPreview: latestPromptPreview
-    });
-    sendEvent(res, 'done', {});
-    completed = true;
-    res.end();
+    res.status(202).json(success(started, 'Research task queued'));
   } catch (error) {
-    const message = getResearchFailureMessage(error, abortController.signal);
-    const failedMessage = updateResearchMessage(assistantMessage.id, { content: message, status: 'error' });
-
-    for (const activeStep of activeToolSteps.values()) {
-      const step = updateResearchStep(activeStep.id, { status: 'error', output: undefined, error: message });
-      if (step && !res.writableEnded) sendEvent(res, 'research_step', { step });
-    }
-
-    if (!res.writableEnded) {
-      sendEvent(res, 'error', { message, assistantMessage: failedMessage });
-      completed = true;
-      res.end();
-    }
-  } finally {
-    clearTimeout(timeout);
-    req.off('aborted', abortRequest);
+    const message = getErrorMessage(error);
+    res.status(message === 'Research conversation not found' ? 404 : 409).json(failure(message));
   }
 });
 
-function getResearchTimeoutMs() {
-  const configured = Number(process.env.RESEARCH_TIMEOUT_MS);
-  return Number.isFinite(configured) && configured >= 5_000 ? configured : DEFAULT_RESEARCH_TIMEOUT_MS;
+researchRouter.get('/research/runs/:runId/events', (req, res) => {
+  const initial = getResearchRunSnapshot(req.params.runId);
+  if (!initial) {
+    res.status(404).json(failure('Research task not found'));
+    return;
+  }
+
+  prepareSse(res);
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    clearInterval(heartbeat);
+    unsubscribe();
+    if (!res.writableEnded) res.end();
+  };
+  const unsubscribe = subscribeToResearchRun(initial.run.id, (event) => {
+    sendEvent(res, event.type, event);
+    if (event.type === 'done' || event.type === 'error') close();
+  });
+  const heartbeat = setInterval(() => res.write(': heartbeat\n\n'), 15_000);
+
+  sendEvent(res, 'snapshot', initial);
+  if (isTerminal(initial.run.status)) close();
+  req.on('close', close);
+});
+
+researchRouter.post('/research/runs/:runId/cancel', (req, res) => {
+  const current = getResearchRun(req.params.runId);
+  if (!current) {
+    res.status(404).json(failure('Research task not found'));
+    return;
+  }
+  const run = cancelResearchRun(current.id);
+  res.json(success({ run }, run?.status === 'cancelled' ? 'Research task stopped' : 'Research task already finished'));
+});
+
+function parseAllowedToolNames(value: unknown) {
+  if (!Array.isArray(value)) return undefined;
+  const registered = new Set(getToolDefinitions().map((tool) => tool.function.name));
+  return value.filter((name): name is string => typeof name === 'string' && registered.has(name));
 }
 
-function getResearchFailureMessage(error: unknown, signal: AbortSignal) {
-  const reason = signal.reason instanceof Error ? signal.reason.message : '';
-  if (reason.includes('timed out')) return '研究任务超时，已停止继续调用。请缩小问题范围后重试。';
-  if (signal.aborted) return '研究任务已取消，未能生成最终回答。';
-  return error instanceof Error ? `研究任务失败：${error.message}` : '研究任务失败，请稍后重试。';
-}
-
-function appendMissingCitations(reply: string, sources: ResearchSource[]) {
-  if (!sources.length) return reply;
-  const missing = sources.filter((source) => !reply.includes(`[${source.citationKey}]`));
-  if (!missing.length) return reply;
-  return `${reply}\n\n参考来源：${missing.map((source) => `[${source.citationKey}]`).join(' ')}`;
+function isTerminal(status: ResearchRunStatus) {
+  return status === 'completed' || status === 'failed' || status === 'cancelled';
 }
 
 function prepareSse(res: Response) {
@@ -328,7 +196,12 @@ function prepareSse(res: Response) {
   res.flushHeaders();
 }
 
-function sendEvent(res: Response, event: string, data: unknown) {
+function sendEvent(res: Response, event: string, data: ResearchRunEvent | NonNullable<ReturnType<typeof getResearchRunSnapshot>>) {
+  if (res.writableEnded) return;
   res.write(`event: ${event}\n`);
   res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : 'Research request failed';
 }

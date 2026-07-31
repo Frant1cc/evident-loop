@@ -1,8 +1,10 @@
 import type { RagSource } from '../rag/types.js';
+import type { ChatMessage } from '../agent/types.js';
 
 export type ResearchMessageStatus = 'streaming' | 'complete' | 'error';
 export type ResearchStepStatus = 'running' | 'complete' | 'error';
 export type ResearchStepType = 'llm' | 'tool';
+export type ResearchRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 export type ResearchConversation = {
   id: string;
@@ -58,6 +60,26 @@ export type ResearchPromptPreview = {
   currentMessage: string;
 };
 
+export type ResearchRunInput = {
+  content: string;
+  contextMessages: ChatMessage[];
+  promptPreview: ResearchPromptPreview;
+  allowedToolNames?: string[];
+};
+
+export type ResearchRun = {
+  id: string;
+  conversationId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+  status: ResearchRunStatus;
+  error?: string;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  updatedAt: string;
+};
+
 export type ResearchConversationDetail = {
   conversation: ResearchConversation;
   messages: ResearchMessage[];
@@ -65,4 +87,5 @@ export type ResearchConversationDetail = {
   sources: ResearchSource[];
   notes: ResearchNote[];
   promptPreview: ResearchPromptPreview;
+  activeRun?: ResearchRun;
 };

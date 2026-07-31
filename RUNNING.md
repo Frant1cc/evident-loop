@@ -42,6 +42,7 @@ PORT=3000
 # 对话、研究工作台、Agent 规划/执行/审查/报告生成
 DEEPSEEK_API_KEY=请填写真实密钥
 DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_REQUEST_TIMEOUT_MS=60000
 
 # 知识库向量化、RAG 检索和 RAG 评测
 EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1
@@ -60,6 +61,7 @@ RAG_QUERY_REWRITE_MODEL=deepseek-v4-flash
 说明：
 
 - `DEEPSEEK_API_KEY` 是对话和 Agent 功能的必需配置。
+- `DEEPSEEK_REQUEST_TIMEOUT_MS` 只限制单次模型请求尝试；后台研究任务没有总时长硬限制。
 - `EMBEDDING_API_KEY` 是知识库向量化和检索功能的必需配置。
 - 本地 Qdrant 不需要 `QDRANT_API_KEY`；连接远程实例时再填写。
 - `backend/.env` 含真实密钥，已被 `.gitignore` 忽略，禁止提交或截图公开。

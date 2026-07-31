@@ -98,6 +98,23 @@ export const initDb = () => {
       FOREIGN KEY (conversation_id) REFERENCES research_conversations(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS research_runs (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL,
+      user_message_id TEXT NOT NULL,
+      assistant_message_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled')),
+      input_json TEXT NOT NULL,
+      error TEXT,
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      completed_at TEXT,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (conversation_id) REFERENCES research_conversations(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_message_id) REFERENCES research_messages(id) ON DELETE CASCADE,
+      FOREIGN KEY (assistant_message_id) REFERENCES research_messages(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS research_steps (
       id TEXT PRIMARY KEY,
       conversation_id TEXT NOT NULL,
@@ -146,6 +163,8 @@ export const initDb = () => {
     ON research_conversations(updated_at DESC);
     CREATE INDEX IF NOT EXISTS research_messages_conversation_created_at_idx
     ON research_messages(conversation_id, created_at);
+    CREATE INDEX IF NOT EXISTS research_runs_conversation_status_idx
+    ON research_runs(conversation_id, status, created_at DESC);
     CREATE INDEX IF NOT EXISTS research_steps_conversation_sequence_idx
     ON research_steps(conversation_id, sequence);
     CREATE INDEX IF NOT EXISTS research_sources_message_id_idx

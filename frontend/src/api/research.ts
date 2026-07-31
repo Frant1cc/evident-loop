@@ -4,6 +4,7 @@ import type {
   ResearchMessage,
   ResearchNote,
   ResearchPromptPreview,
+  ResearchRun,
   ResearchSource,
   ResearchStep
 } from '../types/research';
@@ -15,15 +16,16 @@ type ApiResponse<T> = {
 };
 
 export type ResearchStreamEvent =
-  | { type: 'research_message_started'; message: ResearchMessage; userMessage?: ResearchMessage }
+  | { type: 'snapshot'; run: ResearchRun; detail: ResearchConversationDetail }
   | { type: 'research_step'; step: ResearchStep }
   | { type: 'tool_call_started'; step: ResearchStep }
   | { type: 'tool_call_completed'; step: ResearchStep }
   | { type: 'research_source_found'; messageId: string; source: ResearchSource }
   | { type: 'assistant_delta'; messageId: string; content: string }
-  | { type: 'research_message_completed'; message: ResearchMessage; sources: ResearchSource[]; promptPreview: ResearchPromptPreview }
-  | { type: 'error'; message: string; assistantMessage?: ResearchMessage }
-  | { type: 'done' };
+  | { type: 'research_message_completed'; message: ResearchMessage; sources: ResearchSource[]; promptPreview: ResearchPromptPreview; run: ResearchRun }
+  | { type: 'run_updated'; run: ResearchRun }
+  | { type: 'error'; message: string; assistantMessage?: ResearchMessage; run: ResearchRun }
+  | { type: 'done'; run: ResearchRun };
 
 export type ResearchToolInfo = {
   name: string;
@@ -69,17 +71,34 @@ export function deleteResearchNote(noteId: string) {
   return request<{ deleted: boolean }>(`/api/research/notes/${encodeURIComponent(noteId)}`, { method: 'DELETE' });
 }
 
-export async function streamResearchMessage(
+export function startResearchMessage(
   conversationId: string,
   content: string,
-  onEvent: (event: ResearchStreamEvent) => void,
-  signal: AbortSignal,
   allowedTools?: string[]
 ) {
-  const response = await fetch(`/api/research/conversations/${encodeURIComponent(conversationId)}/messages/stream`, {
+  return request<{
+    run: ResearchRun;
+    userMessage: ResearchMessage;
+    assistantMessage: ResearchMessage;
+    promptPreview: ResearchPromptPreview;
+  }>(`/api/research/conversations/${encodeURIComponent(conversationId)}/messages`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content, ...(allowedTools ? { allowedTools } : {}) }),
+    body: { content, ...(allowedTools ? { allowedTools } : {}) }
+  });
+}
+
+export function cancelResearchRun(runId: string) {
+  return request<{ run: ResearchRun }>(`/api/research/runs/${encodeURIComponent(runId)}/cancel`, {
+    method: 'POST'
+  });
+}
+
+export async function streamResearchRun(
+  runId: string,
+  onEvent: (event: ResearchStreamEvent) => void,
+  signal: AbortSignal
+) {
+  const response = await fetch(`/api/research/runs/${encodeURIComponent(runId)}/events`, {
     signal
   });
 
@@ -99,14 +118,14 @@ export async function streamResearchMessage(
 
     buffer += decoder.decode(value, { stream: true });
     buffer = processSseBuffer(buffer, (event) => {
-      if (event.type === 'done' || event.type === 'error' || event.type === 'research_message_completed') reachedTerminalEvent = true;
+      if (isTerminalEvent(event)) reachedTerminalEvent = true;
       onEvent(event);
     });
   }
 
   buffer += decoder.decode();
   processSseBuffer(`${buffer}\n\n`, (event) => {
-    if (event.type === 'done' || event.type === 'error' || event.type === 'research_message_completed') reachedTerminalEvent = true;
+    if (isTerminalEvent(event)) reachedTerminalEvent = true;
     onEvent(event);
   });
 
@@ -134,11 +153,11 @@ function processSseBuffer(buffer: string, onEvent: (event: ResearchStreamEvent) 
     if (!eventName || !data) continue;
     const parsed = JSON.parse(data) as Record<string, unknown>;
 
-    if (eventName === 'research_message_started') {
+    if (eventName === 'snapshot') {
       onEvent({
         type: eventName,
-        message: parsed.message as ResearchMessage,
-        userMessage: parsed.userMessage as ResearchMessage | undefined
+        run: parsed.run as ResearchRun,
+        detail: parsed.detail as ResearchConversationDetail
       });
     }
     if (eventName === 'research_step') onEvent({ type: eventName, step: parsed.step as ResearchStep });
@@ -151,20 +170,29 @@ function processSseBuffer(buffer: string, onEvent: (event: ResearchStreamEvent) 
         type: eventName,
         message: parsed.message as ResearchMessage,
         sources: parsed.sources as ResearchSource[],
-        promptPreview: parsed.promptPreview as ResearchPromptPreview
+        promptPreview: parsed.promptPreview as ResearchPromptPreview,
+        run: parsed.run as ResearchRun
       });
     }
+    if (eventName === 'run_updated') onEvent({ type: eventName, run: parsed.run as ResearchRun });
     if (eventName === 'error') {
       onEvent({
         type: eventName,
         message: String(parsed.message ?? '请求失败'),
-        assistantMessage: parsed.assistantMessage as ResearchMessage | undefined
+        assistantMessage: parsed.assistantMessage as ResearchMessage | undefined,
+        run: parsed.run as ResearchRun
       });
     }
-    if (eventName === 'done') onEvent({ type: 'done' });
+    if (eventName === 'done') onEvent({ type: 'done', run: parsed.run as ResearchRun });
   }
 
   return rest;
+}
+
+function isTerminalEvent(event: ResearchStreamEvent) {
+  if (event.type === 'done' || event.type === 'error') return true;
+  return event.type === 'snapshot'
+    && (event.run.status === 'completed' || event.run.status === 'failed' || event.run.status === 'cancelled');
 }
 
 async function request<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {

@@ -64,6 +64,20 @@ export const researchMessages = sqliteTable('research_messages', {
   createdAt: text('created_at').notNull()
 });
 
+export const researchRuns = sqliteTable('research_runs', {
+  id: text('id').primaryKey(),
+  conversationId: text('conversation_id').notNull(),
+  userMessageId: text('user_message_id').notNull(),
+  assistantMessageId: text('assistant_message_id').notNull(),
+  status: text('status', { enum: ['queued', 'running', 'completed', 'failed', 'cancelled'] }).notNull(),
+  inputJson: text('input_json').notNull(),
+  error: text('error'),
+  createdAt: text('created_at').notNull(),
+  startedAt: text('started_at'),
+  completedAt: text('completed_at'),
+  updatedAt: text('updated_at').notNull()
+});
+
 export const researchSteps = sqliteTable('research_steps', {
   id: text('id').primaryKey(),
   conversationId: text('conversation_id').notNull(),

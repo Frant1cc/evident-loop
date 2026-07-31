@@ -9,6 +9,9 @@ import type {
   ResearchMessageStatus,
   ResearchNote,
   ResearchPromptPreview,
+  ResearchRun,
+  ResearchRunInput,
+  ResearchRunStatus,
   ResearchSource,
   ResearchStep,
   ResearchStepStatus,
@@ -68,6 +71,20 @@ type NoteRow = {
   conversation_id: string;
   content: string;
   created_at: string;
+  updated_at: string;
+};
+
+type RunRow = {
+  id: string;
+  conversation_id: string;
+  user_message_id: string;
+  assistant_message_id: string;
+  status: ResearchRunStatus;
+  input_json: string;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
   updated_at: string;
 };
 
@@ -140,6 +157,83 @@ export function listResearchMessages(conversationId: string) {
     .prepare('SELECT * FROM research_messages WHERE conversation_id = ? ORDER BY created_at ASC')
     .all(conversationId)
     .map((row) => toMessage(row as MessageRow));
+}
+
+export function createResearchRun(input: {
+  conversationId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+  runInput: ResearchRunInput;
+}) {
+  const now = new Date().toISOString();
+  const run: ResearchRun = {
+    id: randomUUID(),
+    conversationId: input.conversationId,
+    userMessageId: input.userMessageId,
+    assistantMessageId: input.assistantMessageId,
+    status: 'queued',
+    createdAt: now,
+    updatedAt: now
+  };
+  sqlite.prepare(`INSERT INTO research_runs
+    (id, conversation_id, user_message_id, assistant_message_id, status, input_json, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(
+      run.id,
+      run.conversationId,
+      run.userMessageId,
+      run.assistantMessageId,
+      run.status,
+      JSON.stringify(input.runInput),
+      run.createdAt,
+      run.updatedAt
+    );
+  return run;
+}
+
+export function getResearchRun(id: string): ResearchRun | undefined {
+  const row = sqlite.prepare('SELECT * FROM research_runs WHERE id = ?').get(id) as RunRow | undefined;
+  return row ? toRun(row) : undefined;
+}
+
+export function getResearchRunInput(id: string): ResearchRunInput | undefined {
+  const row = sqlite.prepare('SELECT input_json FROM research_runs WHERE id = ?').get(id) as { input_json: string } | undefined;
+  if (!row) return undefined;
+  return JSON.parse(row.input_json) as ResearchRunInput;
+}
+
+export function getActiveResearchRun(conversationId: string): ResearchRun | undefined {
+  const row = sqlite.prepare(`SELECT * FROM research_runs
+    WHERE conversation_id = ? AND status IN ('queued', 'running')
+    ORDER BY created_at DESC LIMIT 1`).get(conversationId) as RunRow | undefined;
+  return row ? toRun(row) : undefined;
+}
+
+export function updateResearchRun(
+  id: string,
+  changes: { status: ResearchRunStatus; error?: string; startedAt?: string; completedAt?: string }
+) {
+  const current = sqlite.prepare('SELECT * FROM research_runs WHERE id = ?').get(id) as RunRow | undefined;
+  if (!current) return undefined;
+  const updatedAt = new Date().toISOString();
+  sqlite.prepare(`UPDATE research_runs
+    SET status = ?, error = ?, started_at = ?, completed_at = ?, updated_at = ?
+    WHERE id = ?`)
+    .run(
+      changes.status,
+      changes.error ?? null,
+      changes.startedAt ?? current.started_at,
+      changes.completedAt ?? current.completed_at,
+      updatedAt,
+      id
+    );
+  return getResearchRun(id);
+}
+
+export function listUnfinishedResearchRuns() {
+  return sqlite.prepare(`SELECT * FROM research_runs WHERE status IN ('queued', 'running') ORDER BY created_at ASC`)
+    .all()
+    .map((row) => toRun(row as RunRow));
 }
 
 export function createResearchStep(input: Omit<ResearchStep, 'id' | 'startedAt' | 'completedAt'>) {
@@ -266,6 +360,7 @@ export function getResearchConversationDetail(
 ): ResearchConversationDetail | undefined {
   const conversation = getResearchConversation(conversationId);
   if (!conversation) return undefined;
+  const activeRun = getActiveResearchRun(conversationId);
 
   return {
     conversation,
@@ -273,7 +368,8 @@ export function getResearchConversationDetail(
     steps: listResearchSteps(conversationId),
     sources: listResearchSources(conversationId),
     notes: listResearchNotes(conversationId),
-    promptPreview
+    promptPreview,
+    ...(activeRun ? { activeRun } : {})
   };
 }
 
@@ -355,6 +451,21 @@ function toNote(row: NoteRow): ResearchNote {
     conversationId: row.conversation_id,
     content: row.content,
     createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function toRun(row: RunRow): ResearchRun {
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    userMessageId: row.user_message_id,
+    assistantMessageId: row.assistant_message_id,
+    status: row.status,
+    ...(row.error ? { error: row.error } : {}),
+    createdAt: row.created_at,
+    ...(row.started_at ? { startedAt: row.started_at } : {}),
+    ...(row.completed_at ? { completedAt: row.completed_at } : {}),
     updatedAt: row.updated_at
   };
 }

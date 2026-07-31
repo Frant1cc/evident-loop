@@ -26,7 +26,7 @@ export type CreateChatCompletionOptions = {
   toolChoice?: 'auto';
   temperature?: number;
   signal?: AbortSignal;
-  /** Per-attempt timeout in milliseconds. Defaults to 60s. */
+  /** Per-attempt timeout in milliseconds. Defaults to DEEPSEEK_REQUEST_TIMEOUT_MS or 60s. */
   timeoutMs?: number;
   /** Max retries for retryable failures (429/5xx/timeout/network error). Defaults to 3. */
   maxRetries?: number;
@@ -64,7 +64,7 @@ async function requestChatCompletion({
   toolChoice,
   temperature,
   signal,
-  timeoutMs = DEFAULT_TIMEOUT_MS,
+  timeoutMs = getDefaultTimeoutMs(),
   baseUrl
 }: CreateChatCompletionOptions): Promise<DeepSeekChatResponse> {
   const resolvedBaseUrl = baseUrl ?? process.env.DEEPSEEK_BASE_URL ?? DEFAULT_BASE_URL;
@@ -156,4 +156,9 @@ function abortReason(signal?: AbortSignal): Error {
 
 function throwIfAborted(signal?: AbortSignal) {
   if (signal?.aborted) throw abortReason(signal);
+}
+
+function getDefaultTimeoutMs() {
+  const configured = Number(process.env.DEEPSEEK_REQUEST_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured >= 5_000 ? configured : DEFAULT_TIMEOUT_MS;
 }

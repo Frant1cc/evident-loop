@@ -21,7 +21,7 @@ An evidence-first durable research agent.
 - Reviewer 驱动的证据缺口识别与一次受控补充检索
 - Markdown 知识库、Dense/Hybrid RAG 和查询改写
 - Recall@K、MRR、拒答能力等 RAG 评测
-- 研究工作台、任务控制台和 Word 报告生成
+- 可断线重连、支持显式停止的后台研究工作台，以及任务控制台和 Word 报告生成
 
 正在开发或尚未完成：
 

@@ -60,6 +60,21 @@ export type ResearchPromptPreview = {
   currentMessage: string;
 };
 
+export type ResearchRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export type ResearchRun = {
+  id: string;
+  conversationId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+  status: ResearchRunStatus;
+  error?: string;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  updatedAt: string;
+};
+
 export type ResearchConversationDetail = {
   conversation: ResearchConversation;
   messages: ResearchMessage[];
@@ -67,4 +82,5 @@ export type ResearchConversationDetail = {
   sources: ResearchSource[];
   notes: ResearchNote[];
   promptPreview: ResearchPromptPreview;
+  activeRun?: ResearchRun;
 };
