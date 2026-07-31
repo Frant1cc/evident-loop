@@ -1,0 +1,31 @@
+{
+  "name": "evident-loop",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -n backend,frontend -c cyan,green \"pnpm --filter backend dev\" \"pnpm --filter frontend dev\"",
+    "build": "pnpm --filter backend build && pnpm --filter frontend build",
+    "lint": "pnpm -r --if-present lint",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test",
+    "qdrant:up": "docker compose up -d qdrant",
+    "qdrant:down": "docker compose down",
+    "rag:sync": "pnpm --filter backend rag:sync",
+    "rag:eval": "pnpm --filter backend rag:eval",
+    "rag:eval:smoke": "pnpm --filter backend rag:eval:smoke"
+  },
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "pnpm": {
+    "overrides": {
+      "body-parser@<1.20.6": "1.20.6"
+    }
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

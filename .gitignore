@@ -1,0 +1,31 @@
+# Dependencies and build output
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+
+# Secrets (keep only the example file)
+.env
+.env.*
+!.env.example
+
+# Runtime data and generated artifacts
+backend/data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.rag-eval/
+reports/
+.tmp/
+
+# Local tools and operating-system files
+.internal/
+.claude/
+.vscode/
+.idea/
+.DS_Store
+*.log
+npm-debug.log*
+
+# Local CI scratch data
+.ci/

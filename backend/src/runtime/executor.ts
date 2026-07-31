@@ -1,0 +1,354 @@
+import { createHash, randomUUID } from 'node:crypto';
+
+import { runAgentLoop } from '../agent/agentLoop.js';
+import { executeToolCall } from '../tools/index.js';
+import {
+  completeToolExecution,
+  failToolExecution,
+  getToolExecutionByKey,
+  insertToolExecution,
+  appendEvent
+} from './store.js';
+import {
+  completeAgentPlanStep,
+  failAgentPlanStep,
+  getAgentTaskDetail,
+  saveAgentEvidenceChain,
+  saveAgentStepReview,
+  startAgentPlanStep,
+  transitionAgentTask
+} from './service.js';
+import type { AgentPlanStep, AgentTask, AgentTaskDetail, ToolExecution } from './types.js';
+import { createModelStepReviewer, type AgentStepReviewer } from './reviewer.js';
+import { createModelEvidenceChainBuilder, type AgentEvidenceChainBuilder } from './evidenceChainBuilder.js';
+import { createModelArtifactWriter, saveAgentArtifact, type AgentArtifactWriter } from './writer.js';
+
+const executorSystemPrompt = `You are the Executor in a durable research agent.
+
+Complete only the current plan step. Use allowed tools to collect concrete evidence. Do not invent sources. For search_knowledge, treat verdict as authoritative: sufficient results may be used as evidence; when weak and rewriteTriggered=true, the automatic rewrite budget is already exhausted and the same intent must not be searched again; when weak and rewriteTriggered=false, one reformulated retry is allowed; empty candidates must not be used or cited as evidence, and you must report that the local knowledge base does not cover the point. Stop when the step objective and evidence requirements are satisfied. Return a concise step result with the evidence found and any remaining limitation. Use the same language as the research goal.`;
+
+export type AgentStepRunner = (context: {
+  task: AgentTask;
+  step: AgentPlanStep;
+  completedSteps: AgentPlanStep[];
+  signal?: AbortSignal;
+}) => Promise<unknown>;
+
+const activeTaskRuns = new Set<string>();
+
+export async function executeAgentTask(options: {
+  id: string;
+  apiKey: string;
+  model: string;
+  signal?: AbortSignal;
+  runStep?: AgentStepRunner;
+  buildEvidenceChain?: AgentEvidenceChainBuilder;
+  reviewStep?: AgentStepReviewer;
+  writeArtifact?: AgentArtifactWriter;
+}): Promise<AgentTaskDetail | undefined> {
+  if (activeTaskRuns.has(options.id)) throw new Error('Agent task is already executing in this process');
+  activeTaskRuns.add(options.id);
+  try {
+    return await executeAgentTaskInternal(options);
+  } finally {
+    activeTaskRuns.delete(options.id);
+  }
+}
+
+export async function finalizeAgentTask(options: {
+  id: string;
+  apiKey: string;
+  model: string;
+  signal?: AbortSignal;
+  reviewStep?: AgentStepReviewer;
+  writeArtifact?: AgentArtifactWriter;
+}) {
+  let detail = getAgentTaskDetail(options.id);
+  if (!detail) return undefined;
+  if (detail.artifacts.length) return detail;
+  if (!detail.steps.length || !detail.steps.every((step) => step.status === 'completed' || step.status === 'skipped')) {
+    throw new Error('All plan steps must be completed before creating the final report');
+  }
+
+  if (detail.task.status === 'completed') {
+    const writeArtifact = options.writeArtifact ?? createModelArtifactWriter(options.apiKey, options.model);
+    const draft = await writeArtifact({
+      task: detail.task,
+      steps: detail.steps,
+      reviews: detail.reviews,
+      evidenceGaps: detail.evidenceGaps,
+      sources: detail.sources,
+      evidence: detail.evidence,
+      claims: detail.claims,
+      claimEvidence: detail.claimEvidence,
+      signal: options.signal
+    });
+    saveAgentArtifact(detail.task, draft);
+    return getAgentTaskDetail(options.id);
+  }
+
+  if (detail.task.status === 'failed') {
+    detail = transitionAgentTask(options.id, 'running', 'retry final artifact generation') ?? detail;
+  }
+  if (detail.task.status !== 'running') throw new Error('Agent task is not ready for final report generation');
+  return executeAgentTask({ ...options, runStep: async () => { throw new Error('No plan step should run during finalization'); } });
+}
+
+async function executeAgentTaskInternal(options: {
+  id: string;
+  apiKey: string;
+  model: string;
+  signal?: AbortSignal;
+  runStep?: AgentStepRunner;
+  buildEvidenceChain?: AgentEvidenceChainBuilder;
+  reviewStep?: AgentStepReviewer;
+  writeArtifact?: AgentArtifactWriter;
+}): Promise<AgentTaskDetail | undefined> {
+  let detail = getAgentTaskDetail(options.id);
+  if (!detail) return undefined;
+  if (detail.task.status !== 'running') throw new Error('Agent task must be running before execution');
+  if (!detail.steps.length) throw new Error('Agent task has no plan steps');
+
+  while (detail.task.status === 'running') {
+    throwIfAborted(options.signal);
+    const reviewedStepIds = new Set(detail.reviews.map((review) => review.stepId));
+    const unreviewedStep = detail.steps.find(
+      (step) => step.status === 'completed' && !reviewedStepIds.has(step.id)
+    );
+    if (unreviewedStep) {
+      const startedAt = new Date().toISOString();
+      appendEvent(detail.task.id, 'review_started', { stepId: unreviewedStep.id, sequence: unreviewedStep.sequence }, startedAt);
+      try {
+        const reviewStep = options.reviewStep ?? createModelStepReviewer(options.apiKey, options.model);
+        const reviewEvidence = detail.evidence.filter((item) => item.stepId === unreviewedStep.id);
+        const reviewClaims = detail.claims.filter((claim) => claim.stepId === unreviewedStep.id);
+        const reviewEvidenceIds = new Set(reviewEvidence.map((item) => item.id));
+        const reviewClaimIds = new Set(reviewClaims.map((claim) => claim.id));
+        const review = await reviewStep({
+          task: detail.task,
+          step: unreviewedStep,
+          toolExecutions: detail.toolExecutions.filter((execution) => execution.stepId === unreviewedStep.id),
+          sources: detail.sources.filter((source) => source.stepId === unreviewedStep.id),
+          evidence: reviewEvidence,
+          claims: reviewClaims,
+          claimEvidence: detail.claimEvidence.filter(
+            (link) => reviewClaimIds.has(link.claimId) && reviewEvidenceIds.has(link.evidenceId)
+          ),
+          signal: options.signal
+        });
+        detail = saveAgentStepReview(detail.task.id, unreviewedStep.id, review);
+        continue;
+      } catch (error) {
+        if (options.signal?.aborted) throw error;
+        const message = error instanceof Error ? error.message : 'Reviewer failed to evaluate step evidence';
+        appendEvent(detail.task.id, 'review_failed', { stepId: unreviewedStep.id, error: message }, new Date().toISOString());
+        return transitionAgentTask(detail.task.id, 'failed', message);
+      }
+    }
+
+    const runningStep = detail.steps.find((step) => step.status === 'running');
+    const nextStep = runningStep ?? findNextRunnableStep(detail.steps);
+
+    if (!nextStep) {
+      if (detail.steps.every((step) => step.status === 'completed' || step.status === 'skipped')) {
+        if (!detail.artifacts.length) {
+          try {
+            const writeArtifact = options.writeArtifact ?? createModelArtifactWriter(options.apiKey, options.model);
+            const draft = await writeArtifact({
+              task: detail.task,
+              steps: detail.steps,
+              reviews: detail.reviews,
+              evidenceGaps: detail.evidenceGaps,
+              sources: detail.sources,
+              evidence: detail.evidence,
+              claims: detail.claims,
+              claimEvidence: detail.claimEvidence,
+              signal: options.signal
+            });
+            saveAgentArtifact(detail.task, draft);
+          } catch (error) {
+            if (options.signal?.aborted) throw error;
+            const message = error instanceof Error ? error.message : 'Writer failed to create final report';
+            appendEvent(detail.task.id, 'artifact_failed', { error: message }, new Date().toISOString());
+            return transitionAgentTask(detail.task.id, 'failed', message);
+          }
+        }
+        return transitionAgentTask(detail.task.id, 'completed', 'final artifact created');
+      }
+      throw new Error('Agent task has no runnable plan step');
+    }
+
+    if (!runningStep) detail = startAgentPlanStep(detail.task.id, nextStep.id);
+    const activeStep = detail.steps.find((step) => step.id === nextStep.id);
+    if (!activeStep) throw new Error('Active plan step could not be loaded');
+
+    let phase: 'step_execution' | 'evidence_chain' = 'step_execution';
+    try {
+      const runStep = options.runStep ?? createDefaultStepRunner(options.apiKey, options.model);
+      const output = await runStep({
+        task: detail.task,
+        step: activeStep,
+        completedSteps: detail.steps.filter((step) => step.status === 'completed'),
+        signal: options.signal
+      });
+      phase = 'evidence_chain';
+      appendEvent(detail.task.id, 'evidence_chain_started', {
+        stepId: activeStep.id,
+        sequence: activeStep.sequence
+      }, new Date().toISOString());
+      const refreshed = getAgentTaskDetail(detail.task.id);
+      if (!refreshed) throw new Error('Agent task disappeared before evidence extraction');
+      const buildEvidenceChain = options.buildEvidenceChain
+        ?? createModelEvidenceChainBuilder(options.apiKey, options.model);
+      const chain = await buildEvidenceChain({
+        task: refreshed.task,
+        step: activeStep,
+        output,
+        toolExecutions: refreshed.toolExecutions.filter((execution) => execution.stepId === activeStep.id),
+        signal: options.signal
+      });
+      detail = saveAgentEvidenceChain(detail.task.id, activeStep.id, chain);
+      detail = completeAgentPlanStep(detail.task.id, activeStep.id, output);
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      const message = error instanceof Error ? error.message : 'Agent step execution failed';
+      if (phase === 'evidence_chain') {
+        appendEvent(detail.task.id, 'evidence_chain_failed', {
+          stepId: activeStep.id,
+          error: message
+        }, new Date().toISOString());
+      }
+      return failAgentPlanStep(detail.task.id, activeStep.id, message);
+    }
+  }
+
+  return detail;
+}
+
+function createDefaultStepRunner(apiKey: string, model: string): AgentStepRunner {
+  return async ({ task, step, completedSteps, signal }) => {
+    const result = await runAgentLoop({
+      apiKey,
+      model,
+      systemPrompt: executorSystemPrompt,
+      message: buildStepMessage(task, step, completedSteps),
+      // Stored [] means "no restriction" (see task console UI); the loop treats an explicit [] as "no tools".
+      allowedToolNames: task.allowedTools.length ? task.allowedTools : undefined,
+      signal,
+      executeTool: (toolCall) => executeAuditedTool({ task, step, toolCall })
+    });
+    return {
+      reply: result.reply,
+      sources: result.sources,
+      toolCalls: result.toolCalls
+    };
+  };
+}
+
+export async function executeAuditedTool(input: {
+  task: AgentTask;
+  step: AgentPlanStep;
+  toolCall: { id: string; name: string; arguments: unknown };
+}, execute: (name: string, args: unknown) => Promise<unknown> = executeToolCall) {
+  const executionKey = createExecutionKey(input.task.id, input.step, input.toolCall.name, input.toolCall.arguments);
+  const existing = getToolExecutionByKey(executionKey);
+
+  if (existing?.status === 'completed') {
+    appendEvent(input.task.id, 'tool_result_reused', {
+      stepId: input.step.id,
+      executionId: existing.id,
+      toolName: existing.toolName,
+      executionKey
+    }, new Date().toISOString());
+    return existing.result;
+  }
+  if (existing?.status === 'failed') throw new Error(existing.error ?? `${existing.toolName} previously failed`);
+
+  const execution = existing ?? createRunningToolExecution(input, executionKey);
+  if (!existing) {
+    insertToolExecution(execution);
+    appendEvent(input.task.id, 'tool_started', {
+      stepId: input.step.id,
+      executionId: execution.id,
+      toolName: execution.toolName,
+      arguments: execution.arguments
+    }, execution.startedAt);
+  }
+
+  try {
+    const result = await execute(input.toolCall.name, input.toolCall.arguments);
+    const completedAt = new Date().toISOString();
+    completeToolExecution(execution.id, result, completedAt);
+    appendEvent(input.task.id, 'tool_completed', {
+      stepId: input.step.id,
+      executionId: execution.id,
+      toolName: execution.toolName
+    }, completedAt);
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Tool execution failed';
+    const completedAt = new Date().toISOString();
+    failToolExecution(execution.id, message, completedAt);
+    appendEvent(input.task.id, 'tool_failed', {
+      stepId: input.step.id,
+      executionId: execution.id,
+      toolName: execution.toolName,
+      error: message
+    }, completedAt);
+    throw error;
+  }
+}
+
+function createRunningToolExecution(
+  input: { task: AgentTask; step: AgentPlanStep; toolCall: { name: string; arguments: unknown } },
+  executionKey: string
+): ToolExecution {
+  return {
+    id: randomUUID(),
+    taskId: input.task.id,
+    stepId: input.step.id,
+    executionKey,
+    toolName: input.toolCall.name,
+    status: 'running',
+    arguments: input.toolCall.arguments,
+    startedAt: new Date().toISOString()
+  };
+}
+
+function createExecutionKey(taskId: string, step: AgentPlanStep, toolName: string, args: unknown) {
+  const hash = createHash('sha256').update(stableStringify(args)).digest('hex').slice(0, 16);
+  return `${taskId}:${step.id}:${step.attempts}:${toolName}:${hash}`;
+}
+
+function findNextRunnableStep(steps: AgentPlanStep[]) {
+  const completedIds = new Set(steps.filter((step) => step.status === 'completed').map((step) => step.id));
+  return steps.find((step) => step.status === 'pending' && step.dependencies.every((id) => completedIds.has(id)));
+}
+
+function buildStepMessage(task: AgentTask, step: AgentPlanStep, completedSteps: AgentPlanStep[]) {
+  const priorResults = completedSteps.map((item) => ({ objective: item.objective, output: item.output }));
+  return [
+    `Overall research goal:\n${task.goal}`,
+    `Current step (${step.sequence}):\n${step.objective}`,
+    `Required evidence:\n${step.expectedEvidence.map((item) => `- ${item}`).join('\n')}`,
+    step.input ? `Focused retrieval instructions:\n${JSON.stringify(step.input)}` : '',
+    priorResults.length ? `Previous completed step results:\n${JSON.stringify(priorResults)}` : ''
+  ].filter(Boolean).join('\n\n');
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nested]) => `${JSON.stringify(key)}:${stableStringify(nested)}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'undefined';
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new Error('Agent task execution was cancelled');
+  }
+}

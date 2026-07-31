@@ -1,0 +1,118 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --agent-bg: #ffffff;
+    --agent-surface: #ffffff;
+    --agent-surface-muted: #fbfbfa;
+    --agent-border: #eaeaea;
+    --agent-border-soft: rgba(0, 0, 0, 0.06);
+    --agent-text: #111111;
+    --agent-text-muted: #787774;
+    --agent-primary: #111111;
+    --agent-primary-hover: #333333;
+    --agent-primary-soft: #f7f6f3;
+    --agent-primary-text: #ffffff;
+    --agent-focus-ring: rgb(17 17 17 / 8%);
+    --agent-selected-border: #b8b8b4;
+    --agent-selected-bg: #eeeeeb;
+    --agent-selected-text: #111111;
+    --agent-user-bubble: #111111;
+    --agent-assistant-bubble: #f7f6f3;
+    --agent-error-bg: #fdebec;
+    --agent-error-text: #9f2f2d;
+
+    color: var(--agent-text);
+    background: var(--agent-bg);
+    font-family: 'SF Pro Display', 'Geist Sans', 'Helvetica Neue', 'Switzer', sans-serif;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    margin: 0;
+  }
+
+  button,
+  input {
+    font: inherit;
+  }
+
+  button {
+    border: 0;
+  }
+
+  /* Set while a panel divider is dragged so the resize cursor survives fast pointer movement. */
+  body.is-panel-resizing {
+    cursor: col-resize;
+    user-select: none;
+  }
+}
+
+@layer components {
+  .icon-tooltip {
+    position: relative;
+  }
+
+  .icon-tooltip::after {
+    position: absolute;
+    z-index: 30;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    max-width: 11rem;
+    padding: 0.3rem 0.45rem;
+    border-radius: 0.25rem;
+    background: var(--agent-text);
+    color: var(--agent-primary-text);
+    content: attr(data-tooltip);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    line-height: 1.25;
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, 2px);
+    transition: opacity 120ms ease, transform 120ms ease;
+    white-space: nowrap;
+  }
+
+  .icon-tooltip:hover::after,
+  .icon-tooltip:focus-visible::after {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+
+  .chat-session-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  .chat-session-scroll:hover {
+    scrollbar-color: rgba(17, 17, 17, 0.18) transparent;
+  }
+
+  .chat-session-scroll::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .chat-session-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .chat-session-scroll::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background-color: transparent;
+    background-clip: content-box;
+  }
+
+  .chat-session-scroll:hover::-webkit-scrollbar-thumb {
+    background-color: rgba(17, 17, 17, 0.18);
+  }
+
+  .chat-session-scroll::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(17, 17, 17, 0.28);
+  }
+}
