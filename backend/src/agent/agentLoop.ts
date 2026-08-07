@@ -7,7 +7,13 @@ import {
   type AgentLoopEvent,
   type AgentToolExecutor
 } from './toolRound.js';
-import type { AgentLoopResult, AgentTraceStep, ChatMessage, ToolTrace } from './types.js';
+import type {
+  AgentLoopResult,
+  AgentTraceStep,
+  ChatMessage,
+  DeepSeekChatResponse,
+  ToolTrace
+} from './types.js';
 
 const defaultMaxToolResultChars = 4_000;
 const defaultTemperature = 0.2;
@@ -250,7 +256,7 @@ export async function runAgentLoop({
     const assistantMessage = completion.choices?.[0]?.message;
 
     if (!assistantMessage) {
-      throw new Error('DeepSeek returned an empty response');
+      throw new Error(describeEmptyCompletion(completion));
     }
 
     trace.push({ type: 'final_answer', label: '达到工具调用轮数上限，生成最终回答' });
@@ -269,6 +275,21 @@ export async function runAgentLoop({
     trace,
     sources: getRagSourcesFromToolTraces(toolTraces)
   };
+}
+
+/**
+ * Builds a diagnosable message when the completion parsed as JSON but carried no assistant message.
+ * Surfaces choices count and a truncated raw payload so an empty/malformed choice can be identified.
+ */
+function describeEmptyCompletion(completion: DeepSeekChatResponse): string {
+  const choiceCount = completion.choices?.length ?? 0;
+  let raw: string;
+  try {
+    raw = JSON.stringify(completion).slice(0, 500);
+  } catch {
+    raw = '<unserializable completion>';
+  }
+  return `DeepSeek returned an empty response (choices: ${choiceCount}): ${raw}`;
 }
 
 function normalizeAllowedToolNames(allowedToolNames: string[]) {

@@ -3,7 +3,14 @@ import { executeToolCall as executeRegisteredToolCall } from '../tools/index.js'
 import type { ToolDefinition } from '../tools/registry.js';
 import { createDeepSeekChatCompletion } from './deepseekClient.js';
 import type { RagSource } from '../rag/types.js';
-import type { AgentTraceStep, ChatMessage, ParsedToolCall, ToolCall, ToolTrace } from './types.js';
+import type {
+  AgentTraceStep,
+  ChatMessage,
+  DeepSeekChatResponse,
+  ParsedToolCall,
+  ToolCall,
+  ToolTrace
+} from './types.js';
 
 export type AgentLoopEvent =
   | { type: 'llm'; title: string; model: string; tools?: string[] }
@@ -73,7 +80,7 @@ export async function executeToolRound({
   const assistantMessage = completion.choices?.[0]?.message;
 
   if (!assistantMessage) {
-    throw new Error('DeepSeek returned an empty response');
+    throw new Error(describeEmptyCompletion(completion));
   }
 
   const rawToolCalls = assistantMessage.tool_calls ?? [];
@@ -269,4 +276,19 @@ function throwIfAborted(signal?: AbortSignal) {
   if (signal?.aborted) {
     throw signal.reason instanceof Error ? signal.reason : new Error('Research request was cancelled');
   }
+}
+
+/**
+ * Builds a diagnosable message when the completion parsed as JSON but carried no assistant message.
+ * Surfaces choices count and a truncated raw payload so an empty/malformed choice can be identified.
+ */
+function describeEmptyCompletion(completion: DeepSeekChatResponse): string {
+  const choiceCount = completion.choices?.length ?? 0;
+  let raw: string;
+  try {
+    raw = JSON.stringify(completion).slice(0, 500);
+  } catch {
+    raw = '<unserializable completion>';
+  }
+  return `DeepSeek returned an empty response (choices: ${choiceCount}): ${raw}`;
 }

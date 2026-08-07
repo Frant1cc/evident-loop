@@ -111,13 +111,22 @@ async function requestChatCompletion({
     });
   }
 
+  const rawBody = await response.text();
+
   try {
-    return (await response.json()) as DeepSeekChatResponse;
+    return JSON.parse(rawBody) as DeepSeekChatResponse;
   } catch {
-    throw new DeepSeekApiError('DeepSeek returned an invalid JSON response', {
-      status: response.status,
-      retryable: true
-    });
+    const contentType = response.headers.get('content-type') ?? 'unknown';
+    const preview = rawBody.slice(0, 500);
+    throw new DeepSeekApiError(
+      `DeepSeek returned an invalid JSON response (status ${response.status}, content-type ${contentType}, ${rawBody.length} bytes): ${
+        preview || '<empty body>'
+      }`,
+      {
+        status: response.status,
+        retryable: true
+      }
+    );
   }
 }
 
