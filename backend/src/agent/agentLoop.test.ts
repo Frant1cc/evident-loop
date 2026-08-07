@@ -167,3 +167,58 @@ test('grants one corrective retry when required document tool arguments are inva
     );
   }
 });
+
+test('runs the controlled web quality loop only once even when the model changes arguments', async () => {
+  let requestCount = 0;
+  let executionCount = 0;
+  const server = createServer(async (_req, res) => {
+    requestCount += 1;
+    const message = requestCount <= 2
+      ? {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{
+            id: `call-web-${requestCount}`,
+            type: 'function',
+            function: {
+              name: 'retrieve_web_evidence',
+              arguments: JSON.stringify({ question: `official fact attempt ${requestCount}` })
+            }
+          }]
+        }
+      : { role: 'assistant', content: 'The available evidence remains limited.' };
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ message }] }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Test server did not bind');
+  const previousBaseUrl = process.env.DEEPSEEK_BASE_URL;
+  process.env.DEEPSEEK_BASE_URL = `http://127.0.0.1:${address.port}`;
+
+  try {
+    const result = await runAgentLoop({
+      apiKey: 'test-key',
+      model: 'test-model',
+      message: 'Find one official fact',
+      systemPrompt: 'Use the controlled web tool once.',
+      maxToolRounds: 3,
+      allowedToolNames: ['retrieve_web_evidence'],
+      executeTool: async () => {
+        executionCount += 1;
+        return { verdict: 'exhausted', sources: [] };
+      }
+    });
+
+    assert.equal(executionCount, 1);
+    assert.equal(result.toolCalls.length, 2);
+    assert.match(result.toolCalls[1]?.error ?? '', /already completed its controlled search loop/);
+  } finally {
+    if (previousBaseUrl === undefined) delete process.env.DEEPSEEK_BASE_URL;
+    else process.env.DEEPSEEK_BASE_URL = previousBaseUrl;
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve()))
+    );
+  }
+});

@@ -75,7 +75,7 @@ const error = ref('');
 const goal = ref('');
 const maxSteps = ref(5);
 const maxTokens = ref(24000);
-const selectedTools = ref(['search_knowledge', 'search_docs', 'read_document', 'web_search', 'fetch_page']);
+const selectedTools = ref(['search_knowledge', 'search_docs', 'read_document', 'retrieve_web_evidence']);
 let pollTimer: ReturnType<typeof window.setInterval> | undefined;
 let runController: AbortController | undefined;
 
@@ -84,8 +84,7 @@ const availableTools = ref<Array<{ name: string; label: string }>>([
   { name: 'search_knowledge', label: '知识库检索' },
   { name: 'search_docs', label: '文档关键词搜索' },
   { name: 'read_document', label: '文档全文阅读' },
-  { name: 'web_search', label: '联网搜索' },
-  { name: 'fetch_page', label: '网页阅读' }
+  { name: 'retrieve_web_evidence', label: '受控联网检索' }
 ]);
 
 async function loadAvailableTools() {

@@ -178,6 +178,10 @@ export function getRagSourcesFromToolTraces(toolCalls: ToolTrace[]): RagSource[]
   const sources = new Map<string, RagSource>();
 
   for (const toolCall of toolCalls) {
+    if (toolCall.name === 'retrieve_web_evidence' && isWebRetrievalResult(toolCall.result)) {
+      for (const source of toolCall.result.sources) sources.set(source.id, source);
+      continue;
+    }
     if (
       toolCall.name !== 'search_knowledge'
       || !isSearchKnowledgeResult(toolCall.result)
@@ -190,6 +194,14 @@ export function getRagSourcesFromToolTraces(toolCalls: ToolTrace[]): RagSource[]
   }
 
   return [...sources.values()];
+}
+
+function isWebRetrievalResult(value: unknown): value is { sources: RagSource[] } {
+  return Boolean(
+    value
+    && typeof value === 'object'
+    && Array.isArray((value as { sources?: unknown }).sources)
+  );
 }
 
 function parseSearchKnowledgeArgs(args: unknown) {

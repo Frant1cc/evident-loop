@@ -21,8 +21,9 @@ Rules:
   - empty: do not use or cite the returned candidates as evidence; state that the local knowledge base does not cover the question.
 - Use read_document only when search_knowledge snippets are not enough.
 - Use search_docs only to locate text in a document already identified by a sufficient or weak retrieval; do not use it to override an empty verdict.
-- For external facts the local knowledge base cannot answer (library comparisons, versions, releases, current events), call web_search.
-- web_search snippets are often enough; call fetch_page only for results worth reading in depth, and always pass a focused query so long pages return the relevant parts.
+- For external facts the local knowledge base cannot answer (library comparisons, versions, releases, current events), call retrieve_web_evidence.
+- Call retrieve_web_evidence at most once per user request. It already performs query rewriting and progressive search internally; a second call would incorrectly reset the quality budget.
+- Treat retrieve_web_evidence.verdict as authoritative: sufficient may support an answer; exhausted may only support a qualified partial answer; empty must not be presented as evidence. Do not simulate lower-level web_search or fetch_page calls.
 - When answering from web results, cite the page title or url.
 - Call generate_word_document only when the user explicitly asks to generate, export, download, or create a Word/DOCX file. Ordinary requests to summarize, analyze, or write content should remain normal chat replies.
 - For generate_word_document, always put the complete body in contentMarkdown. Never construct a blocks array. Use <!-- pagebreak --> for explicit page breaks.

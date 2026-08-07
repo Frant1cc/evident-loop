@@ -57,7 +57,7 @@ export async function runAgentLoop({
     { role: 'user', content: message }
   ];
   // undefined = all registered tools; an explicit array (even empty) restricts to exactly those tools.
-  const allowedToolSet = allowedToolNames ? new Set(allowedToolNames) : undefined;
+  const allowedToolSet = allowedToolNames ? normalizeAllowedToolNames(allowedToolNames) : undefined;
   const tools = getToolDefinitions().filter((tool) => !allowedToolSet || allowedToolSet.has(tool.function.name));
   const toolNames = tools.map((tool) => tool.function.name);
   const trace: AgentTraceStep[] = [
@@ -79,11 +79,16 @@ export async function runAgentLoop({
   await onEvent?.({ type: 'llm', title: '模型判断是否需要工具', model, tools: toolNames });
 
   for (let round = 0; round < maxToolRounds + bonusToolRounds; round += 1) {
+    // The controlled web tool already owns its query-rewrite loop; once the model
+    // has called it, stop offering it so the quality budget is not reset by a second call.
+    const roundTools = searchToolCalls.has('retrieve_web_evidence')
+      ? tools.filter((tool) => tool.function.name !== 'retrieve_web_evidence')
+      : tools;
     const roundResult = await executeToolRound({
       apiKey,
       model,
       messages,
-      tools,
+      tools: roundTools,
       temperature,
       maxToolResultChars,
       decisionLabel: `模型选择调用工具（第 ${round + 1} 轮）`,
@@ -264,6 +269,13 @@ export async function runAgentLoop({
     trace,
     sources: getRagSourcesFromToolTraces(toolTraces)
   };
+}
+
+function normalizeAllowedToolNames(allowedToolNames: string[]) {
+  const names = new Set(allowedToolNames);
+  // Persisted tasks created before the controlled web tool may still store the two legacy names.
+  if (names.has('web_search') || names.has('fetch_page')) names.add('retrieve_web_evidence');
+  return names;
 }
 
 /** Detects the model's native tool-call markup leaking into plain content (e.g. DeepSeek DSML tags). */

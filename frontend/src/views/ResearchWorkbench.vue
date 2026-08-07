@@ -75,6 +75,7 @@ const activeConversation = computed(() => conversations.value.find((item) => ite
 const enabledToolNames = computed(() =>
   availableTools.value.filter((tool) => enabledTools.value[tool.name]).map((tool) => tool.name)
 );
+const toolStepCount = computed(() => steps.value.filter((step) => step.type === 'tool').length);
 
 const artifactsByMessageId = computed(() => {
   const artifacts = new Map<string, WordArtifact[]>();
@@ -438,7 +439,7 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
           </button>
         </div>
         <div class="mt-3 grid grid-cols-3 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-1">
-          <button type="button" class="flex h-8 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-bold transition-colors" :class="activeRailTab === 'timeline' ? 'bg-[var(--agent-selected-bg)] text-[var(--agent-selected-text)]' : 'text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface-muted)] hover:text-[var(--agent-text)]'" @click="activeRailTab = 'timeline'">过程 <span class="font-mono text-[10px] opacity-70">{{ steps.length }}</span></button>
+          <button type="button" class="flex h-8 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-bold transition-colors" :class="activeRailTab === 'timeline' ? 'bg-[var(--agent-selected-bg)] text-[var(--agent-selected-text)]' : 'text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface-muted)] hover:text-[var(--agent-text)]'" @click="activeRailTab = 'timeline'">过程 <span class="font-mono text-[10px] opacity-70">{{ steps.length }} · 工具 {{ toolStepCount }}</span></button>
           <button type="button" class="flex h-8 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-bold transition-colors" :class="activeRailTab === 'sources' ? 'bg-[var(--agent-selected-bg)] text-[var(--agent-selected-text)]' : 'text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface-muted)] hover:text-[var(--agent-text)]'" @click="activeRailTab = 'sources'">来源 <span class="font-mono text-[10px] opacity-70">{{ sources.length }}</span></button>
           <button type="button" class="h-8 rounded-md px-2 text-xs font-bold transition-colors" :class="activeRailTab === 'details' ? 'bg-[var(--agent-selected-bg)] text-[var(--agent-selected-text)]' : 'text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface-muted)] hover:text-[var(--agent-text)]'" @click="activeRailTab = 'details'">详情</button>
         </div>

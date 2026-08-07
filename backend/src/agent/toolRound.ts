@@ -186,11 +186,20 @@ async function executeParsedToolCall(
   }
 }
 
-const dedupedSearchToolNames = new Set(['search_knowledge', 'search_docs', 'web_search', 'fetch_page']);
+const dedupedSearchToolNames = new Set([
+  'search_knowledge',
+  'search_docs',
+  'retrieve_web_evidence',
+  'web_search',
+  'fetch_page'
+]);
 
 function isRepeatedSearch(toolCall: ParsedToolCall, searchToolCalls: Set<string>) {
   if (!dedupedSearchToolNames.has(toolCall.name)) return false;
-  const fingerprint = `${toolCall.name}:${stableStringify(toolCall.arguments)}`;
+  // This tool already owns its query-rewrite loop. A second outer call would reset its budget.
+  const fingerprint = toolCall.name === 'retrieve_web_evidence'
+    ? toolCall.name
+    : `${toolCall.name}:${stableStringify(toolCall.arguments)}`;
   if (searchToolCalls.has(fingerprint)) return true;
   searchToolCalls.add(fingerprint);
   return false;
@@ -201,7 +210,9 @@ function createRepeatedSearchTrace(toolCall: ParsedToolCall): ToolTrace {
     id: toolCall.id,
     name: toolCall.name,
     arguments: toolCall.arguments,
-    error: `${toolCall.name} has already been called with the same arguments for this research request`
+    error: toolCall.name === 'retrieve_web_evidence'
+      ? 'retrieve_web_evidence already completed its controlled search loop for this research request; use its existing verdict and sources'
+      : `${toolCall.name} has already been called with the same arguments for this research request`
   };
 }
 
