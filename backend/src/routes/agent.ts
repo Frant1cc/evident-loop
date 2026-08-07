@@ -1,12 +1,12 @@
 import { Router } from 'express';
 
+import { DEFAULT_MAX_TOOL_ROUNDS } from '../agent/config.js';
 import { runAgentLoop } from '../agent/agentLoop.js';
 import { DeepSeekApiError } from '../agent/deepseekClient.js';
 import { failure, success } from '../response.js';
 import { isExplicitWordDocumentRequest } from '../tools/wordDocumentTool.js';
 
 const DEFAULT_MODEL = 'deepseek-v4-flash';
-const MAX_TOOL_ROUNDS = 4;
 const AGENT_SYSTEM_PROMPT = `You are EvidentLoop, an evidence-first durable research agent.
 
 Use tools when they help answer with real local project data.
@@ -61,7 +61,7 @@ agentRouter.post('/agent/chat', async (req, res) => {
       message,
       model: process.env.DEEPSEEK_MODEL ?? DEFAULT_MODEL,
       systemPrompt: AGENT_SYSTEM_PROMPT,
-      maxToolRounds: MAX_TOOL_ROUNDS,
+      maxToolRounds: DEFAULT_MAX_TOOL_ROUNDS,
       requiredToolName: isExplicitWordDocumentRequest(message)
         ? 'generate_word_document'
         : undefined,
