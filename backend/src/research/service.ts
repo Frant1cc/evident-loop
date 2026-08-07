@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 
+import { DEFAULT_MAX_TOOL_ROUNDS } from '../agent/config.js';
 import { runAgentLoop, type AgentLoopEvent, type RunAgentLoopOptions } from '../agent/agentLoop.js';
 import { isExplicitWordDocumentRequest } from '../tools/wordDocumentTool.js';
 import { buildResearchContext, createConversationTitle } from './context.js';
@@ -32,7 +33,6 @@ import type {
 } from './types.js';
 
 const DEFAULT_MODEL = 'deepseek-v4-flash';
-const MAX_TOOL_ROUNDS = 4;
 const STOPPED_MESSAGE = '研究任务已停止，未能生成最终回答。';
 const RESTARTED_MESSAGE = '研究服务已重启，先前的后台任务未能继续。请重新发起研究。';
 const events = new EventEmitter();
@@ -233,7 +233,7 @@ async function executePersistedResearchRun(options: {
       contextMessages: runInput.contextMessages,
       model: options.model,
       systemPrompt: AGENT_SYSTEM_PROMPT,
-      maxToolRounds: MAX_TOOL_ROUNDS,
+      maxToolRounds: DEFAULT_MAX_TOOL_ROUNDS,
       allowedToolNames: runInput.allowedToolNames,
       requiredToolName: isExplicitWordDocumentRequest(runInput.content)
         ? 'generate_word_document'

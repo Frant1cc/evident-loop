@@ -5,7 +5,7 @@ import { webSearch } from './webSearchTool.js';
 import { generateWordDocument } from './wordDocumentTool.js';
 import { retrieveWebEvidence } from '../web/controller.js';
 
-type ToolDefinition = {
+export type ToolDefinition = {
   type: 'function';
   function: {
     name: string;

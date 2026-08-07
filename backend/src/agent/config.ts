@@ -1,0 +1,2 @@
+export const DEFAULT_MAX_TOOL_ROUNDS = 6;
+
