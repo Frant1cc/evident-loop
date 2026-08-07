@@ -32,7 +32,7 @@ export const researchRouter = Router();
 researchRouter.get('/research/tools', (_req, res) => {
   res.json(
     success({
-      tools: Object.values(toolRegistry).map((tool) => ({
+      tools: Object.values(toolRegistry).filter((tool) => tool.exposedToModel !== false).map((tool) => ({
         name: tool.definition.function.name,
         label: tool.label,
         description: tool.definition.function.description

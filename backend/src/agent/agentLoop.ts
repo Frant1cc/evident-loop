@@ -61,7 +61,7 @@ export async function runAgentLoop({
     { role: 'user', content: message }
   ];
   // undefined = all registered tools; an explicit array (even empty) restricts to exactly those tools.
-  const allowedToolSet = allowedToolNames ? new Set(allowedToolNames) : undefined;
+  const allowedToolSet = allowedToolNames ? normalizeAllowedToolNames(allowedToolNames) : undefined;
   const tools = getToolDefinitions().filter((tool) => !allowedToolSet || allowedToolSet.has(tool.function.name));
   const toolNames = tools.map((tool) => tool.function.name);
   const trace: AgentTraceStep[] = [
@@ -84,12 +84,15 @@ export async function runAgentLoop({
 
   for (let round = 0; round < maxToolRounds + bonusToolRounds; round += 1) {
     throwIfAborted(signal);
+    const roundTools = searchToolCalls.has('retrieve_web_evidence')
+      ? tools.filter((tool) => tool.function.name !== 'retrieve_web_evidence')
+      : tools;
     const completion = await createDeepSeekChatCompletion({
       apiKey,
       model,
       messages,
-      tools: tools.length ? tools : undefined,
-      toolChoice: tools.length ? 'auto' : undefined,
+      tools: roundTools.length ? roundTools : undefined,
+      toolChoice: roundTools.length ? 'auto' : undefined,
       temperature,
       signal
     });
@@ -294,11 +297,20 @@ async function executeParsedToolCall(
   }
 }
 
-const dedupedSearchToolNames = new Set(['search_knowledge', 'search_docs', 'web_search', 'fetch_page']);
+const dedupedSearchToolNames = new Set([
+  'search_knowledge',
+  'search_docs',
+  'retrieve_web_evidence',
+  'web_search',
+  'fetch_page'
+]);
 
 function isRepeatedSearch(toolCall: ParsedToolCall, searchToolCalls: Set<string>) {
   if (!dedupedSearchToolNames.has(toolCall.name)) return false;
-  const fingerprint = `${toolCall.name}:${stableStringify(toolCall.arguments)}`;
+  // This tool already owns its query-rewrite loop. A second outer call would reset its budget.
+  const fingerprint = toolCall.name === 'retrieve_web_evidence'
+    ? toolCall.name
+    : `${toolCall.name}:${stableStringify(toolCall.arguments)}`;
   if (searchToolCalls.has(fingerprint)) return true;
   searchToolCalls.add(fingerprint);
   return false;
@@ -309,7 +321,9 @@ function createRepeatedSearchTrace(toolCall: ParsedToolCall): ToolTrace {
     id: toolCall.id,
     name: toolCall.name,
     arguments: toolCall.arguments,
-    error: `${toolCall.name} has already been called with the same arguments for this research request`
+    error: toolCall.name === 'retrieve_web_evidence'
+      ? 'retrieve_web_evidence already completed its controlled search loop for this research request; use its existing verdict and sources'
+      : `${toolCall.name} has already been called with the same arguments for this research request`
   };
 }
 
@@ -322,6 +336,13 @@ function stableStringify(value: unknown): string {
       .join(',')}}`;
   }
   return JSON.stringify(value);
+}
+
+function normalizeAllowedToolNames(allowedToolNames: string[]) {
+  const names = new Set(allowedToolNames);
+  // Persisted tasks created before the controlled web tool may still store the two legacy names.
+  if (names.has('web_search') || names.has('fetch_page')) names.add('retrieve_web_evidence');
+  return names;
 }
 
 /** Detects the model's native tool-call markup leaking into plain content (e.g. DeepSeek DSML tags). */

@@ -4,6 +4,13 @@ const DEFAULT_LIMIT = 5;
 const MAX_LIMIT = 8;
 const MAX_SNIPPET_CHARS = 600;
 
+export type WebSearchOptions = {
+  searchDepth?: 'basic' | 'advanced';
+  timeRange?: 'day' | 'week' | 'month' | 'year';
+  includeDomains?: string[];
+  excludeDomains?: string[];
+};
+
 export type WebSearchResult = {
   title: string;
   url: string;
@@ -20,7 +27,11 @@ type TavilyResponse = {
   }>;
 };
 
-export async function webSearch(args: unknown, signal?: AbortSignal): Promise<{ query: string; results: WebSearchResult[] }> {
+export async function webSearch(
+  args: unknown,
+  signal?: AbortSignal,
+  options: WebSearchOptions = {}
+): Promise<{ query: string; results: WebSearchResult[] }> {
   const { query, limit } = parseArgs(args);
   const apiKey = process.env.TAVILY_API_KEY;
 
@@ -41,7 +52,15 @@ export async function webSearch(args: unknown, signal?: AbortSignal): Promise<{ 
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ query, max_results: limit, search_depth: 'basic' }),
+      body: JSON.stringify({
+        query,
+        max_results: limit,
+        search_depth: options.searchDepth ?? 'basic',
+        ...(options.searchDepth === 'advanced' ? { chunks_per_source: 3 } : {}),
+        ...(options.timeRange ? { time_range: options.timeRange } : {}),
+        ...(options.includeDomains?.length ? { include_domains: options.includeDomains } : {}),
+        ...(options.excludeDomains?.length ? { exclude_domains: options.excludeDomains } : {})
+      }),
       signal: requestSignal
     });
   } catch (error) {

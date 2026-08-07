@@ -3,6 +3,7 @@ import { readDocument, searchDocs } from './docsTool.js';
 import { fetchPage } from './fetchPageTool.js';
 import { webSearch } from './webSearchTool.js';
 import { generateWordDocument } from './wordDocumentTool.js';
+import { retrieveWebEvidence } from '../web/controller.js';
 
 type ToolDefinition = {
   type: 'function';
@@ -25,6 +26,8 @@ export type ToolContext = {
 type ToolRegistryEntry = {
   /** Chinese display name for UI surfaces (toggles, panels). The model always sees the English function name. */
   label: string;
+  /** Internal tools remain executable but are omitted from model-facing definitions and UI toggles. */
+  exposedToModel?: boolean;
   definition: ToolDefinition;
   execute: (args: unknown, context?: ToolContext) => unknown | Promise<unknown>;
 };
@@ -192,8 +195,46 @@ export const toolRegistry: Record<string, ToolRegistryEntry> = {
     },
     execute: generateWordDocument
   },
+  retrieve_web_evidence: {
+    label: '受控联网检索',
+    definition: {
+      type: 'function',
+      function: {
+        name: 'retrieve_web_evidence',
+        description:
+          'Search the public web through one complete controlled quality loop. Call this tool at most once per user request: it already scores Tavily results, fetches diverse candidate pages, rejects irrelevant content, rewrites weak queries within a fixed budget, and returns auditable sources plus sufficient/empty/exhausted verdicts. Treat only sufficient results as strong evidence; exhausted means some related material was found but the quality budget ended before confidence was sufficient.',
+        parameters: {
+          type: 'object',
+          properties: {
+            question: {
+              type: 'string',
+              description: 'The complete external-information question to investigate.'
+            },
+            timeRange: {
+              type: 'string',
+              enum: ['day', 'week', 'month', 'year'],
+              description: 'Optional freshness window for time-sensitive questions.'
+            },
+            includeDomains: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional trusted domains to prefer when the user or task explicitly identifies them.'
+            },
+            excludeDomains: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional domains that must not be searched.'
+            }
+          },
+          required: ['question']
+        }
+      }
+    },
+    execute: (args, context) => retrieveWebEvidence(args, { signal: context?.signal })
+  },
   web_search: {
     label: '联网搜索',
+    exposedToModel: false,
     definition: {
       type: 'function',
       function: {
@@ -222,6 +263,7 @@ export const toolRegistry: Record<string, ToolRegistryEntry> = {
   },
   fetch_page: {
     label: '网页阅读',
+    exposedToModel: false,
     definition: {
       type: 'function',
       function: {

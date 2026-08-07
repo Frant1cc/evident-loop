@@ -564,7 +564,7 @@ function normalizeReviewStrings(values: string[]) {
 function hasRetrievalTool(allowedTools: string[]) {
   if (!allowedTools.length) return true;
   return allowedTools.some((tool) =>
-    ['search_knowledge', 'search_docs', 'read_document', 'web_search', 'fetch_page'].includes(tool)
+    ['search_knowledge', 'search_docs', 'read_document', 'retrieve_web_evidence', 'web_search', 'fetch_page'].includes(tool)
   );
 }
 
