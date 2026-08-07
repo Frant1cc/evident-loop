@@ -1,22 +1,21 @@
 import { getRagSourcesFromToolTraces } from '../rag/index.js';
 import { getToolDefinitions } from '../tools/definitions.js';
-import { executeToolCall as executeRegisteredToolCall } from '../tools/index.js';
+import { DEFAULT_MAX_TOOL_ROUNDS } from './config.js';
 import { createDeepSeekChatCompletion } from './deepseekClient.js';
-import type { RagSource } from '../rag/types.js';
-import type { AgentLoopResult, AgentTraceStep, ChatMessage, ParsedToolCall, ToolCall, ToolTrace } from './types.js';
+import {
+  executeToolRound,
+  type AgentLoopEvent,
+  type AgentToolExecutor
+} from './toolRound.js';
+import type { AgentLoopResult, AgentTraceStep, ChatMessage, ToolTrace } from './types.js';
 
-const defaultMaxToolRounds = 4;
 const defaultMaxToolResultChars = 4_000;
 const defaultTemperature = 0.2;
 
 const leakedMarkupCorrectionPrompt =
   'Your previous reply wrote tool-call markup as plain text instead of using the function-calling interface. Never output tool-call markup (DSML or similar tags) in message content. Either call tools through the function-calling interface, or answer directly in natural language.';
 
-export type AgentLoopEvent =
-  | { type: 'llm'; title: string; model: string; tools?: string[] }
-  | { type: 'tool_started'; toolCall: Pick<ParsedToolCall, 'id' | 'name' | 'arguments'> }
-  | { type: 'tool_completed'; toolCall: ToolTrace }
-  | { type: 'source_found'; source: RagSource };
+export type { AgentLoopEvent } from './toolRound.js';
 
 export type RunAgentLoopOptions = {
   apiKey: string;
@@ -34,10 +33,7 @@ export type RunAgentLoopOptions = {
   allowedToolNames?: string[];
   /** Retry once with an explicit instruction when a required tool was not called. */
   requiredToolName?: string;
-  executeTool?: (
-    toolCall: Pick<ParsedToolCall, 'id' | 'name' | 'arguments'>,
-    context?: { signal?: AbortSignal }
-  ) => Promise<unknown>;
+  executeTool?: AgentToolExecutor;
 };
 
 export async function runAgentLoop({
@@ -46,7 +42,7 @@ export async function runAgentLoop({
   model,
   systemPrompt,
   contextMessages = [],
-  maxToolRounds = defaultMaxToolRounds,
+  maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS,
   maxToolResultChars = defaultMaxToolResultChars,
   temperature = defaultTemperature,
   signal,
@@ -83,26 +79,22 @@ export async function runAgentLoop({
   await onEvent?.({ type: 'llm', title: '模型判断是否需要工具', model, tools: toolNames });
 
   for (let round = 0; round < maxToolRounds + bonusToolRounds; round += 1) {
-    throwIfAborted(signal);
-    const completion = await createDeepSeekChatCompletion({
+    const roundResult = await executeToolRound({
       apiKey,
       model,
       messages,
-      tools: tools.length ? tools : undefined,
-      toolChoice: tools.length ? 'auto' : undefined,
+      tools,
       temperature,
-      signal
+      maxToolResultChars,
+      decisionLabel: `模型选择调用工具（第 ${round + 1} 轮）`,
+      signal,
+      onEvent,
+      executeTool,
+      searchToolCalls
     });
-    const assistantMessage = completion.choices?.[0]?.message;
+    const { assistantMessage, parsedToolCalls, reply } = roundResult;
 
-    if (!assistantMessage) {
-      throw new Error('DeepSeek returned an empty response');
-    }
-
-    const toolCalls = assistantMessage.tool_calls ?? [];
-    const reply = assistantMessage.content?.trim();
-
-    if (!toolCalls.length) {
+    if (!parsedToolCalls.length) {
       // Provider-side parsing sometimes leaks the model's native tool-call markup (e.g. DeepSeek DSML)
       // into plain content instead of structured tool_calls. Ask the model to redo the turn once.
       if (reply && containsLeakedToolMarkup(reply) && !leakRetryUsed) {
@@ -149,7 +141,6 @@ export async function runAgentLoop({
       return { reply: finalReply, toolCalls: toolTraces, trace, sources: getRagSourcesFromToolTraces(toolTraces) };
     }
 
-    const parsedToolCalls = toolCalls.map(parseToolCall);
     const malformedRequiredToolCall = parsedToolCalls.find(
       (toolCall) =>
         toolCall.parseError &&
@@ -157,45 +148,8 @@ export async function runAgentLoop({
         toolNames.includes(toolCall.name)
     );
 
-    trace.push({
-      type: 'tool_decision',
-      label: `模型选择调用工具（第 ${round + 1} 轮）`,
-      toolCalls: parsedToolCalls.map((toolCall) => ({
-        id: toolCall.id,
-        name: toolCall.name,
-        arguments: toolCall.arguments
-      }))
-    });
-    messages.push(assistantMessage);
-
-    for (const toolCall of parsedToolCalls) {
-      throwIfAborted(signal);
-      await onEvent?.({
-        type: 'tool_started',
-        toolCall: { id: toolCall.id, name: toolCall.name, arguments: toolCall.arguments }
-      });
-      const toolTrace = isRepeatedSearch(toolCall, searchToolCalls)
-        ? createRepeatedSearchTrace(toolCall)
-        : await executeParsedToolCall(toolCall, signal, executeTool);
-      toolTraces.push(toolTrace);
-      await onEvent?.({ type: 'tool_completed', toolCall: toolTrace });
-
-      for (const source of getRagSourcesFromToolTraces([toolTrace])) {
-        await onEvent?.({ type: 'source_found', source });
-      }
-
-      trace.push({
-        type: 'tool_result',
-        label: toolTrace.error ? getToolErrorLabel(toolCall) : '工具执行完成',
-        toolCall: toolTrace
-      });
-      messages.push({
-        role: 'tool',
-        tool_call_id: toolCall.id,
-        // Truncated only in model context; toolTraces/trace keep the full result for the UI.
-        content: serializeToolResultForModel(toolTrace.error ? { error: toolTrace.error } : toolTrace.result, maxToolResultChars)
-      });
-    }
+    toolTraces.push(...roundResult.toolTraces);
+    trace.push(...roundResult.trace);
 
     if (malformedRequiredToolCall && !toolArgumentRetryUsed) {
       toolArgumentRetryUsed = true;
@@ -222,6 +176,62 @@ export async function runAgentLoop({
 
     trace.push({ type: 'llm_call', label: '模型根据工具结果继续推理', model, tools: toolNames });
     await onEvent?.({ type: 'llm', title: '模型根据工具结果继续推理', model, tools: toolNames });
+  }
+
+  const requiredTool = requiredToolName
+    ? tools.find((tool) => tool.function.name === requiredToolName)
+    : undefined;
+  const requiredToolSucceeded = requiredToolName
+    ? toolTraces.some((toolTrace) => toolTrace.name === requiredToolName && !toolTrace.error)
+    : true;
+
+  if (requiredTool && !requiredToolSucceeded) {
+    throwIfAborted(signal);
+    const reservedTools = [requiredTool];
+    const reservedToolNames = [requiredToolName!];
+    const reservedRoundPrompt =
+      `The normal tool rounds are exhausted, but the user explicitly requested an artifact and ${requiredToolName} has not succeeded. ` +
+      `This is the reserved artifact-generation round. Call ${requiredToolName} now using the evidence already available. ` +
+      'Do not call any other tool and do not answer in prose.';
+
+    messages.push({ role: 'system', content: reservedRoundPrompt });
+    trace.push({
+      type: 'llm_call',
+      label: `保留额外轮次以调用必需工具 ${requiredToolName}`,
+      model,
+      tools: reservedToolNames
+    });
+    await onEvent?.({
+      type: 'llm',
+      title: `保留额外轮次以调用必需工具 ${requiredToolName}`,
+      model,
+      tools: reservedToolNames
+    });
+
+    const reservedRound = await executeToolRound({
+      apiKey,
+      model,
+      messages,
+      tools: reservedTools,
+      temperature,
+      maxToolResultChars,
+      decisionLabel: '模型在保留轮次调用必需工具',
+      successLabel: '必需工具在保留轮次执行完成',
+      signal,
+      onEvent,
+      executeTool,
+      searchToolCalls,
+      requiredSingleToolName: requiredToolName
+    });
+    toolTraces.push(...reservedRound.toolTraces);
+    trace.push(...reservedRound.trace);
+
+    const failedRequiredTool = reservedRound.toolTraces.find((toolTrace) => toolTrace.error);
+    if (failedRequiredTool?.error) {
+      throw new Error(
+        `Required tool ${requiredToolName} failed in the reserved artifact-generation round: ${failedRequiredTool.error}`
+      );
+    }
   }
 
   if (toolTraces.length) {
@@ -256,74 +266,6 @@ export async function runAgentLoop({
   };
 }
 
-async function executeParsedToolCall(
-  toolCall: ParsedToolCall,
-  signal?: AbortSignal,
-  executeTool?: RunAgentLoopOptions['executeTool']
-): Promise<ToolTrace> {
-  throwIfAborted(signal);
-
-  if (toolCall.parseError) {
-    return {
-      id: toolCall.id,
-      name: toolCall.name,
-      arguments: toolCall.arguments,
-      error: toolCall.parseError
-    };
-  }
-
-  try {
-    const result = executeTool
-      ? await executeTool({ id: toolCall.id, name: toolCall.name, arguments: toolCall.arguments }, { signal })
-      : await executeRegisteredToolCall(toolCall.name, toolCall.arguments, { signal });
-    throwIfAborted(signal);
-    return {
-      id: toolCall.id,
-      name: toolCall.name,
-      arguments: toolCall.arguments,
-      result
-    };
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    return {
-      id: toolCall.id,
-      name: toolCall.name,
-      arguments: toolCall.arguments,
-      error: error instanceof Error ? error.message : 'Tool call failed'
-    };
-  }
-}
-
-const dedupedSearchToolNames = new Set(['search_knowledge', 'search_docs', 'web_search', 'fetch_page']);
-
-function isRepeatedSearch(toolCall: ParsedToolCall, searchToolCalls: Set<string>) {
-  if (!dedupedSearchToolNames.has(toolCall.name)) return false;
-  const fingerprint = `${toolCall.name}:${stableStringify(toolCall.arguments)}`;
-  if (searchToolCalls.has(fingerprint)) return true;
-  searchToolCalls.add(fingerprint);
-  return false;
-}
-
-function createRepeatedSearchTrace(toolCall: ParsedToolCall): ToolTrace {
-  return {
-    id: toolCall.id,
-    name: toolCall.name,
-    arguments: toolCall.arguments,
-    error: `${toolCall.name} has already been called with the same arguments for this research request`
-  };
-}
-
-function stableStringify(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, nested]) => `${JSON.stringify(key)}:${stableStringify(nested)}`)
-      .join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
-
 /** Detects the model's native tool-call markup leaking into plain content (e.g. DeepSeek DSML tags). */
 function containsLeakedToolMarkup(text: string): boolean {
   if (text.includes('<｜')) return true;
@@ -341,12 +283,6 @@ function stripLeakedToolMarkup(text: string): string {
   return text.slice(0, Math.min(...candidates)).trim();
 }
 
-function serializeToolResultForModel(payload: unknown, maxChars: number): string {
-  const serialized = JSON.stringify(payload) ?? 'null';
-  if (serialized.length <= maxChars) return serialized;
-  return `${serialized.slice(0, maxChars)}\n...[tool result truncated: showing first ${maxChars} of ${serialized.length} characters]`;
-}
-
 function createEmptyReplyFallback(hasToolContext: boolean) {
   return hasToolContext
     ? '已完成资料检索，但模型没有生成可展示的结论。请缩小问题范围，或查看右侧 Sources 中的检索结果。'
@@ -356,37 +292,5 @@ function createEmptyReplyFallback(hasToolContext: boolean) {
 function throwIfAborted(signal?: AbortSignal) {
   if (signal?.aborted) {
     throw signal.reason instanceof Error ? signal.reason : new Error('Research request was cancelled');
-  }
-}
-
-function getToolErrorLabel(toolCall: ParsedToolCall) {
-  return toolCall.parseError ? '工具参数解析失败' : '工具执行失败';
-}
-
-function parseToolCall(toolCall: ToolCall): ParsedToolCall {
-  try {
-    return {
-      id: toolCall.id,
-      name: toolCall.function.name,
-      arguments: parseToolArguments(toolCall.function.arguments)
-    };
-  } catch (error) {
-    return {
-      id: toolCall.id,
-      name: toolCall.function.name,
-      arguments: { raw: toolCall.function.arguments },
-      parseError: error instanceof Error ? error.message : 'Failed to parse tool arguments'
-    };
-  }
-}
-
-function parseToolArguments(value: string) {
-  if (!value.trim()) return {};
-
-  try {
-    return JSON.parse(value) as unknown;
-  } catch (error) {
-    const details = error instanceof SyntaxError ? `: ${error.message}` : '';
-    throw new Error(`Failed to parse tool arguments${details}`);
   }
 }

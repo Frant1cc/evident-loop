@@ -4,7 +4,7 @@ import { fetchPage } from './fetchPageTool.js';
 import { webSearch } from './webSearchTool.js';
 import { generateWordDocument } from './wordDocumentTool.js';
 
-type ToolDefinition = {
+export type ToolDefinition = {
   type: 'function';
   function: {
     name: string;
