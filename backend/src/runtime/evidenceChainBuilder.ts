@@ -174,6 +174,54 @@ export function buildEvidenceFromToolExecutions(
       continue;
     }
 
+    if (execution.toolName === 'retrieve_web_evidence') {
+      const result = recordValue(execution.result);
+      if (result && Array.isArray(result.sources)) {
+        for (const rawSource of result.sources) {
+          const source = recordValue(rawSource);
+          if (!source) continue;
+          const uri = textValue(source.file);
+          const content = textValue(source.content);
+          if (!uri || !content) continue;
+          const rawId = textValue(source.id) ?? fingerprint(`${uri}:${content}`);
+          const domain = textValue(source.heading);
+          const contentType = textValue(source.contentType);
+          const startLine = numberValue(source.startLine);
+          const endLine = numberValue(source.endLine);
+          const relevanceScore = normalizedScore(source.score);
+          const sourceKey = `web:${uri}`;
+          sources.set(sourceKey, {
+            sourceKey,
+            type: 'web',
+            title: textValue(source.title) ?? uri,
+            uri,
+            toolExecutionId: execution.id,
+            ...(!domain && !contentType ? {} : {
+              metadata: {
+                ...(domain ? { domain } : {}),
+                ...(contentType ? { contentType } : {})
+              }
+            })
+          });
+          const evidenceKey = `web:${rawId}`;
+          evidence.set(evidenceKey, {
+            evidenceKey,
+            sourceKey,
+            content,
+            ...(domain ? { context: domain } : {}),
+            ...(startLine === undefined && endLine === undefined ? {} : {
+              locator: {
+                ...(startLine === undefined ? {} : { startLine }),
+                ...(endLine === undefined ? {} : { endLine })
+              }
+            }),
+            ...(relevanceScore === undefined ? {} : { relevanceScore })
+          });
+        }
+        continue;
+      }
+    }
+
     const serialized = safeStringify(execution.result);
     if (!serialized) continue;
     const sourceKey = `tool:${execution.id}`;
