@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildEvidenceFromToolExecutions, parseEvidenceChainClaims } from './evidenceChainBuilder.js';
+import {
+  buildEvidenceFromToolExecutions,
+  claimExtractionOutput,
+  describeEmptyClaimCompletion,
+  parseEvidenceChainClaims
+} from './evidenceChainBuilder.js';
 
 function supportedClaim(evidenceKey: string) {
   return JSON.stringify({
@@ -17,6 +22,40 @@ function supportedClaim(evidenceKey: string) {
     }]
   });
 }
+
+test('removes duplicated tool data from the default step output used for claim extraction', () => {
+  const output = {
+    reply: 'The step conclusion.',
+    sources: [{ content: 'duplicated source content' }],
+    toolCalls: [{ result: { content: 'duplicated tool content' } }]
+  };
+
+  assert.deepEqual(claimExtractionOutput(output), { reply: 'The step conclusion.' });
+  assert.deepEqual(output.sources, [{ content: 'duplicated source content' }]);
+  assert.deepEqual(output.toolCalls, [{ result: { content: 'duplicated tool content' } }]);
+});
+
+test('keeps custom step output unchanged', () => {
+  const output = { summary: 'Custom runner output', facts: ['one'] };
+
+  assert.equal(claimExtractionOutput(output), output);
+});
+
+test('describes an empty claim completion with its raw payload', () => {
+  const completion = { choices: [{ message: { role: 'assistant' as const, content: '' } }] };
+
+  assert.equal(
+    describeEmptyClaimCompletion(completion),
+    'Claim extractor returned an empty response (choices: 1): {"choices":[{"message":{"role":"assistant","content":""}}]}'
+  );
+});
+
+test('describes a completion with no choices', () => {
+  assert.equal(
+    describeEmptyClaimCompletion({ choices: [] }),
+    'Claim extractor returned an empty response (choices: 0): {"choices":[]}'
+  );
+});
 
 test('promotes each controlled web result into a web source and evidence item', () => {
   const result = buildEvidenceFromToolExecutions([{

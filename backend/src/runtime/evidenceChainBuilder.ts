@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import { createDeepSeekChatCompletion } from '../agent/deepseekClient.js';
+import type { DeepSeekChatResponse } from '../agent/types.js';
 import type {
   AgentPlanStep,
   AgentTask,
@@ -51,7 +52,11 @@ export function createModelEvidenceChainBuilder(apiKey: string, model: string): 
     const base = buildEvidenceFromToolExecutions(toolExecutions);
     const serialized = JSON.stringify({
       researchGoal: task.goal,
-      step: { objective: step.objective, expectedEvidence: step.expectedEvidence, output },
+      step: {
+        objective: step.objective,
+        expectedEvidence: step.expectedEvidence,
+        output: claimExtractionOutput(output)
+      },
       evidence: base.evidence.map((item) => ({
         evidenceKey: item.evidenceKey,
         content: item.content,
@@ -61,17 +66,24 @@ export function createModelEvidenceChainBuilder(apiKey: string, model: string): 
       }))
     });
     const boundedInput = serialized.length > 60_000 ? `${serialized.slice(0, 60_000)}\n[claim input truncated]` : serialized;
-    const completion = await createDeepSeekChatCompletion({
+    const request = {
       apiKey,
       model,
       messages: [
-        { role: 'system', content: claimExtractorPrompt },
-        { role: 'user', content: boundedInput }
+        { role: 'system' as const, content: claimExtractorPrompt },
+        { role: 'user' as const, content: boundedInput }
       ],
       signal
-    });
-    const content = completion.choices?.[0]?.message?.content;
-    if (!content) throw new Error('Claim extractor returned an empty response');
+    };
+    let completion = await createDeepSeekChatCompletion(request);
+    let content = completion.choices?.[0]?.message?.content;
+    if (typeof content !== 'string' || !content.trim()) {
+      completion = await createDeepSeekChatCompletion(request);
+      content = completion.choices?.[0]?.message?.content;
+    }
+    if (typeof content !== 'string' || !content.trim()) {
+      throw new Error(describeEmptyClaimCompletion(completion));
+    }
     const extracted = parseEvidenceChainClaims(content, new Set(base.evidence.map((item) => item.evidenceKey)));
     return { ...base, ...extracted };
   };
@@ -315,6 +327,17 @@ function resolveEvidenceKey(requestedKey: string, availableEvidenceKeys: Set<str
     match = availableKey;
   }
   return match;
+}
+
+export function claimExtractionOutput(output: unknown) {
+  const record = recordValue(output);
+  if (!record || !('reply' in record) || (!('sources' in record) && !('toolCalls' in record))) return output;
+  return { reply: record.reply };
+}
+
+export function describeEmptyClaimCompletion(completion: DeepSeekChatResponse) {
+  const choiceCount = completion.choices?.length ?? 0;
+  return `Claim extractor returned an empty response (choices: ${choiceCount}): ${safeStringify(completion)?.slice(0, 500) ?? '<unserializable completion>'}`;
 }
 
 function resultItems(value: unknown) {
