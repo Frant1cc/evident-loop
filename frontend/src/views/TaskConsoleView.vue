@@ -2,6 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import {
   PhArrowClockwise,
+  PhArrowDown,
+  PhArrowUp,
   PhCaretDoubleLeft,
   PhCaretDoubleRight,
   PhCheck,
@@ -29,7 +31,8 @@ import {
   listAgentTasks,
   planAgentTask,
   retryAgentTaskStep,
-  runAgentTask
+  runAgentTask,
+  updateAgentTaskPlan
 } from '../api/tasks';
 import type {
   AgentEvent,
@@ -39,6 +42,7 @@ import type {
   AgentTask,
   AgentTaskDetail,
   AgentTaskStatus,
+  PlanStepDraft,
   ToolExecution
 } from '../types/tasks';
 import { listResearchTools } from '../api/research';
@@ -64,7 +68,7 @@ const events = ref<AgentEvent[]>([]);
 const inspectorTab = ref<InspectorTab>('events');
 const creating = ref(false);
 const initialLoading = ref(true);
-const busyAction = ref<'create' | 'plan' | 'approve' | 'run' | 'retry' | 'finalize' | 'delete'>();
+const busyAction = ref<'create' | 'plan' | 'save-plan' | 'approve' | 'run' | 'retry' | 'finalize' | 'delete'>();
 const deleteTarget = ref<AgentTask>();
 const deleteTargetSummary = computed(() => {
   const normalizedGoal = deleteTarget.value?.goal.replace(/\s+/g, ' ').trim() ?? '';
@@ -76,6 +80,8 @@ const goal = ref('');
 const maxSteps = ref(5);
 const maxTokens = ref(24000);
 const selectedTools = ref(['search_knowledge', 'search_docs', 'read_document', 'retrieve_web_evidence']);
+type EditablePlanDraft = PlanStepDraft & { key: string };
+const planDrafts = ref<EditablePlanDraft[]>([]);
 let pollTimer: ReturnType<typeof window.setInterval> | undefined;
 let runController: AbortController | undefined;
 
@@ -121,6 +127,23 @@ const unlinkedEvidence = computed(() => {
   const linkedIds = new Set(detail.value?.claimEvidence.map((link) => link.evidenceId) ?? []);
   return detail.value?.evidence.filter((item) => !linkedIds.has(item.id)) ?? [];
 });
+const planValid = computed(() =>
+  planDrafts.value.length > 0
+  && planDrafts.value.every(
+    (draft) => draft.objective.trim() && draft.expectedEvidence.some((evidence) => evidence.trim())
+  )
+);
+const planDirty = computed(() => {
+  const drafts = planDrafts.value.map((draft) => ({
+    objective: draft.objective.trim(),
+    expectedEvidence: draft.expectedEvidence.map((item) => item.trim()).filter(Boolean)
+  }));
+  const persisted = (detail.value?.steps ?? []).map((step) => ({
+    objective: step.objective,
+    expectedEvidence: step.expectedEvidence
+  }));
+  return JSON.stringify(drafts) !== JSON.stringify(persisted);
+});
 
 onMounted(async () => {
   try {
@@ -159,6 +182,7 @@ function openCreate() {
   creating.value = true;
   activeTaskId.value = undefined;
   detail.value = undefined;
+  planDrafts.value = [];
   events.value = [];
   error.value = '';
 }
@@ -183,6 +207,7 @@ async function confirmTaskDelete() {
     if (wasActive) {
       activeTaskId.value = undefined;
       detail.value = undefined;
+      planDrafts.value = [];
       events.value = [];
       creating.value = !tasks.value.length;
     }
@@ -237,7 +262,7 @@ async function generatePlan() {
 }
 
 async function approveAndRun() {
-  if (!activeTaskId.value || busyAction.value) return;
+  if (!activeTaskId.value || busyAction.value || planDirty.value || !planValid.value) return;
   busyAction.value = 'approve';
   error.value = '';
   try {
@@ -250,6 +275,52 @@ async function approveAndRun() {
   }
   busyAction.value = undefined;
   await executeTask();
+}
+
+async function savePlanEdits() {
+  const id = activeTaskId.value;
+  if (!id || busyAction.value || activeTask.value?.status !== 'awaiting_approval' || !planValid.value) return;
+  busyAction.value = 'save-plan';
+  error.value = '';
+  try {
+    applyDetail(await updateAgentTaskPlan(id, planDrafts.value.map((draft) => ({
+      objective: draft.objective.trim(),
+      expectedEvidence: [...new Set(draft.expectedEvidence.map((item) => item.trim()).filter(Boolean))]
+    }))));
+    await refreshEvents();
+  } catch (err) {
+    error.value = getErrorMessage(err);
+    await refreshActive().catch(() => undefined);
+  } finally {
+    busyAction.value = undefined;
+  }
+}
+
+function addPlanStep() {
+  if (!activeTask.value || planDrafts.value.length >= activeTask.value.maxSteps) return;
+  planDrafts.value.push({ key: crypto.randomUUID(), objective: '', expectedEvidence: [''] });
+}
+
+function removePlanStep(index: number) {
+  if (planDrafts.value.length <= 1) return;
+  planDrafts.value.splice(index, 1);
+}
+
+function movePlanStep(index: number, offset: number) {
+  const target = index + offset;
+  if (target < 0 || target >= planDrafts.value.length) return;
+  const [draft] = planDrafts.value.splice(index, 1);
+  if (draft) planDrafts.value.splice(target, 0, draft);
+}
+
+function addPlanEvidence(index: number) {
+  planDrafts.value[index]?.expectedEvidence.push('');
+}
+
+function removePlanEvidence(stepIndex: number, evidenceIndex: number) {
+  const draft = planDrafts.value[stepIndex];
+  if (!draft || draft.expectedEvidence.length <= 1) return;
+  draft.expectedEvidence.splice(evidenceIndex, 1);
 }
 
 async function executeTask() {
@@ -342,6 +413,11 @@ async function refreshEvents() {
 
 function applyDetail(next: AgentTaskDetail) {
   detail.value = next;
+  planDrafts.value = next.steps.map((step) => ({
+    key: step.id,
+    objective: step.objective,
+    expectedEvidence: [...step.expectedEvidence]
+  }));
   const index = tasks.value.findIndex((task) => task.id === next.task.id);
   if (index === -1) tasks.value.unshift(next.task);
   else tasks.value[index] = next.task;
@@ -523,6 +599,7 @@ function eventLabel(type: string) {
     task_created: '任务已创建',
     task_status_changed: '任务状态变更',
     plan_created: '计划已生成',
+    plan_updated: '计划已编辑',
     step_started: '步骤开始',
     step_completed: '步骤完成',
     step_failed: '步骤失败',
@@ -715,7 +792,11 @@ function getErrorMessage(value: unknown) {
             </div>
 
             <button v-if="activeTask?.status === 'created'" type="button" class="flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--agent-primary)] px-4 text-sm font-bold text-[var(--agent-primary-text)] hover:bg-[var(--agent-primary-hover)] disabled:opacity-50" :disabled="Boolean(busyAction)" @click="generatePlan"><PhCircleNotch v-if="busyAction === 'plan'" class="animate-spin" :size="16" /><PhListChecks v-else :size="16" weight="bold" />{{ busyAction === 'plan' ? '正在生成计划' : '生成计划' }}</button>
-            <button v-else-if="activeTask?.status === 'awaiting_approval'" type="button" class="flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--agent-primary)] px-4 text-sm font-bold text-[var(--agent-primary-text)] hover:bg-[var(--agent-primary-hover)] disabled:opacity-50" :disabled="Boolean(busyAction)" @click="approveAndRun"><PhShieldCheck :size="17" weight="bold" />批准并执行</button>
+            <div v-else-if="activeTask?.status === 'awaiting_approval'" class="flex flex-wrap items-center justify-end gap-2">
+              <span v-if="planDirty" class="text-[11px] font-semibold text-amber-700">计划有未保存修改</span>
+              <button type="button" class="flex h-10 items-center justify-center gap-2 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] px-4 text-sm font-bold text-[var(--agent-text)] hover:bg-[var(--agent-surface-muted)] disabled:opacity-50" :disabled="Boolean(busyAction) || !planValid || !planDirty" @click="savePlanEdits"><PhCircleNotch v-if="busyAction === 'save-plan'" class="animate-spin" :size="16" /><PhCheck v-else :size="16" weight="bold" />{{ busyAction === 'save-plan' ? '保存中' : '保存计划' }}</button>
+              <button type="button" class="flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--agent-primary)] px-4 text-sm font-bold text-[var(--agent-primary-text)] hover:bg-[var(--agent-primary-hover)] disabled:opacity-50" :disabled="Boolean(busyAction) || planDirty || !planValid" @click="approveAndRun"><PhShieldCheck :size="17" weight="bold" />批准并执行</button>
+            </div>
             <button v-else-if="activeTask?.status === 'running'" type="button" class="flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--agent-primary)] px-4 text-sm font-bold text-[var(--agent-primary-text)] hover:bg-[var(--agent-primary-hover)] disabled:opacity-50" :disabled="Boolean(busyAction)" @click="executeTask"><PhCircleNotch v-if="busyAction === 'run'" class="animate-spin" :size="16" /><PhPlay v-else :size="16" weight="fill" />{{ busyAction === 'run' ? '正在执行' : '继续执行' }}</button>
             <div v-else class="flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--agent-text-muted)]"><PhCheck v-if="activeTask?.status === 'completed'" :size="16" weight="bold" /><PhClockCounterClockwise v-else :size="16" />{{ statusLabel(activeTask!.status) }}</div>
           </section>
@@ -741,11 +822,31 @@ function getErrorMessage(value: unknown) {
 
           <section>
             <div class="mb-3 flex items-end justify-between gap-4">
-              <div><p class="m-0 font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--agent-text-muted)]">执行计划</p><h2 class="m-0 mt-1 text-lg font-bold tracking-[-0.02em]">可恢复步骤</h2></div>
+              <div><p class="m-0 font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--agent-text-muted)]">执行计划</p><h2 class="m-0 mt-1 text-lg font-bold tracking-[-0.02em]">{{ activeTask?.status === 'awaiting_approval' ? '批准前编辑计划' : '可恢复步骤' }}</h2><p v-if="activeTask?.status === 'awaiting_approval'" class="m-0 mt-1 text-xs text-[var(--agent-text-muted)]">调整步骤目标、顺序和证据要求，保存后再批准执行。</p></div>
               <span v-if="busyAction === 'run'" class="flex items-center gap-2 font-mono text-[10px] font-bold uppercase text-amber-700"><PhCircleNotch class="animate-spin" :size="14" /> 正在同步运行状态</span>
             </div>
 
             <div v-if="!detail.steps.length" class="rounded-md border border-dashed border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-5 py-10 text-center text-sm leading-6 text-[var(--agent-text-muted)]">计划尚未生成。Planner 会把目标拆成可验证、可恢复的执行步骤。</div>
+            <div v-else-if="activeTask?.status === 'awaiting_approval'" class="grid gap-3">
+              <article v-for="(draft, index) in planDrafts" :key="draft.key" class="grid gap-3 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] p-4">
+                <div class="flex items-center gap-2">
+                  <span class="grid size-8 shrink-0 place-items-center rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] font-mono text-xs font-bold text-[var(--agent-text-muted)]">{{ String(index + 1).padStart(2, '0') }}</span>
+                  <input v-model="draft.objective" class="h-10 min-w-0 flex-1 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] px-3 text-sm font-bold text-[var(--agent-text)] outline-none focus:border-[var(--agent-selected-border)] focus:ring-4 focus:ring-[var(--agent-focus-ring)]" :placeholder="`步骤 ${index + 1} 的执行目标`" :disabled="Boolean(busyAction)" />
+                  <button type="button" class="grid size-8 place-items-center rounded-md text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface)] disabled:opacity-30" :disabled="Boolean(busyAction) || index === 0" title="上移步骤" @click="movePlanStep(index, -1)"><PhArrowUp :size="14" /></button>
+                  <button type="button" class="grid size-8 place-items-center rounded-md text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface)] disabled:opacity-30" :disabled="Boolean(busyAction) || index === planDrafts.length - 1" title="下移步骤" @click="movePlanStep(index, 1)"><PhArrowDown :size="14" /></button>
+                  <button type="button" class="grid size-8 place-items-center rounded-md text-[var(--agent-error-text)] hover:bg-[var(--agent-error-bg)] disabled:opacity-30" :disabled="Boolean(busyAction) || planDrafts.length <= 1" title="删除步骤" @click="removePlanStep(index)"><PhTrash :size="14" /></button>
+                </div>
+                <div class="ml-10 grid gap-2">
+                  <span class="font-mono text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--agent-text-muted)]">预期证据</span>
+                  <div v-for="(_, evidenceIndex) in draft.expectedEvidence" :key="evidenceIndex" class="flex gap-2">
+                    <input v-model="draft.expectedEvidence[evidenceIndex]" class="h-9 min-w-0 flex-1 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] px-3 text-xs text-[var(--agent-text)] outline-none focus:border-[var(--agent-selected-border)]" placeholder="需要收集或验证的证据" :disabled="Boolean(busyAction)" />
+                    <button type="button" class="grid size-9 place-items-center rounded-md text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface)] disabled:opacity-30" :disabled="Boolean(busyAction) || draft.expectedEvidence.length <= 1" title="删除证据要求" @click="removePlanEvidence(index, evidenceIndex)"><PhTrash :size="13" /></button>
+                  </div>
+                  <button type="button" class="inline-flex h-8 w-fit items-center gap-1.5 rounded-md px-2.5 text-xs font-bold text-[var(--agent-selected-text)] hover:bg-[var(--agent-selected-bg)] disabled:opacity-50" :disabled="Boolean(busyAction)" @click="addPlanEvidence(index)"><PhPlus :size="13" weight="bold" />增加证据要求</button>
+                </div>
+              </article>
+              <button v-if="planDrafts.length < (activeTask?.maxSteps ?? 0)" type="button" class="flex h-10 items-center justify-center gap-2 rounded-md border border-dashed border-[var(--agent-border)] text-xs font-bold text-[var(--agent-text-muted)] hover:border-[var(--agent-selected-border)] hover:text-[var(--agent-selected-text)] disabled:opacity-50" :disabled="Boolean(busyAction)" @click="addPlanStep"><PhPlus :size="14" weight="bold" />增加计划步骤</button>
+            </div>
             <div v-else class="grid gap-0">
               <article v-for="(step, index) in detail.steps" :key="step.id" class="group grid grid-cols-[44px_minmax(0,1fr)]">
                 <div class="grid grid-rows-[36px_minmax(0,1fr)] justify-items-center">

@@ -46,6 +46,11 @@ export type AgentPlanStep = {
   updatedAt: string;
 };
 
+export type PlanStepDraft = {
+  objective: string;
+  expectedEvidence: string[];
+};
+
 export type AgentEvent = {
   id: string;
   taskId: string;

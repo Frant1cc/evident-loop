@@ -2,7 +2,7 @@ import { Router } from 'express';
 
 import { failure, success } from '../response.js';
 import { executeAgentTask, finalizeAgentTask } from '../runtime/executor.js';
-import { agentTaskStatuses, type AgentTaskStatus, type EvidenceChainDraft } from '../runtime/types.js';
+import { agentTaskStatuses, type AgentTaskStatus, type EvidenceChainDraft, type PlanStepDraft } from '../runtime/types.js';
 import {
   createAgentTask,
   deleteAgentTask,
@@ -12,7 +12,8 @@ import {
   planAgentTask,
   retryAgentPlanStep,
   saveAgentEvidenceChain,
-  transitionAgentTask
+  transitionAgentTask,
+  updateAgentTaskPlan
 } from '../runtime/service.js';
 import { InvalidTaskTransitionError } from '../runtime/stateMachine.js';
 
@@ -55,6 +56,22 @@ tasksRouter.post('/tasks/:taskId/plan', async (req, res) => {
     res.json(success(detail, 'Agent plan created'));
   } catch (error) {
     res.status(error instanceof InvalidTaskTransitionError ? 409 : 502).json(failure(getErrorMessage(error)));
+  }
+});
+
+tasksRouter.put('/tasks/:taskId/plan', (req, res) => {
+  try {
+    const detail = updateAgentTaskPlan(req.params.taskId, req.body?.steps as PlanStepDraft[]);
+    if (!detail) {
+      res.status(404).json(failure('Agent task not found'));
+      return;
+    }
+    res.json(success(detail, 'Agent plan updated'));
+  } catch (error) {
+    const message = getErrorMessage(error);
+    const conflict = message === 'Only a task awaiting approval can edit its plan'
+      || message === 'Only a fully pending plan can be edited';
+    res.status(conflict ? 409 : 400).json(failure(message));
   }
 });
 

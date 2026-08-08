@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentTask, AgentTaskDetail } from '../types/tasks';
+import type { AgentEvent, AgentTask, AgentTaskDetail, PlanStepDraft } from '../types/tasks';
 
 type ApiResponse<T> = {
   code: 0 | 1;
@@ -33,6 +33,13 @@ export function deleteAgentTask(id: string) {
 
 export function planAgentTask(id: string) {
   return request<AgentTaskDetail>(`/api/tasks/${encodeURIComponent(id)}/plan`, { method: 'POST' });
+}
+
+export function updateAgentTaskPlan(id: string, steps: PlanStepDraft[]) {
+  return request<AgentTaskDetail>(`/api/tasks/${encodeURIComponent(id)}/plan`, {
+    method: 'PUT',
+    body: { steps }
+  });
 }
 
 export function approveAgentTask(id: string) {

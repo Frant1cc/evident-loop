@@ -31,6 +31,7 @@ import {
   markPlanStepCompleted,
   markPlanStepFailed,
   markPlanStepRunning,
+  replacePlanSteps,
   resetPlanStepForRetry,
   scheduleEvidenceGaps,
   markEvidenceGapsUnresolved,
@@ -172,6 +173,34 @@ export function saveAgentTaskPlan(id: string, drafts: PlanStepDraft[]): AgentTas
       steps: steps.map((step) => ({ id: step.id, sequence: step.sequence, objective: step.objective }))
     }, now);
     appendEvent(id, 'task_status_changed', { from: current.status, to: 'awaiting_approval' }, now);
+    const latestCheckpoint = insertCheckpoint(id, checkpointVersion, buildCheckpointState(task, steps), now);
+    return buildTaskDetail(task, latestCheckpoint);
+  })();
+}
+
+export function updateAgentTaskPlan(id: string, drafts: PlanStepDraft[]): AgentTaskDetail | undefined {
+  return runInTransaction(() => {
+    const current = getTask(id);
+    if (!current) return undefined;
+    if (current.status !== 'awaiting_approval') {
+      throw new Error('Only a task awaiting approval can edit its plan');
+    }
+    const previousSteps = listPlanSteps(id);
+    if (previousSteps.some((step) => step.status !== 'pending')) {
+      throw new Error('Only a fully pending plan can be edited');
+    }
+    const normalizedDrafts = normalizePlanDrafts(drafts, current.maxSteps, current.goal);
+    const now = new Date().toISOString();
+    const steps = replacePlanSteps(id, normalizedDrafts, now);
+    const checkpointVersion = current.checkpointVersion + 1;
+    updateTaskStatus(id, 'awaiting_approval', checkpointVersion, now);
+    const task = getTask(id);
+    if (!task) throw new Error('Agent task disappeared while updating plan');
+
+    appendEvent(id, 'plan_updated', {
+      previousStepCount: previousSteps.length,
+      steps: steps.map((step) => ({ id: step.id, sequence: step.sequence, objective: step.objective }))
+    }, now);
     const latestCheckpoint = insertCheckpoint(id, checkpointVersion, buildCheckpointState(task, steps), now);
     return buildTaskDetail(task, latestCheckpoint);
   })();
@@ -559,6 +588,32 @@ function buildTaskDetail(task: AgentTask, latestCheckpoint = getLatestCheckpoint
 
 function normalizeReviewStrings(values: string[]) {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function normalizePlanDrafts(drafts: PlanStepDraft[], maxSteps: number, goal: string): PlanStepDraft[] {
+  if (!Array.isArray(drafts) || !drafts.length || drafts.length > maxSteps) {
+    throw new Error(`plan must contain 1-${maxSteps} steps`);
+  }
+  const normalized = drafts.map((draft, index) => {
+    const objective = typeof draft?.objective === 'string' ? draft.objective.trim() : '';
+    const evidence = Array.isArray(draft?.expectedEvidence) ? draft.expectedEvidence : [];
+    const expectedEvidence = [
+      ...new Set(evidence.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean))
+    ];
+    if (!objective) throw new Error(`Plan step ${index + 1} objective is required`);
+    if (!expectedEvidence.length) {
+      throw new Error(`Plan step ${index + 1} expectedEvidence must be a non-empty string array`);
+    }
+    return { objective, expectedEvidence };
+  });
+  if (/\p{Script=Han}/u.test(goal) && normalized.some(
+    (draft) =>
+      !/\p{Script=Han}/u.test(draft.objective)
+      || draft.expectedEvidence.some((item) => !/\p{Script=Han}/u.test(item))
+  )) {
+    throw new Error('中文任务的计划目标和证据要求必须包含中文');
+  }
+  return normalized;
 }
 
 function hasRetrievalTool(allowedTools: string[]) {

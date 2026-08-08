@@ -298,6 +298,11 @@ export function insertPlanSteps(taskId: string, drafts: PlanStepDraft[], created
   return steps;
 }
 
+export function replacePlanSteps(taskId: string, drafts: PlanStepDraft[], updatedAt: string): AgentPlanStep[] {
+  sqlite.prepare('DELETE FROM agent_plan_steps WHERE task_id = ?').run(taskId);
+  return insertPlanSteps(taskId, drafts, updatedAt);
+}
+
 export function insertSupplementalPlanStep(input: {
   taskId: string;
   objective: string;
