@@ -63,6 +63,7 @@ const inspectorTrack = computed(() => (inspectorCollapsed.value ? '48px' : `${in
 
 const tasks = ref<AgentTask[]>([]);
 const activeTaskId = ref<string>();
+const runningTaskId = ref<string>();
 const detail = ref<AgentTaskDetail>();
 const events = ref<AgentEvent[]>([]);
 const inspectorTab = ref<InspectorTab>('events');
@@ -84,6 +85,8 @@ type EditablePlanDraft = PlanStepDraft & { key: string };
 const planDrafts = ref<EditablePlanDraft[]>([]);
 let pollTimer: ReturnType<typeof window.setInterval> | undefined;
 let runController: AbortController | undefined;
+let viewSequence = 0;
+let runSequence = 0;
 
 // Fallback list; replaced on mount by the live registry so new tools show up automatically.
 const availableTools = ref<Array<{ name: string; label: string }>>([
@@ -105,6 +108,7 @@ async function loadAvailableTools() {
 }
 
 const activeTask = computed(() => detail.value?.task);
+const isViewingRunningTask = computed(() => activeTaskId.value === runningTaskId.value);
 const completedStepCount = computed(() => detail.value?.steps.filter((step) => step.status === 'completed').length ?? 0);
 const progress = computed(() => {
   const total = detail.value?.steps.length ?? 0;
@@ -158,8 +162,12 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  viewSequence += 1;
+  runSequence += 1;
   stopPolling();
   runController?.abort();
+  runController = undefined;
+  runningTaskId.value = undefined;
 });
 
 async function loadTasks() {
@@ -168,17 +176,27 @@ async function loadTasks() {
 }
 
 async function selectTask(id: string) {
-  if (busyAction.value || id === activeTaskId.value) return;
+  if ((busyAction.value && busyAction.value !== 'run') || id === activeTaskId.value) return;
+  const sequence = ++viewSequence;
   error.value = '';
   creating.value = false;
   activeTaskId.value = id;
-  const [taskDetail, taskEvents] = await Promise.all([getAgentTask(id), getAgentTaskEvents(id)]);
-  applyDetail(taskDetail);
-  events.value = taskEvents.events;
+  detail.value = undefined;
+  planDrafts.value = [];
+  events.value = [];
+  try {
+    const [taskDetail, taskEvents] = await Promise.all([getAgentTask(id), getAgentTaskEvents(id)]);
+    if (!isCurrentView(id, sequence)) return;
+    applyVisibleDetail(id, taskDetail);
+    applyVisibleEvents(id, taskEvents.events);
+  } catch (err) {
+    if (isCurrentView(id, sequence)) error.value = getErrorMessage(err);
+  }
 }
 
 function openCreate() {
   if (busyAction.value) return;
+  viewSequence += 1;
   creating.value = true;
   activeTaskId.value = undefined;
   detail.value = undefined;
@@ -233,11 +251,12 @@ async function submitTask() {
       maxTokens: maxTokens.value,
       allowedTools: selectedTools.value
     });
-    applyDetail(created);
+    const sequence = ++viewSequence;
     activeTaskId.value = created.task.id;
+    applyVisibleDetail(created.task.id, created);
     creating.value = false;
     goal.value = '';
-    await refreshEvents();
+    await refreshEvents(created.task.id, sequence);
   } catch (err) {
     error.value = getErrorMessage(err);
   } finally {
@@ -246,51 +265,56 @@ async function submitTask() {
 }
 
 async function generatePlan() {
-  if (!activeTaskId.value || busyAction.value) return;
+  const id = activeTaskId.value;
+  const sequence = viewSequence;
+  if (!id || busyAction.value) return;
   busyAction.value = 'plan';
   error.value = '';
   try {
-    applyDetail(await planAgentTask(activeTaskId.value));
-    inspectorTab.value = 'events';
-    await refreshEvents();
+    applyVisibleDetail(id, await planAgentTask(id));
+    if (isCurrentView(id, sequence)) inspectorTab.value = 'events';
+    await refreshEvents(id, sequence);
   } catch (err) {
-    error.value = getErrorMessage(err);
-    await refreshActive();
+    if (isCurrentView(id, sequence)) error.value = getErrorMessage(err);
+    await refreshActive(id, sequence).catch(() => undefined);
   } finally {
     busyAction.value = undefined;
   }
 }
 
 async function approveAndRun() {
-  if (!activeTaskId.value || busyAction.value || planDirty.value || !planValid.value) return;
+  const id = activeTaskId.value;
+  const sequence = viewSequence;
+  if (!id || busyAction.value || planDirty.value || !planValid.value) return;
   busyAction.value = 'approve';
   error.value = '';
   try {
-    applyDetail(await approveAgentTask(activeTaskId.value));
-    await refreshEvents();
+    applyVisibleDetail(id, await approveAgentTask(id));
+    await refreshEvents(id, sequence);
   } catch (err) {
-    error.value = getErrorMessage(err);
+    if (isCurrentView(id, sequence)) error.value = getErrorMessage(err);
     busyAction.value = undefined;
     return;
   }
   busyAction.value = undefined;
-  await executeTask();
+  await executeTask(id);
 }
 
 async function savePlanEdits() {
   const id = activeTaskId.value;
+  const sequence = viewSequence;
   if (!id || busyAction.value || activeTask.value?.status !== 'awaiting_approval' || !planValid.value) return;
   busyAction.value = 'save-plan';
   error.value = '';
   try {
-    applyDetail(await updateAgentTaskPlan(id, planDrafts.value.map((draft) => ({
+    applyVisibleDetail(id, await updateAgentTaskPlan(id, planDrafts.value.map((draft) => ({
       objective: draft.objective.trim(),
       expectedEvidence: [...new Set(draft.expectedEvidence.map((item) => item.trim()).filter(Boolean))]
     }))));
-    await refreshEvents();
+    await refreshEvents(id, sequence);
   } catch (err) {
-    error.value = getErrorMessage(err);
-    await refreshActive().catch(() => undefined);
+    if (isCurrentView(id, sequence)) error.value = getErrorMessage(err);
+    await refreshActive(id, sequence).catch(() => undefined);
   } finally {
     busyAction.value = undefined;
   }
@@ -323,68 +347,85 @@ function removePlanEvidence(stepIndex: number, evidenceIndex: number) {
   draft.expectedEvidence.splice(evidenceIndex, 1);
 }
 
-async function executeTask() {
-  const id = activeTaskId.value;
-  if (!id || busyAction.value) return;
+async function executeTask(id = activeTaskId.value) {
+  if (!id || busyAction.value || runningTaskId.value) return;
+  const sequence = ++runSequence;
   busyAction.value = 'run';
+  runningTaskId.value = id;
   error.value = '';
-  runController = new AbortController();
-  startPolling(id);
+  const controller = new AbortController();
+  runController = controller;
+  startPolling(id, sequence);
   try {
-    applyDetail(await runAgentTask(id, runController.signal));
-    await refreshEvents();
+    const result = await runAgentTask(id, controller.signal);
+    if (!isCurrentRun(id, sequence)) return;
+    applyTaskSummary(result.task);
+    if (activeTaskId.value === id) {
+      applyVisibleDetail(id, result);
+      await refreshEvents(id, viewSequence);
+    }
   } catch (err) {
-    if ((err as Error).name !== 'AbortError') error.value = getErrorMessage(err);
-    await refreshActive();
+    if (!isCurrentRun(id, sequence)) return;
+    if ((err as Error).name !== 'AbortError' && activeTaskId.value === id) error.value = getErrorMessage(err);
+    if (activeTaskId.value === id) await refreshActive(id, viewSequence).catch(() => undefined);
   } finally {
+    if (!isCurrentRun(id, sequence)) return;
     stopPolling();
-    runController = undefined;
+    if (runController === controller) runController = undefined;
+    runningTaskId.value = undefined;
     busyAction.value = undefined;
     await loadTasks().catch(() => undefined);
+    if (activeTaskId.value === id) await refreshActive(id, viewSequence).catch(() => undefined);
   }
 }
 
 async function retryStep(step: AgentPlanStep) {
   const id = activeTaskId.value;
+  const sequence = viewSequence;
   if (!id || busyAction.value) return;
   busyAction.value = 'retry';
   error.value = '';
   try {
-    applyDetail(await retryAgentTaskStep(id, step.id));
-    await refreshEvents();
+    applyVisibleDetail(id, await retryAgentTaskStep(id, step.id));
+    await refreshEvents(id, sequence);
   } catch (err) {
-    error.value = getErrorMessage(err);
+    if (isCurrentView(id, sequence)) error.value = getErrorMessage(err);
     busyAction.value = undefined;
     return;
   }
   busyAction.value = undefined;
-  await executeTask();
+  await executeTask(id);
 }
 
 async function generateFinalReport() {
   const id = activeTaskId.value;
+  const sequence = viewSequence;
   if (!id || busyAction.value) return;
   busyAction.value = 'finalize';
   error.value = '';
   try {
-    applyDetail(await finalizeAgentTask(id));
-    await refreshEvents();
+    applyVisibleDetail(id, await finalizeAgentTask(id));
+    await refreshEvents(id, sequence);
   } catch (err) {
-    error.value = getErrorMessage(err);
-    await refreshActive().catch(() => undefined);
+    if (isCurrentView(id, sequence)) error.value = getErrorMessage(err);
+    await refreshActive(id, sequence).catch(() => undefined);
   } finally {
     busyAction.value = undefined;
   }
 }
 
-function startPolling(taskId: string) {
+function startPolling(taskId: string, sequence: number) {
   stopPolling();
   pollTimer = window.setInterval(async () => {
-    if (activeTaskId.value !== taskId) return;
+    if (!isCurrentRun(taskId, sequence)) return;
     try {
       const [taskDetail, taskEvents] = await Promise.all([getAgentTask(taskId), getAgentTaskEvents(taskId)]);
-      applyDetail(taskDetail);
-      events.value = taskEvents.events;
+      if (!isCurrentRun(taskId, sequence)) return;
+      applyTaskSummary(taskDetail.task);
+      if (activeTaskId.value === taskId) {
+        applyVisibleDetail(taskId, taskDetail);
+        applyVisibleEvents(taskId, taskEvents.events);
+      }
     } catch {
       // The blocking run request remains authoritative; a later poll can recover.
     }
@@ -396,31 +437,58 @@ function stopPolling() {
   pollTimer = undefined;
 }
 
-async function refreshActive() {
-  if (!activeTaskId.value) return;
+async function refreshActive(id = activeTaskId.value, sequence = viewSequence) {
+  if (!id) return;
   const [taskDetail, taskEvents] = await Promise.all([
-    getAgentTask(activeTaskId.value),
-    getAgentTaskEvents(activeTaskId.value)
+    getAgentTask(id),
+    getAgentTaskEvents(id)
   ]);
-  applyDetail(taskDetail);
-  events.value = taskEvents.events;
+  if (!isCurrentView(id, sequence)) return;
+  applyVisibleDetail(id, taskDetail);
+  applyVisibleEvents(id, taskEvents.events);
 }
 
-async function refreshEvents() {
-  if (!activeTaskId.value) return;
-  events.value = (await getAgentTaskEvents(activeTaskId.value)).events;
+async function refreshEvents(id = activeTaskId.value, sequence = viewSequence) {
+  if (!id) return;
+  const taskEvents = await getAgentTaskEvents(id);
+  if (isCurrentView(id, sequence)) applyVisibleEvents(id, taskEvents.events);
 }
 
-function applyDetail(next: AgentTaskDetail) {
+function isCurrentView(id: string, sequence: number) {
+  return sequence === viewSequence && activeTaskId.value === id;
+}
+
+function isCurrentRun(id: string, sequence: number) {
+  return sequence === runSequence && runningTaskId.value === id;
+}
+
+function applyTaskSummary(task: AgentTask) {
+  const index = tasks.value.findIndex((item) => item.id === task.id);
+  if (index === -1) {
+    tasks.value.unshift(task);
+    return;
+  }
+  const current = tasks.value[index];
+  if (current && current.checkpointVersion <= task.checkpointVersion) tasks.value[index] = task;
+}
+
+function applyVisibleDetail(id: string, next: AgentTaskDetail) {
+  applyTaskSummary(next.task);
+  if (activeTaskId.value !== id || next.task.id !== id) return;
+  if (detail.value?.task.id === id && detail.value.task.checkpointVersion > next.task.checkpointVersion) return;
   detail.value = next;
   planDrafts.value = next.steps.map((step) => ({
     key: step.id,
     objective: step.objective,
     expectedEvidence: [...step.expectedEvidence]
   }));
-  const index = tasks.value.findIndex((task) => task.id === next.task.id);
-  if (index === -1) tasks.value.unshift(next.task);
-  else tasks.value[index] = next.task;
+}
+
+function applyVisibleEvents(id: string, next: AgentEvent[]) {
+  if (activeTaskId.value !== id) return;
+  const currentSequence = events.value[events.value.length - 1]?.sequence ?? 0;
+  const nextSequence = next[next.length - 1]?.sequence ?? 0;
+  if (nextSequence >= currentSequence) events.value = next;
 }
 
 function toggleTool(name: string) {
@@ -721,10 +789,10 @@ function getErrorMessage(value: unknown) {
       </header>
       <div class="chat-session-scroll overflow-auto p-2">
         <div v-for="task in tasks" :key="task.id" class="group relative mb-1 rounded-md border border-transparent transition-colors" :class="task.id === activeTaskId ? 'bg-[var(--agent-selected-bg)] text-[var(--agent-selected-text)]' : 'text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface)] hover:text-[var(--agent-text)]'">
-          <button type="button" class="grid w-full gap-2 px-2.5 py-2.5 pr-9 text-left" :disabled="Boolean(busyAction)" @click="selectTask(task.id)">
+          <button type="button" class="grid w-full gap-2 px-2.5 py-2.5 pr-9 text-left" :disabled="Boolean(busyAction && busyAction !== 'run')" @click="selectTask(task.id)">
             <span class="line-clamp-2 text-[13px] font-bold leading-5 text-[var(--agent-text)]">{{ task.goal }}</span>
             <span class="flex items-center justify-between gap-2">
-              <span class="border px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-[0.08em]" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span>
+              <span class="flex items-center gap-1.5"><PhCircleNotch v-if="task.id === runningTaskId" class="animate-spin text-amber-700" :size="12" /><span class="border px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-[0.08em]" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span></span>
               <span class="font-mono text-[9px] text-[var(--agent-text-muted)]">{{ shortId(task.id) }}</span>
             </span>
           </button>
@@ -797,7 +865,7 @@ function getErrorMessage(value: unknown) {
               <button type="button" class="flex h-10 items-center justify-center gap-2 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] px-4 text-sm font-bold text-[var(--agent-text)] hover:bg-[var(--agent-surface-muted)] disabled:opacity-50" :disabled="Boolean(busyAction) || !planValid || !planDirty" @click="savePlanEdits"><PhCircleNotch v-if="busyAction === 'save-plan'" class="animate-spin" :size="16" /><PhCheck v-else :size="16" weight="bold" />{{ busyAction === 'save-plan' ? '保存中' : '保存计划' }}</button>
               <button type="button" class="flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--agent-primary)] px-4 text-sm font-bold text-[var(--agent-primary-text)] hover:bg-[var(--agent-primary-hover)] disabled:opacity-50" :disabled="Boolean(busyAction) || planDirty || !planValid" @click="approveAndRun"><PhShieldCheck :size="17" weight="bold" />批准并执行</button>
             </div>
-            <button v-else-if="activeTask?.status === 'running'" type="button" class="flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--agent-primary)] px-4 text-sm font-bold text-[var(--agent-primary-text)] hover:bg-[var(--agent-primary-hover)] disabled:opacity-50" :disabled="Boolean(busyAction)" @click="executeTask"><PhCircleNotch v-if="busyAction === 'run'" class="animate-spin" :size="16" /><PhPlay v-else :size="16" weight="fill" />{{ busyAction === 'run' ? '正在执行' : '继续执行' }}</button>
+            <button v-else-if="activeTask?.status === 'running'" type="button" class="flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--agent-primary)] px-4 text-sm font-bold text-[var(--agent-primary-text)] hover:bg-[var(--agent-primary-hover)] disabled:opacity-50" :disabled="Boolean(busyAction)" @click="executeTask()"><PhCircleNotch v-if="busyAction === 'run'" class="animate-spin" :size="16" /><PhPlay v-else :size="16" weight="fill" />{{ busyAction === 'run' ? '正在执行' : '继续执行' }}</button>
             <div v-else class="flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--agent-text-muted)]"><PhCheck v-if="activeTask?.status === 'completed'" :size="16" weight="bold" /><PhClockCounterClockwise v-else :size="16" />{{ statusLabel(activeTask!.status) }}</div>
           </section>
 
@@ -823,7 +891,7 @@ function getErrorMessage(value: unknown) {
           <section>
             <div class="mb-3 flex items-end justify-between gap-4">
               <div><p class="m-0 font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--agent-text-muted)]">执行计划</p><h2 class="m-0 mt-1 text-lg font-bold tracking-[-0.02em]">{{ activeTask?.status === 'awaiting_approval' ? '批准前编辑计划' : '可恢复步骤' }}</h2><p v-if="activeTask?.status === 'awaiting_approval'" class="m-0 mt-1 text-xs text-[var(--agent-text-muted)]">调整步骤目标、顺序和证据要求，保存后再批准执行。</p></div>
-              <span v-if="busyAction === 'run'" class="flex items-center gap-2 font-mono text-[10px] font-bold uppercase text-amber-700"><PhCircleNotch class="animate-spin" :size="14" /> 正在同步运行状态</span>
+              <span v-if="busyAction === 'run' && isViewingRunningTask" class="flex items-center gap-2 font-mono text-[10px] font-bold uppercase text-amber-700"><PhCircleNotch class="animate-spin" :size="14" /> 正在同步运行状态</span>
             </div>
 
             <div v-if="!detail.steps.length" class="rounded-md border border-dashed border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-5 py-10 text-center text-sm leading-6 text-[var(--agent-text-muted)]">计划尚未生成。Planner 会把目标拆成可验证、可恢复的执行步骤。</div>

@@ -1,4 +1,5 @@
 import { createDeepSeekChatCompletion } from '../agent/deepseekClient.js';
+import { claimExtractionOutput } from './evidenceChainBuilder.js';
 import type {
   AgentClaim,
   AgentEvidence,
@@ -44,25 +45,9 @@ export type AgentStepReviewer = (context: {
 }) => Promise<AgentReviewDraft>;
 
 export function createModelStepReviewer(apiKey: string, model: string): AgentStepReviewer {
-  return async ({ task, step, toolExecutions, sources, evidence, claims, claimEvidence, signal }) => {
-    const input = JSON.stringify({
-      researchGoal: task.goal,
-      step: {
-        sequence: step.sequence,
-        objective: step.objective,
-        expectedEvidence: step.expectedEvidence,
-        input: step.input,
-        output: step.output
-      },
-      toolExecutions: toolExecutions.map((execution) => ({
-        toolName: execution.toolName,
-        arguments: execution.arguments,
-        status: execution.status,
-        result: execution.result,
-        error: execution.error
-      })),
-      evidenceChain: { sources, evidence, claims, claimEvidence }
-    });
+  return async (context) => {
+    const { signal } = context;
+    const input = JSON.stringify(buildReviewerInput(context));
     const boundedInput = input.length > 60_000 ? `${input.slice(0, 60_000)}\n[review input truncated]` : input;
     const completion = await createDeepSeekChatCompletion({
       apiKey,
@@ -76,6 +61,28 @@ export function createModelStepReviewer(apiKey: string, model: string): AgentSte
     const content = completion.choices?.[0]?.message?.content;
     if (!content) throw new Error('Reviewer returned an empty response');
     return parseReviewerResponse(content);
+  };
+}
+
+export function buildReviewerInput(
+  { task, step, toolExecutions, sources, evidence, claims, claimEvidence }: Parameters<AgentStepReviewer>[0]
+) {
+  return {
+    researchGoal: task.goal,
+    step: {
+      sequence: step.sequence,
+      objective: step.objective,
+      expectedEvidence: step.expectedEvidence,
+      input: step.input,
+      output: claimExtractionOutput(step.output)
+    },
+    toolExecutions: toolExecutions.map((execution) => ({
+      toolName: execution.toolName,
+      arguments: execution.arguments,
+      status: execution.status,
+      ...(execution.error ? { error: execution.error } : {})
+    })),
+    evidenceChain: { sources, evidence, claims, claimEvidence }
   };
 }
 
