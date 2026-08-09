@@ -14,6 +14,7 @@ import ChatPanel from '../components/chat/ChatPanel.vue';
 import ChatSidebar from '../components/chat/ChatSidebar.vue';
 import ChatTabs from '../components/chat/ChatTabs.vue';
 import KnowledgeBasePanel from '../components/chat/KnowledgeBasePanel.vue';
+import { useStreamingMessageRenderer } from '../composables/useStreamingMessageRenderer';
 import ResearchWorkbench from './ResearchWorkbench.vue';
 import RagEvaluationView from './RagEvaluationView.vue';
 import SettingsView from './SettingsView.vue';
@@ -36,12 +37,11 @@ const sidebarCollapsed = ref(false);
 const conversations = ref<ChatConversation[]>([]);
 const activeConversationId = ref<string>();
 const messages = ref<ChatMessage[]>([]);
+const messageRenderer = useStreamingMessageRenderer(messages);
 const deleteTarget = ref<ChatConversation>();
 const deleting = ref(false);
 let requestController: AbortController | undefined;
-let pendingAssistantContent = '';
-let pendingAssistantMessageId: string | undefined;
-let pendingAssistantTimer: ReturnType<typeof window.setTimeout> | undefined;
+let streamingAssistantMessageId: string | undefined;
 
 const activeConversation = computed(() => conversations.value.find((conversation) => conversation.id === activeConversationId.value));
 
@@ -57,7 +57,6 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   requestController?.abort();
-  resetPendingAssistantContent();
 });
 
 async function loadConversations() {
@@ -67,14 +66,14 @@ async function loadConversations() {
 
 async function createConversation() {
   if (loading.value) return;
-  resetPendingAssistantContent();
+  resetStreamingMessage();
   error.value = '';
 
   try {
     const { conversation } = await createChatConversation();
     conversations.value = [conversation, ...conversations.value];
     activeConversationId.value = conversation.id;
-    messages.value = [];
+    messageRenderer.replaceAll([]);
     input.value = '';
   } catch (err) {
     error.value = err instanceof Error ? err.message : '创建会话失败';
@@ -83,13 +82,13 @@ async function createConversation() {
 
 async function selectConversation(conversationId: string) {
   if (loading.value || conversationId === activeConversationId.value) return;
-  resetPendingAssistantContent();
+  resetStreamingMessage();
   error.value = '';
 
   try {
     const detail = await getChatConversation(conversationId);
     activeConversationId.value = detail.conversation.id;
-    messages.value = detail.messages;
+    messageRenderer.replaceAll(detail.messages);
     updateConversation(detail.conversation);
     input.value = '';
   } catch (err) {
@@ -114,7 +113,7 @@ async function sendMessage() {
     if ((err as Error).name !== 'AbortError') error.value = err instanceof Error ? err.message : '请求失败';
     await reloadActiveConversation();
   } finally {
-    flushPendingAssistantContent();
+    messageRenderer.flush();
     loading.value = false;
     requestController = undefined;
   }
@@ -135,7 +134,8 @@ async function confirmDeleteConversation() {
     if (activeConversationId.value !== conversation.id) return;
 
     activeConversationId.value = undefined;
-    messages.value = [];
+    resetStreamingMessage();
+    messageRenderer.replaceAll([]);
     input.value = '';
     const nextConversation = conversations.value[0];
     if (nextConversation) await selectConversation(nextConversation.id);
@@ -149,46 +149,29 @@ async function confirmDeleteConversation() {
 
 function handleStreamEvent(event: ChatStreamEvent) {
   if (event.type === 'chat_message_started') {
-    messages.value = [...messages.value, event.userMessage, event.message];
-    pendingAssistantMessageId = event.message.id;
+    messageRenderer.upsert(event.userMessage);
+    messageRenderer.upsert(event.message);
+    streamingAssistantMessageId = event.message.id;
     return;
   }
 
-  if (event.type === 'message') appendToAssistantMessage(event.content);
-  if (event.type === 'done') replaceMessage(event.message);
+  if (event.type === 'message' && streamingAssistantMessageId) {
+    messageRenderer.append(streamingAssistantMessageId, event.content);
+  }
+  if (event.type === 'done') {
+    messageRenderer.upsert(event.message);
+    streamingAssistantMessageId = undefined;
+  }
   if (event.type === 'error') {
     error.value = event.message;
-    if (event.assistantMessage) replaceMessage(event.assistantMessage);
+    if (event.assistantMessage) messageRenderer.upsert(event.assistantMessage);
+    streamingAssistantMessageId = undefined;
   }
 }
 
-function appendToAssistantMessage(content: string) {
-  pendingAssistantContent += content;
-  if (pendingAssistantTimer) return;
-  pendingAssistantTimer = window.setTimeout(() => {
-    pendingAssistantTimer = undefined;
-    flushPendingAssistantContent();
-  }, 80);
-}
-
-function flushPendingAssistantContent() {
-  if (!pendingAssistantContent || !pendingAssistantMessageId) return;
-  const content = pendingAssistantContent;
-  const messageId = pendingAssistantMessageId;
-  pendingAssistantContent = '';
-  messages.value = messages.value.map((message) => message.id === messageId ? { ...message, content: `${message.content}${content}` } : message);
-}
-
-function resetPendingAssistantContent() {
-  pendingAssistantContent = '';
-  pendingAssistantMessageId = undefined;
-  if (pendingAssistantTimer) window.clearTimeout(pendingAssistantTimer);
-  pendingAssistantTimer = undefined;
-}
-
-function replaceMessage(nextMessage: ChatMessage) {
-  flushPendingAssistantContent();
-  messages.value = messages.value.map((message) => message.id === nextMessage.id ? nextMessage : message);
+function resetStreamingMessage() {
+  streamingAssistantMessageId = undefined;
+  messageRenderer.reset();
 }
 
 async function reloadActiveConversation() {
@@ -197,7 +180,7 @@ async function reloadActiveConversation() {
 
   try {
     const detail = await getChatConversation(conversationId);
-    messages.value = detail.messages;
+    messageRenderer.replaceAll(detail.messages);
     updateConversation(detail.conversation);
   } catch {
     // Preserve the streaming state when the recovery request also fails.
@@ -233,7 +216,7 @@ function updateTabVisibility(visibility: TabVisibility) {
       <TaskConsoleView v-if="activeTab === 'tasks'" />
       <div v-else-if="activeTab === 'chat'" class="grid min-h-0 max-md:grid-cols-1 max-md:grid-rows-[auto_minmax(0,1fr)]" :class="sidebarCollapsed ? 'grid-cols-[52px_minmax(0,1fr)]' : 'grid-cols-[220px_minmax(0,1fr)]'">
         <ChatSidebar :sessions="conversations" :active-session-id="activeConversationId" :collapsed="sidebarCollapsed" :busy="loading || deleting" @create="createConversation" @select="selectConversation" @delete="deleteTarget = $event" @toggle-collapse="sidebarCollapsed = !sidebarCollapsed" />
-        <ChatPanel v-model="input" :messages="messages" :loading="loading" :error="error" @send="sendMessage" />
+        <ChatPanel v-model="input" :conversation-id="activeConversationId" :messages="messages" :loading="loading" :error="error" @send="sendMessage" />
       </div>
       <ResearchWorkbench v-else-if="activeTab === 'research'" />
       <RagEvaluationView v-else-if="activeTab === 'evaluations'" />

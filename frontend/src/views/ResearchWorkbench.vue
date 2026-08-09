@@ -16,13 +16,15 @@ import {
   type ResearchStreamEvent,
   type ResearchToolInfo
 } from '../api/research';
+import AgentMessage from '../components/agent/AgentMessage.vue';
 import PanelResizeHandle from '../components/common/PanelResizeHandle.vue';
+import { useMessageAutoScroll } from '../composables/useMessageAutoScroll';
+import { useStreamingMessageRenderer } from '../composables/useStreamingMessageRenderer';
 import { useCollapsiblePanel, useResizablePanel, type PanelWidthBounds } from '../composables/useResizablePanel';
 import ResearchConversationSidebar from '../components/research/ResearchConversationSidebar.vue';
 import ResearchDetailsPanel from '../components/research/ResearchDetailsPanel.vue';
 import ResearchSourcesPanel from '../components/research/ResearchSourcesPanel.vue';
 import ResearchTimeline from '../components/research/ResearchTimeline.vue';
-import MarkdownMessage from '../components/chat/MarkdownMessage.vue';
 import WordArtifactCard from '../components/documents/WordArtifactCard.vue';
 import WordPreviewDialog from '../components/documents/WordPreviewDialog.vue';
 import { parseWordArtifact, type WordArtifact } from '../types/artifacts';
@@ -40,6 +42,7 @@ import type {
 const conversations = ref<ResearchConversation[]>([]);
 const activeConversationId = ref<string>();
 const messages = ref<ResearchMessage[]>([]);
+const messageRenderer = useStreamingMessageRenderer(messages);
 const steps = ref<ResearchStep[]>([]);
 const sources = ref<ResearchSource[]>([]);
 const notes = ref<ResearchNote[]>([]);
@@ -71,6 +74,16 @@ const sidebarTrack = computed(() => (collapsed.value ? '52px' : `${sidebarWidth.
 const inspectorTrack = computed(() => (inspectorCollapsed.value ? '48px' : `${inspectorWidth.value}px`));
 
 const activeConversation = computed(() => conversations.value.find((item) => item.id === activeConversationId.value));
+const messageSignature = computed(() => {
+  const lastMessage = messages.value[messages.value.length - 1];
+  return lastMessage
+    ? `${messages.value.length}:${lastMessage.id}:${lastMessage.content.length}:${lastMessage.status}`
+    : 'empty';
+});
+const { handleScroll: handleMessageScroll, scrollContainer: messageScrollContainer } = useMessageAutoScroll(
+  () => activeConversationId.value,
+  () => messageSignature.value
+);
 
 const enabledToolNames = computed(() =>
   availableTools.value.filter((tool) => enabledTools.value[tool.name]).map((tool) => tool.name)
@@ -164,8 +177,8 @@ async function send() {
         ? enabledToolNames.value
         : undefined;
     const started = await startResearchMessage(conversationId, content, allowedTools);
-    upsert(messages, started.userMessage);
-    upsert(messages, started.assistantMessage);
+    messageRenderer.upsert(started.userMessage);
+    messageRenderer.upsert(started.assistantMessage);
     promptPreview.value = started.promptPreview;
     connectToRun(started.run);
     await loadConversations();
@@ -201,6 +214,7 @@ function disconnectResearchStream() {
   subscriptionSequence += 1;
   requestController?.abort();
   requestController = undefined;
+  messageRenderer.flush();
 }
 
 function handleStreamEvent(event: ResearchStreamEvent) {
@@ -210,12 +224,9 @@ function handleStreamEvent(event: ResearchStreamEvent) {
   }
   if (event.type === 'research_step' || event.type === 'tool_call_started' || event.type === 'tool_call_completed') upsert(steps, event.step);
   if (event.type === 'research_source_found') upsert(sources, event.source);
-  if (event.type === 'assistant_delta') {
-    const message = messages.value.find((item) => item.id === event.messageId);
-    if (message) message.content += event.content;
-  }
+  if (event.type === 'assistant_delta') messageRenderer.append(event.messageId, event.content);
   if (event.type === 'research_message_completed') {
-    upsert(messages, event.message);
+    messageRenderer.upsert(event.message);
     event.sources.forEach((source) => upsert(sources, source));
     promptPreview.value = event.promptPreview;
     applyRun(event.run);
@@ -223,7 +234,7 @@ function handleStreamEvent(event: ResearchStreamEvent) {
   if (event.type === 'run_updated' || event.type === 'done') applyRun(event.run);
   if (event.type === 'done') void loadConversations();
   if (event.type === 'error') {
-    if (event.assistantMessage) upsert(messages, event.assistantMessage);
+    if (event.assistantMessage) messageRenderer.upsert(event.assistantMessage);
     applyRun(event.run);
     error.value = event.run.status === 'cancelled' ? '' : event.message;
     void loadConversations();
@@ -301,7 +312,7 @@ async function confirmDeleteConversation() {
 function clearConversationDetail() {
   disconnectResearchStream();
   activeConversationId.value = undefined;
-  messages.value = [];
+  messageRenderer.replaceAll([]);
   steps.value = [];
   sources.value = [];
   notes.value = [];
@@ -316,7 +327,7 @@ function clearConversationDetail() {
 }
 
 function applyConversationDetail(detail: ResearchConversationDetail) {
-  messages.value = detail.messages;
+  messageRenderer.replaceAll(detail.messages);
   steps.value = detail.steps;
   sources.value = detail.sources;
   notes.value = detail.notes;
@@ -381,17 +392,15 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
     />
 
     <main class="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] bg-[var(--agent-surface)]">
-      <div class="grid content-start gap-6 overflow-auto px-5 py-6">
-        <article v-for="message in messages" :key="message.id" class="max-w-3xl py-1" :class="message.role === 'user' ? 'justify-self-end rounded-md bg-[var(--agent-selected-bg)] px-4 py-3' : ''">
-          <p class="m-0 mb-2 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--agent-text-muted)]">{{ message.role === 'user' ? 'You' : 'EvidentLoop' }}</p>
-          <MarkdownMessage :content="message.content || (message.status === 'streaming' ? '正在整理研究结果...' : '')" @citation="selectCitation" />
+      <div ref="messageScrollContainer" class="grid content-start gap-6 overflow-auto px-5 py-6" aria-live="polite" @scroll="handleMessageScroll">
+        <AgentMessage v-for="message in messages" :key="message.id" :message="message" streaming-placeholder="正在整理研究结果..." @citation="selectCitation">
           <WordArtifactCard
             v-for="artifact in artifactsByMessageId.get(message.id) ?? []"
             :key="artifact.artifactId"
             :artifact="artifact"
             @preview="previewArtifact = $event"
           />
-        </article>
+        </AgentMessage>
         <p v-if="!messages.length" class="m-0 max-w-xl text-sm leading-7 text-[var(--agent-text-muted)]">围绕知识库提出问题。工作台会保存对话、工具过程和资料来源，便于持续研究。</p>
       </div>
       <footer class="border-t border-[var(--agent-border)] p-4">
