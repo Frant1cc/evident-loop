@@ -1,4 +1,5 @@
 import type { RagEvaluation, RagEvaluationStreamEvent } from '../types/evaluations';
+import { consumeSse, parseSseJson } from './sse';
 
 type ApiResponse<T> = { code: 0 | 1; message: string; data: T | null };
 
@@ -29,19 +30,27 @@ export function subscribeToRagEvaluation(
   onEvent: (event: RagEvaluationStreamEvent) => void,
   onError: () => void
 ) {
-  const source = new EventSource(`/api/rag/evaluations/${encodeURIComponent(id)}/events`);
-  const eventNames: RagEvaluationStreamEvent['type'][] = ['snapshot', 'progress', 'completed', 'failed'];
-  for (const eventName of eventNames) {
-    source.addEventListener(eventName, (event) => {
-      onEvent(JSON.parse((event as MessageEvent<string>).data) as RagEvaluationStreamEvent);
-      if (eventName === 'completed' || eventName === 'failed') source.close();
-    });
-  }
-  source.onerror = () => {
-    source.close();
-    onError();
-  };
-  return () => source.close();
+  const controller = new AbortController();
+  const eventNames = new Set<RagEvaluationStreamEvent['type']>(['snapshot', 'progress', 'completed', 'failed']);
+  let reachedTerminalEvent = false;
+
+  void consumeSse({
+    url: `/api/rag/evaluations/${encodeURIComponent(id)}/events`,
+    signal: controller.signal,
+    onMessage(message) {
+      if (!eventNames.has(message.event as RagEvaluationStreamEvent['type'])) return;
+      const parsed = parseSseJson<RagEvaluationStreamEvent>(message);
+      const event = { ...parsed, type: message.event } as RagEvaluationStreamEvent;
+      if (event.type === 'completed' || event.type === 'failed') reachedTerminalEvent = true;
+      onEvent(event);
+    }
+  }).then(() => {
+    if (!reachedTerminalEvent && !controller.signal.aborted) onError();
+  }).catch((error: unknown) => {
+    if ((error as Error).name !== 'AbortError' && !controller.signal.aborted) onError();
+  });
+
+  return () => controller.abort();
 }
 
 async function request<T>(path: string, init: { method?: string; body?: unknown } = {}) {

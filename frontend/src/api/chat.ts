@@ -1,4 +1,5 @@
 import type { ChatConversation, ChatConversationDetail, ChatMessage } from '../types/chat';
+import { consumeSse, parseSseJson } from './sse';
 
 type ApiResponse<T> = {
   code: 0 | 1;
@@ -36,82 +37,44 @@ export async function streamChatMessage(
   onEvent: (event: ChatStreamEvent) => void,
   signal: AbortSignal
 ) {
-  const response = await fetch(`/api/chat/conversations/${encodeURIComponent(conversationId)}/messages/stream`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
-    signal
-  });
-
-  if (!response.ok || !response.body) {
-    const payload = await response.json().catch(() => null) as ApiResponse<never> | null;
-    throw new Error(payload?.message ?? `请求失败：${response.status}`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
   let reachedTerminalEvent = false;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    buffer = processSseBuffer(buffer, (event) => {
+  await consumeSse({
+    url: `/api/chat/conversations/${encodeURIComponent(conversationId)}/messages/stream`,
+    method: 'POST',
+    body: { content },
+    signal,
+    onMessage(message) {
+      const event = toChatStreamEvent(message.event, parseSseJson<Record<string, unknown>>(message));
+      if (!event) return;
       if (event.type === 'done' || event.type === 'error') reachedTerminalEvent = true;
       onEvent(event);
-    });
-  }
-
-  buffer += decoder.decode();
-  processSseBuffer(`${buffer}\n\n`, (event) => {
-    if (event.type === 'done' || event.type === 'error') reachedTerminalEvent = true;
-    onEvent(event);
+    }
   });
 
   if (!reachedTerminalEvent && !signal.aborted) throw new Error('对话流意外结束，未收到最终结果。');
 }
 
-function processSseBuffer(buffer: string, onEvent: (event: ChatStreamEvent) => void) {
-  const events = buffer.split('\n\n');
-  const rest = events.pop() ?? '';
-
-  for (const event of events) {
-    const eventName = event
-      .split('\n')
-      .find((line) => line.startsWith('event:'))
-      ?.slice(6)
-      .trim();
-    const data = event
-      .split('\n')
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice(5).trimStart())
-      .join('\n');
-
-    if (!eventName || !data) continue;
-    const parsed = JSON.parse(data) as Record<string, unknown>;
-
-    if (eventName === 'chat_message_started') {
-      onEvent({
-        type: eventName,
-        message: parsed.message as ChatMessage,
-        userMessage: parsed.userMessage as ChatMessage
-      });
-    }
-    if (eventName === 'ready') onEvent({ type: 'ready' });
-    if (eventName === 'reasoning') onEvent({ type: 'reasoning', content: String(parsed.content ?? '') });
-    if (eventName === 'message') onEvent({ type: 'message', content: String(parsed.content ?? '') });
-    if (eventName === 'error') {
-      onEvent({
-        type: eventName,
-        message: String(parsed.message ?? '请求失败'),
-        assistantMessage: parsed.assistantMessage as ChatMessage | undefined
-      });
-    }
-    if (eventName === 'done') onEvent({ type: 'done', message: parsed.message as ChatMessage });
+function toChatStreamEvent(eventName: string, parsed: Record<string, unknown>): ChatStreamEvent | undefined {
+  if (eventName === 'chat_message_started') {
+    return {
+      type: eventName,
+      message: parsed.message as ChatMessage,
+      userMessage: parsed.userMessage as ChatMessage
+    };
   }
-
-  return rest;
+  if (eventName === 'ready') return { type: 'ready' };
+  if (eventName === 'reasoning') return { type: 'reasoning', content: String(parsed.content ?? '') };
+  if (eventName === 'message') return { type: 'message', content: String(parsed.content ?? '') };
+  if (eventName === 'error') {
+    return {
+      type: eventName,
+      message: String(parsed.message ?? '请求失败'),
+      assistantMessage: parsed.assistantMessage as ChatMessage | undefined
+    };
+  }
+  if (eventName === 'done') return { type: 'done', message: parsed.message as ChatMessage };
+  return undefined;
 }
 
 async function request<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {

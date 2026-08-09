@@ -8,6 +8,7 @@ import type {
   ResearchSource,
   ResearchStep
 } from '../types/research';
+import { consumeSse, parseSseJson } from './sse';
 
 type ApiResponse<T> = {
   code: 0 | 1;
@@ -98,35 +99,17 @@ export async function streamResearchRun(
   onEvent: (event: ResearchStreamEvent) => void,
   signal: AbortSignal
 ) {
-  const response = await fetch(`/api/research/runs/${encodeURIComponent(runId)}/events`, {
-    signal
-  });
-
-  if (!response.ok || !response.body) {
-    const payload = await response.json().catch(() => null) as ApiResponse<never> | null;
-    throw new Error(payload?.message ?? `请求失败：${response.status}`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
   let reachedTerminalEvent = false;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    buffer = processSseBuffer(buffer, (event) => {
+  await consumeSse({
+    url: `/api/research/runs/${encodeURIComponent(runId)}/events`,
+    signal,
+    onMessage(message) {
+      const event = toResearchStreamEvent(message.event, parseSseJson<Record<string, unknown>>(message));
+      if (!event) return;
       if (isTerminalEvent(event)) reachedTerminalEvent = true;
       onEvent(event);
-    });
-  }
-
-  buffer += decoder.decode();
-  processSseBuffer(`${buffer}\n\n`, (event) => {
-    if (isTerminalEvent(event)) reachedTerminalEvent = true;
-    onEvent(event);
+    }
   });
 
   if (!reachedTerminalEvent && !signal.aborted) {
@@ -134,59 +117,39 @@ export async function streamResearchRun(
   }
 }
 
-function processSseBuffer(buffer: string, onEvent: (event: ResearchStreamEvent) => void) {
-  const events = buffer.split('\n\n');
-  const rest = events.pop() ?? '';
-
-  for (const event of events) {
-    const eventName = event
-      .split('\n')
-      .find((line) => line.startsWith('event:'))
-      ?.slice(6)
-      .trim();
-    const data = event
-      .split('\n')
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice(5).trimStart())
-      .join('\n');
-
-    if (!eventName || !data) continue;
-    const parsed = JSON.parse(data) as Record<string, unknown>;
-
-    if (eventName === 'snapshot') {
-      onEvent({
-        type: eventName,
-        run: parsed.run as ResearchRun,
-        detail: parsed.detail as ResearchConversationDetail
-      });
-    }
-    if (eventName === 'research_step') onEvent({ type: eventName, step: parsed.step as ResearchStep });
-    if (eventName === 'tool_call_started') onEvent({ type: eventName, step: parsed.step as ResearchStep });
-    if (eventName === 'tool_call_completed') onEvent({ type: eventName, step: parsed.step as ResearchStep });
-    if (eventName === 'research_source_found') onEvent({ type: eventName, messageId: String(parsed.messageId), source: parsed.source as ResearchSource });
-    if (eventName === 'assistant_delta') onEvent({ type: eventName, messageId: String(parsed.messageId), content: String(parsed.content ?? '') });
-    if (eventName === 'research_message_completed') {
-      onEvent({
-        type: eventName,
-        message: parsed.message as ResearchMessage,
-        sources: parsed.sources as ResearchSource[],
-        promptPreview: parsed.promptPreview as ResearchPromptPreview,
-        run: parsed.run as ResearchRun
-      });
-    }
-    if (eventName === 'run_updated') onEvent({ type: eventName, run: parsed.run as ResearchRun });
-    if (eventName === 'error') {
-      onEvent({
-        type: eventName,
-        message: String(parsed.message ?? '请求失败'),
-        assistantMessage: parsed.assistantMessage as ResearchMessage | undefined,
-        run: parsed.run as ResearchRun
-      });
-    }
-    if (eventName === 'done') onEvent({ type: 'done', run: parsed.run as ResearchRun });
+function toResearchStreamEvent(eventName: string, parsed: Record<string, unknown>): ResearchStreamEvent | undefined {
+  if (eventName === 'snapshot') {
+    return {
+      type: eventName,
+      run: parsed.run as ResearchRun,
+      detail: parsed.detail as ResearchConversationDetail
+    };
   }
-
-  return rest;
+  if (eventName === 'research_step') return { type: eventName, step: parsed.step as ResearchStep };
+  if (eventName === 'tool_call_started') return { type: eventName, step: parsed.step as ResearchStep };
+  if (eventName === 'tool_call_completed') return { type: eventName, step: parsed.step as ResearchStep };
+  if (eventName === 'research_source_found') return { type: eventName, messageId: String(parsed.messageId), source: parsed.source as ResearchSource };
+  if (eventName === 'assistant_delta') return { type: eventName, messageId: String(parsed.messageId), content: String(parsed.content ?? '') };
+  if (eventName === 'research_message_completed') {
+    return {
+      type: eventName,
+      message: parsed.message as ResearchMessage,
+      sources: parsed.sources as ResearchSource[],
+      promptPreview: parsed.promptPreview as ResearchPromptPreview,
+      run: parsed.run as ResearchRun
+    };
+  }
+  if (eventName === 'run_updated') return { type: eventName, run: parsed.run as ResearchRun };
+  if (eventName === 'error') {
+    return {
+      type: eventName,
+      message: String(parsed.message ?? '请求失败'),
+      assistantMessage: parsed.assistantMessage as ResearchMessage | undefined,
+      run: parsed.run as ResearchRun
+    };
+  }
+  if (eventName === 'done') return { type: 'done', run: parsed.run as ResearchRun };
+  return undefined;
 }
 
 function isTerminalEvent(event: ResearchStreamEvent) {

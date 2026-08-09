@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildReviewerInput, type AgentStepReviewer } from './reviewer.js';
+import { buildReviewerInput, describeEmptyReviewerCompletion, type AgentStepReviewer } from './reviewer.js';
 
 const now = '2026-08-09T00:00:00.000Z';
 
@@ -95,6 +95,13 @@ function reviewerContext(): Parameters<AgentStepReviewer>[0] {
     }]
   };
 }
+
+test('describes an empty reviewer completion with raw response context', () => {
+  assert.equal(
+    describeEmptyReviewerCompletion({ choices: [{ message: { role: 'assistant', content: '' } }] }),
+    'Reviewer returned an empty response (choices: 1): {"choices":[{"message":{"role":"assistant","content":""}}]}'
+  );
+});
 
 test('removes duplicated tool results from reviewer input', () => {
   const input = buildReviewerInput(reviewerContext());

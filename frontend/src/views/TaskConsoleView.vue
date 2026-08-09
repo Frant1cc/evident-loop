@@ -84,6 +84,8 @@ const selectedTools = ref(['search_knowledge', 'search_docs', 'read_document', '
 type EditablePlanDraft = PlanStepDraft & { key: string };
 const planDrafts = ref<EditablePlanDraft[]>([]);
 let pollTimer: ReturnType<typeof window.setInterval> | undefined;
+let elapsedTimer: ReturnType<typeof window.setInterval> | undefined;
+const now = ref(Date.now());
 let runController: AbortController | undefined;
 let viewSequence = 0;
 let runSequence = 0;
@@ -150,6 +152,9 @@ const planDirty = computed(() => {
 });
 
 onMounted(async () => {
+  elapsedTimer = window.setInterval(() => {
+    now.value = Date.now();
+  }, 1000);
   try {
     await Promise.all([loadTasks(), loadAvailableTools()]);
     if (tasks.value[0]) await selectTask(tasks.value[0].id);
@@ -165,6 +170,8 @@ onBeforeUnmount(() => {
   viewSequence += 1;
   runSequence += 1;
   stopPolling();
+  if (elapsedTimer) window.clearInterval(elapsedTimer);
+  elapsedTimer = undefined;
   runController?.abort();
   runController = undefined;
   runningTaskId.value = undefined;
@@ -651,15 +658,157 @@ function toolResultItems(execution: ToolExecution) {
   });
 }
 
+function formatDuration(duration: number) {
+  const safeDuration = Math.max(duration, 0);
+  if (safeDuration < 1000) return `${safeDuration} ms`;
+  const totalSeconds = Math.floor(safeDuration / 1000);
+  if (totalSeconds < 60) return `${totalSeconds} 秒`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) return seconds ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes ? `${hours} 小时 ${remainingMinutes} 分` : `${hours} 小时`;
+}
+
+function stepDuration(step: AgentPlanStep) {
+  if (!step.startedAt) return '';
+  const end = step.completedAt ? new Date(step.completedAt).getTime() : now.value;
+  return formatDuration(end - new Date(step.startedAt).getTime());
+}
+
+const taskDuration = computed(() => {
+  const runStartedEvent = events.value.find((event) => {
+    if (event.type !== 'task_status_changed') return false;
+    return toRecord(event.payload)?.to === 'running';
+  });
+  const firstStepStartedAt = detail.value?.steps
+    .map((step) => step.startedAt)
+    .filter((value): value is string => Boolean(value))
+    .sort()[0];
+  const startedAt = runStartedEvent?.createdAt ?? firstStepStartedAt;
+  if (!startedAt) return '尚未执行';
+  const isActive = activeTask.value?.status === 'running';
+  const lastTimestamp = events.value[events.value.length - 1]?.createdAt ?? activeTask.value?.updatedAt;
+  const end = isActive ? now.value : new Date(lastTimestamp ?? startedAt).getTime();
+  return formatDuration(end - new Date(startedAt).getTime());
+});
+
 function toolDuration(execution: ToolExecution) {
-  if (!execution.completedAt) return '执行中';
-  const duration = new Date(execution.completedAt).getTime() - new Date(execution.startedAt).getTime();
-  if (duration < 1000) return `${Math.max(duration, 0)} ms`;
-  return `${(duration / 1000).toFixed(1)} s`;
+  const end = execution.completedAt ? new Date(execution.completedAt).getTime() : now.value;
+  return formatDuration(end - new Date(execution.startedAt).getTime());
 }
 
 function toRecord(value: unknown) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function eventStep(event: AgentEvent) {
+  const payload = toRecord(event.payload);
+  const stepId = typeof payload?.stepId === 'string' ? payload.stepId : undefined;
+  const sequence = typeof payload?.sequence === 'number' ? payload.sequence : undefined;
+  return detail.value?.steps.find((step) => step.id === stepId || step.sequence === sequence);
+}
+
+function eventDuration(event: AgentEvent) {
+  const payload = toRecord(event.payload);
+  const step = eventStep(event);
+
+  if ((event.type === 'step_completed' || event.type === 'step_failed') && step?.startedAt) {
+    return { label: '耗时', value: formatDuration(new Date(event.createdAt).getTime() - new Date(step.startedAt).getTime()) };
+  }
+
+  if (event.type === 'step_started') {
+    const end = step?.completedAt ? new Date(step.completedAt).getTime() : now.value;
+    return { label: step?.completedAt ? '耗时' : '已运行', value: formatDuration(end - new Date(event.createdAt).getTime()) };
+  }
+
+  const executionId = typeof payload?.executionId === 'string' ? payload.executionId : undefined;
+  const execution = detail.value?.toolExecutions.find((item) => item.id === executionId);
+  if (event.type === 'tool_started' && execution) {
+    const end = execution.completedAt ? new Date(execution.completedAt).getTime() : now.value;
+    return { label: execution.completedAt ? '耗时' : '已运行', value: formatDuration(end - new Date(execution.startedAt).getTime()) };
+  }
+  if ((event.type === 'tool_completed' || event.type === 'tool_failed') && execution) {
+    const end = execution.completedAt ?? event.createdAt;
+    return { label: '耗时', value: formatDuration(new Date(end).getTime() - new Date(execution.startedAt).getTime()) };
+  }
+
+  const phasePairs: Record<string, string> = {
+    review_completed: 'review_started',
+    review_failed: 'review_started',
+    evidence_chain_saved: 'evidence_chain_started',
+    evidence_chain_failed: 'evidence_chain_started'
+  };
+  const startType = phasePairs[event.type];
+  if (startType) {
+    const start = [...events.value].reverse().find((candidate) => {
+      if (candidate.sequence >= event.sequence || candidate.type !== startType) return false;
+      const candidateStepId = toRecord(candidate.payload)?.stepId;
+      return !payload?.stepId || candidateStepId === payload.stepId;
+    });
+    if (start) return { label: '耗时', value: formatDuration(new Date(event.createdAt).getTime() - new Date(start.createdAt).getTime()) };
+  }
+
+  if (event.type === 'review_started' || event.type === 'evidence_chain_started') {
+    const completedTypes = event.type === 'review_started'
+      ? new Set(['review_completed', 'review_failed'])
+      : new Set(['evidence_chain_saved', 'evidence_chain_failed']);
+    const completion = events.value.find((candidate) => {
+      if (candidate.sequence <= event.sequence || !completedTypes.has(candidate.type)) return false;
+      const candidateStepId = toRecord(candidate.payload)?.stepId;
+      return !payload?.stepId || candidateStepId === payload.stepId;
+    });
+    const end = completion ? new Date(completion.createdAt).getTime() : now.value;
+    return { label: completion ? '耗时' : '已运行', value: formatDuration(end - new Date(event.createdAt).getTime()) };
+  }
+
+  const previous = events.value.find((candidate) => candidate.sequence === event.sequence - 1);
+  return previous
+    ? { label: '距上一事件', value: formatDuration(new Date(event.createdAt).getTime() - new Date(previous.createdAt).getTime()) }
+    : { label: '起始事件', value: '0 ms' };
+}
+
+function eventDescription(event: AgentEvent) {
+  const payload = toRecord(event.payload);
+  const step = eventStep(event);
+  const stepName = step ? `步骤 ${step.sequence}「${step.objective}」` : '当前步骤';
+  const toolName = typeof payload?.toolName === 'string' ? toolDisplayName(payload.toolName) : '工具';
+  const reason = typeof payload?.reason === 'string' ? payload.reason : undefined;
+  const errorMessage = typeof payload?.error === 'string' ? payload.error : undefined;
+  const gapCount = Array.isArray(payload?.evidenceGapIds) ? payload.evidenceGapIds.length : undefined;
+
+  const descriptions: Record<string, string> = {
+    task_created: '任务已保存，可以开始生成执行计划。',
+    plan_created: '执行计划已生成，等待确认后开始运行。',
+    plan_updated: '执行计划已按最新修改保存。',
+    step_started: `正在执行${stepName}。`,
+    step_completed: `${stepName}已执行完成${step?.startedAt ? `，耗时 ${stepDuration(step)}` : ''}。`,
+    step_failed: `${stepName}执行失败${errorMessage ? `：${errorMessage}` : '。'}`,
+    step_retry_requested: `已请求重新执行${stepName}。`,
+    tool_started: `${stepName}正在调用${toolName}。`,
+    tool_completed: `${toolName}调用完成，继续处理${stepName}。`,
+    tool_failed: `${toolName}调用失败${errorMessage ? `：${errorMessage}` : '。'}`,
+    tool_result_reused: `${stepName}复用了已有的工具结果。`,
+    review_started: `正在审查${stepName}的证据完整性。`,
+    review_completed: `${stepName}的证据审查已完成。`,
+    review_failed: `${stepName}的证据审查失败${errorMessage ? `：${errorMessage}` : '。'}`,
+    evidence_gap_detected: `审查发现${gapCount ? ` ${gapCount} 个` : ''}证据缺口，需要补充资料。`,
+    supplemental_step_added: '已自动加入补充检索步骤。',
+    evidence_gap_resolved: '补充检索已解决证据缺口。',
+    evidence_gap_unresolved: `证据缺口仍未解决${reason ? `：${reason}` : '。'}`,
+    evidence_chain_started: `正在整理${stepName}的来源、证据和结论。`,
+    evidence_chain_saved: `${stepName}的证据链已整理并保存。`,
+    evidence_chain_failed: `证据链整理失败${errorMessage ? `：${errorMessage}` : '。'}`,
+    artifact_created: '全部步骤已汇总，最终报告已生成。',
+    artifact_failed: `最终报告生成失败${errorMessage ? `：${errorMessage}` : '。'}`
+  };
+
+  if (event.type === 'task_status_changed') {
+    const to = typeof payload?.to === 'string' ? payload.to as AgentTaskStatus : undefined;
+    return to ? `任务状态已变更为“${statusLabel(to)}”${reason ? `：${reason}` : '。'}` : '任务状态已更新。';
+  }
+  return descriptions[event.type] ?? '运行状态已更新，展开技术详情可查看原始数据。';
 }
 
 function eventLabel(type: string) {
@@ -810,6 +959,7 @@ function getErrorMessage(value: unknown) {
           <span class="shrink-0 font-mono text-[10px] font-bold text-[var(--agent-text-muted)]">{{ completedStepCount }}/{{ detail.steps.length }} · {{ progress }}%</span>
         </div>
         <div v-else class="min-w-0 flex-1" />
+        <span class="flex shrink-0 items-center gap-1.5 font-mono text-[11px] font-bold text-[var(--agent-text)]" :title="activeTask.status === 'running' ? '本次任务已执行时间' : '本次任务执行耗时'"><PhClockCounterClockwise :size="14" /><span>{{ activeTask.status === 'running' ? '已执行' : '耗时' }} {{ taskDuration }}</span></span>
         <span class="shrink-0 border px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.08em]" :class="statusClass(activeTask.status)">{{ statusLabel(activeTask.status) }}</span>
         <span class="shrink-0 font-mono text-[10px] text-[var(--agent-text-muted)]">检查点 v{{ activeTask.checkpointVersion }}</span>
       </header>
@@ -853,10 +1003,11 @@ function getErrorMessage(value: unknown) {
 
         <div v-else-if="detail" class="mx-auto grid max-w-4xl gap-6 px-6 py-7 max-md:px-4">
           <section class="grid grid-cols-[1fr_auto] items-center gap-5 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] p-4 max-sm:grid-cols-1">
-            <div class="grid grid-cols-3 gap-5 max-sm:grid-cols-3">
+            <div class="grid grid-cols-4 gap-5 max-sm:grid-cols-2">
               <div><span class="font-mono text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--agent-text-muted)]">计划步骤</span><strong class="mt-1 block font-mono text-xl">{{ detail.steps.length }}</strong></div>
               <div><span class="font-mono text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--agent-text-muted)]">工具执行</span><strong class="mt-1 block font-mono text-xl">{{ detail.toolExecutions.length }}</strong></div>
               <div><span class="font-mono text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--agent-text-muted)]">运行事件</span><strong class="mt-1 block font-mono text-xl">{{ events.length }}</strong></div>
+              <div><span class="font-mono text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--agent-text-muted)]">执行耗时</span><strong class="mt-1 block whitespace-nowrap font-mono text-xl">{{ taskDuration }}</strong></div>
             </div>
 
             <button v-if="activeTask?.status === 'created'" type="button" class="flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--agent-primary)] px-4 text-sm font-bold text-[var(--agent-primary-text)] hover:bg-[var(--agent-primary-hover)] disabled:opacity-50" :disabled="Boolean(busyAction)" @click="generatePlan"><PhCircleNotch v-if="busyAction === 'plan'" class="animate-spin" :size="16" /><PhListChecks v-else :size="16" weight="bold" />{{ busyAction === 'plan' ? '正在生成计划' : '生成计划' }}</button>
@@ -865,7 +1016,7 @@ function getErrorMessage(value: unknown) {
               <button type="button" class="flex h-10 items-center justify-center gap-2 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] px-4 text-sm font-bold text-[var(--agent-text)] hover:bg-[var(--agent-surface-muted)] disabled:opacity-50" :disabled="Boolean(busyAction) || !planValid || !planDirty" @click="savePlanEdits"><PhCircleNotch v-if="busyAction === 'save-plan'" class="animate-spin" :size="16" /><PhCheck v-else :size="16" weight="bold" />{{ busyAction === 'save-plan' ? '保存中' : '保存计划' }}</button>
               <button type="button" class="flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--agent-primary)] px-4 text-sm font-bold text-[var(--agent-primary-text)] hover:bg-[var(--agent-primary-hover)] disabled:opacity-50" :disabled="Boolean(busyAction) || planDirty || !planValid" @click="approveAndRun"><PhShieldCheck :size="17" weight="bold" />批准并执行</button>
             </div>
-            <button v-else-if="activeTask?.status === 'running'" type="button" class="flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--agent-primary)] px-4 text-sm font-bold text-[var(--agent-primary-text)] hover:bg-[var(--agent-primary-hover)] disabled:opacity-50" :disabled="Boolean(busyAction)" @click="executeTask()"><PhCircleNotch v-if="busyAction === 'run'" class="animate-spin" :size="16" /><PhPlay v-else :size="16" weight="fill" />{{ busyAction === 'run' ? '正在执行' : '继续执行' }}</button>
+            <button v-else-if="activeTask?.status === 'running'" type="button" class="flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--agent-primary)] px-4 text-sm font-bold text-[var(--agent-primary-text)] hover:bg-[var(--agent-primary-hover)] disabled:cursor-not-allowed disabled:opacity-60" :disabled="Boolean(busyAction) || isViewingRunningTask" @click="executeTask()"><PhCircleNotch v-if="isViewingRunningTask" class="animate-spin" :size="16" /><PhPlay v-else :size="16" weight="fill" />{{ isViewingRunningTask ? '正在执行' : '继续执行' }}</button>
             <div v-else class="flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--agent-text-muted)]"><PhCheck v-if="activeTask?.status === 'completed'" :size="16" weight="bold" /><PhClockCounterClockwise v-else :size="16" />{{ statusLabel(activeTask!.status) }}</div>
           </section>
 
@@ -891,7 +1042,7 @@ function getErrorMessage(value: unknown) {
           <section>
             <div class="mb-3 flex items-end justify-between gap-4">
               <div><p class="m-0 font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--agent-text-muted)]">执行计划</p><h2 class="m-0 mt-1 text-lg font-bold tracking-[-0.02em]">{{ activeTask?.status === 'awaiting_approval' ? '批准前编辑计划' : '可恢复步骤' }}</h2><p v-if="activeTask?.status === 'awaiting_approval'" class="m-0 mt-1 text-xs text-[var(--agent-text-muted)]">调整步骤目标、顺序和证据要求，保存后再批准执行。</p></div>
-              <span v-if="busyAction === 'run' && isViewingRunningTask" class="flex items-center gap-2 font-mono text-[10px] font-bold uppercase text-amber-700"><PhCircleNotch class="animate-spin" :size="14" /> 正在同步运行状态</span>
+              <span v-if="isViewingRunningTask" class="flex items-center gap-2 font-mono text-[10px] font-bold uppercase text-amber-700"><PhCircleNotch class="animate-spin" :size="14" /> 正在同步运行状态</span>
             </div>
 
             <div v-if="!detail.steps.length" class="rounded-md border border-dashed border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-5 py-10 text-center text-sm leading-6 text-[var(--agent-text-muted)]">计划尚未生成。Planner 会把目标拆成可验证、可恢复的执行步骤。</div>
@@ -923,7 +1074,7 @@ function getErrorMessage(value: unknown) {
                 </div>
                 <div class="mb-4 ml-3 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-4 transition-colors group-hover:bg-[var(--agent-surface-muted)]">
                   <div class="flex items-start justify-between gap-4">
-                    <div><div class="flex flex-wrap items-center gap-2"><h3 class="m-0 text-sm font-bold leading-5">{{ step.objective }}</h3><span v-if="isSupplementalStep(step.id)" class="inline-flex items-center gap-1 rounded-sm border border-amber-200 bg-amber-50 px-1.5 py-0.5 font-mono text-[9px] font-bold text-amber-800"><PhMagnifyingGlass :size="11" weight="bold" />补充检索</span></div><p class="m-0 mt-1 font-mono text-[9px] uppercase tracking-[0.08em] text-[var(--agent-text-muted)]">第 {{ step.attempts }} 次尝试 · {{ shortId(step.id) }}</p></div>
+                    <div><div class="flex flex-wrap items-center gap-2"><h3 class="m-0 text-sm font-bold leading-5">{{ step.objective }}</h3><span v-if="isSupplementalStep(step.id)" class="inline-flex items-center gap-1 rounded-sm border border-amber-200 bg-amber-50 px-1.5 py-0.5 font-mono text-[9px] font-bold text-amber-800"><PhMagnifyingGlass :size="11" weight="bold" />补充检索</span></div><p class="m-0 mt-1 flex flex-wrap items-center gap-x-2 font-mono text-[9px] uppercase tracking-[0.08em] text-[var(--agent-text-muted)]"><span>第 {{ step.attempts }} 次尝试</span><span v-if="step.startedAt" class="normal-case tracking-normal">{{ step.status === 'running' ? '已运行' : '耗时' }} {{ stepDuration(step) }}</span><span>{{ shortId(step.id) }}</span></p></div>
                     <span class="shrink-0 border px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase" :class="statusClass(step.status)">{{ stepStatusLabel(step.status) }}</span>
                   </div>
                   <ul class="mb-0 mt-3 grid gap-1 border-l border-neutral-200 pl-3 text-xs leading-5 text-[var(--agent-text-muted)]"><li v-for="evidence in step.expectedEvidence" :key="evidence">{{ evidence }}</li></ul>
@@ -967,10 +1118,14 @@ function getErrorMessage(value: unknown) {
               <div class="flex min-w-0 items-center gap-2.5"><span class="size-2.5 shrink-0 rounded-full" :class="eventTone(event.type)" /><strong class="truncate text-[13px] leading-5 text-[var(--agent-text)]">{{ eventLabel(event.type) }}</strong></div>
               <span class="shrink-0 font-mono text-[10px] leading-5 text-[var(--agent-text-muted)]">#{{ event.sequence }} · {{ formatTime(event.createdAt) }}</span>
             </div>
-            <p class="m-0 mt-1.5 break-words pl-5 font-mono text-[10px] leading-4 text-[var(--agent-text-muted)]">{{ event.type }}</p>
+            <p class="m-0 mt-2 break-words pl-5 text-xs font-medium leading-5 text-[var(--agent-text-muted)]">{{ eventDescription(event) }}</p>
+            <div class="mt-2 flex items-center gap-1.5 pl-5 font-mono text-[10px] font-bold text-[var(--agent-text-muted)]"><PhClockCounterClockwise :size="13" /><span>{{ eventDuration(event).label }} {{ eventDuration(event).value }}</span></div>
             <details class="mt-3 border-t border-[var(--agent-border)] pt-2.5">
-              <summary class="cursor-pointer text-xs font-semibold text-[var(--agent-text-muted)] hover:text-[var(--agent-text)]">查看事件数据</summary>
-              <pre class="m-0 mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--agent-surface-muted)] p-3 font-mono text-[11px] leading-5 text-[var(--agent-text)]">{{ formatJson(event.payload) }}</pre>
+              <summary class="cursor-pointer text-xs font-semibold text-[var(--agent-text-muted)] hover:text-[var(--agent-text)]">技术详情</summary>
+              <div class="mt-2 rounded-md bg-[var(--agent-surface-muted)] p-3">
+                <p class="m-0 break-all font-mono text-[10px] font-bold text-[var(--agent-text-muted)]">{{ event.type }}</p>
+                <pre class="m-0 mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-[var(--agent-text)]">{{ formatJson(event.payload) }}</pre>
+              </div>
             </details>
           </article>
           <p v-if="!events.length" class="m-0 rounded-md border border-dashed border-[var(--agent-border)] bg-[var(--agent-surface)] px-4 py-10 text-center text-sm text-[var(--agent-text-muted)]">暂无运行事件。</p>

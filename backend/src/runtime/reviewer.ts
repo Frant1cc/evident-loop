@@ -49,17 +49,24 @@ export function createModelStepReviewer(apiKey: string, model: string): AgentSte
     const { signal } = context;
     const input = JSON.stringify(buildReviewerInput(context));
     const boundedInput = input.length > 60_000 ? `${input.slice(0, 60_000)}\n[review input truncated]` : input;
-    const completion = await createDeepSeekChatCompletion({
+    const request = {
       apiKey,
       model,
       messages: [
-        { role: 'system', content: reviewerSystemPrompt },
-        { role: 'user', content: boundedInput }
+        { role: 'system' as const, content: reviewerSystemPrompt },
+        { role: 'user' as const, content: boundedInput }
       ],
       signal
-    });
-    const content = completion.choices?.[0]?.message?.content;
-    if (!content) throw new Error('Reviewer returned an empty response');
+    };
+    let completion = await createDeepSeekChatCompletion(request);
+    let content = completion.choices?.[0]?.message?.content;
+    if (typeof content !== 'string' || !content.trim()) {
+      completion = await createDeepSeekChatCompletion(request);
+      content = completion.choices?.[0]?.message?.content;
+    }
+    if (typeof content !== 'string' || !content.trim()) {
+      throw new Error(describeEmptyReviewerCompletion(completion));
+    }
     return parseReviewerResponse(content);
   };
 }
@@ -84,6 +91,18 @@ export function buildReviewerInput(
     })),
     evidenceChain: { sources, evidence, claims, claimEvidence }
   };
+}
+
+export function describeEmptyReviewerCompletion(completion: unknown) {
+  const value = isRecord(completion) ? completion : undefined;
+  const choiceCount = Array.isArray(value?.choices) ? value.choices.length : 0;
+  let raw: string;
+  try {
+    raw = JSON.stringify(completion).slice(0, 500);
+  } catch {
+    raw = '<unserializable completion>';
+  }
+  return `Reviewer returned an empty response (choices: ${choiceCount}): ${raw}`;
 }
 
 export function parseReviewerResponse(content: string): AgentReviewDraft {

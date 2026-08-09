@@ -1,4 +1,3 @@
-import type { Request, Response } from 'express';
 import { Router } from 'express';
 
 import { failure, success } from '../response.js';
@@ -15,6 +14,7 @@ import {
   updateChatMessage
 } from '../chat/store.js';
 import type { ChatMessage } from '../chat/types.js';
+import { createSseStream, parseSseChunk, type SseStream } from '../sse.js';
 
 const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
 const DEFAULT_MODEL = 'deepseek-v4-flash';
@@ -107,16 +107,16 @@ chatRouter.post('/chat/conversations/:conversationId/messages/stream', async (re
   const userMessage = createChatMessage({ conversationId, role: 'user', content, status: 'complete' });
   const assistantMessage = createChatMessage({ conversationId, role: 'assistant', content: '', status: 'streaming' });
 
-  prepareSse(res);
-  sendEvent(res, 'chat_message_started', { userMessage, message: assistantMessage });
-  sendEvent(res, 'ready', {});
+  const stream = createSseStream(res);
+  stream.send('chat_message_started', { userMessage, message: assistantMessage });
+  stream.send('ready', {});
 
   const abortController = new AbortController();
   let finished = false;
   let reply = '';
   const abortRequest = () => abortController.abort(new Error('Chat request was cancelled'));
   req.once('aborted', abortRequest);
-  res.once('close', () => {
+  stream.onClose(() => {
     if (!finished) abortRequest();
   });
   const timeout = setTimeout(() => abortController.abort(new Error('Chat request timed out')), CHAT_TIMEOUT_MS);
@@ -151,21 +151,21 @@ chatRouter.post('/chat/conversations/:conversationId/messages/stream', async (re
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
-      buffer = processDeepSeekBuffer(buffer, res, (delta) => {
+      buffer = processDeepSeekBuffer(buffer, stream, (delta) => {
         reply += delta;
       });
     }
 
     buffer += decoder.decode();
-    processDeepSeekBuffer(`${buffer}\n\n`, res, (delta) => {
+    processDeepSeekBuffer(`${buffer}\n\n`, stream, (delta) => {
       reply += delta;
     });
 
     const completedMessage = updateChatMessage(assistantMessage.id, { content: reply, status: 'complete' });
     if (!completedMessage) throw new Error('Chat assistant message could not be completed');
-    sendEvent(res, 'done', { message: completedMessage });
+    stream.send('done', { message: completedMessage });
     finished = true;
-    res.end();
+    stream.close();
   } catch (error) {
     const message = getFailureMessage(error, abortController.signal);
     const failedMessage = updateChatMessage(assistantMessage.id, {
@@ -173,10 +173,10 @@ chatRouter.post('/chat/conversations/:conversationId/messages/stream', async (re
       status: 'error'
     });
 
-    if (!res.writableEnded) {
-      sendEvent(res, 'error', { message, assistantMessage: failedMessage });
+    if (!stream.closed) {
+      stream.send('error', { message, assistantMessage: failedMessage });
       finished = true;
-      res.end();
+      stream.close();
     }
   } finally {
     clearTimeout(timeout);
@@ -190,17 +190,9 @@ function toDeepSeekMessages(messages: ChatMessage[]): DeepSeekMessage[] {
     .map((message) => ({ role: message.role, content: message.content }));
 }
 
-function processDeepSeekBuffer(buffer: string, res: Response, onMessage: (content: string) => void) {
-  const events = buffer.split('\n\n');
-  const rest = events.pop() ?? '';
-
-  for (const event of events) {
-    const data = event
-      .split('\n')
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice(5).trimStart())
-      .join('\n');
-    if (!data || data === '[DONE]') continue;
+function processDeepSeekBuffer(buffer: string, stream: SseStream, onMessage: (content: string) => void) {
+  return parseSseChunk(buffer, ({ data }) => {
+    if (!data || data === '[DONE]') return;
 
     let chunk: DeepSeekChunk;
     try {
@@ -210,14 +202,12 @@ function processDeepSeekBuffer(buffer: string, res: Response, onMessage: (conten
     }
 
     const delta = chunk.choices?.[0]?.delta;
-    if (delta?.reasoning_content) sendEvent(res, 'reasoning', { content: delta.reasoning_content });
+    if (delta?.reasoning_content) stream.send('reasoning', { content: delta.reasoning_content });
     if (delta?.content) {
       onMessage(delta.content);
-      sendEvent(res, 'message', { content: delta.content });
+      stream.send('message', { content: delta.content });
     }
-  }
-
-  return rest;
+  });
 }
 
 function getFailureMessage(error: unknown, signal: AbortSignal) {
@@ -225,16 +215,4 @@ function getFailureMessage(error: unknown, signal: AbortSignal) {
   if (reason.includes('timed out')) return '对话请求超时，请稍后重试。';
   if (signal.aborted) return '对话请求已取消。';
   return error instanceof Error ? error.message : 'DeepSeek stream failed';
-}
-
-function prepareSse(res: Response) {
-  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
-}
-
-function sendEvent(res: Response, event: string, data: unknown) {
-  res.write(`event: ${event}\n`);
-  res.write(`data: ${JSON.stringify(data)}\n\n`);
 }

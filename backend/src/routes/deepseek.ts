@@ -1,5 +1,7 @@
 import { Router } from 'express';
 
+import { createSseStream, parseSseChunk, type SseStream } from '../sse.js';
+
 const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
 const DEFAULT_MODEL = 'deepseek-v4-flash';
 
@@ -38,14 +40,11 @@ deepseekRouter.post('/deepseek/chat/stream', async (req, res) => {
     return;
   }
 
-  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
-
+  const stream = createSseStream(res);
   const abortController = new AbortController();
   req.on('aborted', () => abortController.abort());
-  sendEvent(res, 'ready', {});
+  stream.onClose(() => abortController.abort());
+  stream.send('ready', {});
 
   try {
     const response = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
@@ -68,10 +67,10 @@ deepseekRouter.post('/deepseek/chat/stream', async (req, res) => {
 
     if (!response.ok || !response.body) {
       const errorText = await response.text();
-      sendEvent(res, 'error', {
+      stream.send('error', {
         message: errorText || `DeepSeek request failed with status ${response.status}`
       });
-      res.end();
+      stream.close();
       return;
     }
 
@@ -85,20 +84,20 @@ deepseekRouter.post('/deepseek/chat/stream', async (req, res) => {
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
-      buffer = processSseBuffer(buffer, res);
+      buffer = processDeepSeekBuffer(buffer, stream);
     }
 
     buffer += decoder.decode();
-    processSseBuffer(`${buffer}\n\n`, res);
-    sendEvent(res, 'done', {});
-    res.end();
+    processDeepSeekBuffer(`${buffer}\n\n`, stream);
+    stream.send('done', {});
+    stream.close();
   } catch (error) {
     if (abortController.signal.aborted) return;
 
-    sendEvent(res, 'error', {
+    stream.send('error', {
       message: error instanceof Error ? error.message : 'DeepSeek stream failed'
     });
-    res.end();
+    stream.close();
   }
 });
 
@@ -139,42 +138,23 @@ function isChatMessage(message: unknown): message is ChatMessage {
   );
 }
 
-function processSseBuffer(buffer: string, res: Parameters<typeof sendEvent>[0]) {
-  const events = buffer.split('\n\n');
-  const rest = events.pop() ?? '';
-
-  for (const event of events) {
-    const dataLines = event
-      .split('\n')
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice(5).trimStart());
-
-    if (!dataLines.length) continue;
-
-    const data = dataLines.join('\n');
-
-    if (data === '[DONE]') continue;
+function processDeepSeekBuffer(buffer: string, stream: SseStream) {
+  return parseSseChunk(buffer, ({ data }) => {
+    if (data === '[DONE]') return;
 
     try {
       const chunk = JSON.parse(data) as DeepSeekChunk;
       const delta = chunk.choices?.[0]?.delta;
 
       if (delta?.reasoning_content) {
-        sendEvent(res, 'reasoning', { content: delta.reasoning_content });
+        stream.send('reasoning', { content: delta.reasoning_content });
       }
 
       if (delta?.content) {
-        sendEvent(res, 'message', { content: delta.content });
+        stream.send('message', { content: delta.content });
       }
     } catch {
-      sendEvent(res, 'error', { message: 'Failed to parse DeepSeek stream chunk' });
+      stream.send('error', { message: 'Failed to parse DeepSeek stream chunk' });
     }
-  }
-
-  return rest;
-}
-
-function sendEvent(res: { write: (chunk: string) => void }, event: string, data: unknown) {
-  res.write(`event: ${event}\n`);
-  res.write(`data: ${JSON.stringify(data)}\n\n`);
+  });
 }

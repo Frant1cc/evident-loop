@@ -1,8 +1,9 @@
-import { Router, type Response } from 'express';
+import { Router } from 'express';
 
 import { failure, success } from '../response.js';
 import { createAndStartRagEvaluation, subscribeToRagEvaluation } from '../rag/eval/service.js';
 import { deleteEvaluationRecord, getEvaluationRecord, listEvaluationRecords } from '../rag/eval/store.js';
+import { createSseStream } from '../sse.js';
 
 export const evaluationsRouter = Router();
 
@@ -56,28 +57,16 @@ evaluationsRouter.get('/rag/evaluations/:evaluationId/events', (req, res) => {
     return;
   }
 
-  res.status(200);
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
-
-  writeEvent(res, 'snapshot', { type: 'snapshot', evaluation });
+  const stream = createSseStream(res);
   const unsubscribe = subscribeToRagEvaluation(evaluation.id, (event) => {
-    writeEvent(res, event.type, event);
-    if (event.type === 'completed' || event.type === 'failed') res.end();
+    stream.send(event.type, event);
+    if (event.type === 'completed' || event.type === 'failed') stream.close();
   });
-  const heartbeat = setInterval(() => res.write(': heartbeat\n\n'), 15_000);
-  req.on('close', () => {
-    clearInterval(heartbeat);
-    unsubscribe();
-  });
-});
+  stream.onClose(unsubscribe);
 
-function writeEvent(res: Response, event: string, data: unknown) {
-  res.write(`event: ${event}\n`);
-  res.write(`data: ${JSON.stringify(data)}\n\n`);
-}
+  stream.send('snapshot', { type: 'snapshot', evaluation });
+  if (evaluation.status === 'completed' || evaluation.status === 'failed') stream.close();
+});
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'RAG evaluation request failed';

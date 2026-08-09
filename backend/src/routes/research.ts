@@ -1,4 +1,3 @@
-import type { Response } from 'express';
 import { Router } from 'express';
 
 import { getToolDefinitions } from '../tools/definitions.js';
@@ -9,8 +8,7 @@ import {
   cancelResearchRun,
   createAndStartResearchRun,
   getResearchRunSnapshot,
-  subscribeToResearchRun,
-  type ResearchRunEvent
+  subscribeToResearchRun
 } from '../research/service.js';
 import {
   createResearchConversation,
@@ -26,6 +24,7 @@ import {
   updateResearchNote
 } from '../research/store.js';
 import type { ResearchRunStatus } from '../research/types.js';
+import { createSseStream } from '../sse.js';
 
 export const researchRouter = Router();
 
@@ -149,24 +148,15 @@ researchRouter.get('/research/runs/:runId/events', (req, res) => {
     return;
   }
 
-  prepareSse(res);
-  let closed = false;
-  const close = () => {
-    if (closed) return;
-    closed = true;
-    clearInterval(heartbeat);
-    unsubscribe();
-    if (!res.writableEnded) res.end();
-  };
+  const stream = createSseStream(res);
   const unsubscribe = subscribeToResearchRun(initial.run.id, (event) => {
-    sendEvent(res, event.type, event);
-    if (event.type === 'done' || event.type === 'error') close();
+    stream.send(event.type, event);
+    if (event.type === 'done' || event.type === 'error') stream.close();
   });
-  const heartbeat = setInterval(() => res.write(': heartbeat\n\n'), 15_000);
+  stream.onClose(unsubscribe);
 
-  sendEvent(res, 'snapshot', initial);
-  if (isTerminal(initial.run.status)) close();
-  req.on('close', close);
+  stream.send('snapshot', initial);
+  if (isTerminal(initial.run.status)) stream.close();
 });
 
 researchRouter.post('/research/runs/:runId/cancel', (req, res) => {
@@ -187,19 +177,6 @@ function parseAllowedToolNames(value: unknown) {
 
 function isTerminal(status: ResearchRunStatus) {
   return status === 'completed' || status === 'failed' || status === 'cancelled';
-}
-
-function prepareSse(res: Response) {
-  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
-}
-
-function sendEvent(res: Response, event: string, data: ResearchRunEvent | NonNullable<ReturnType<typeof getResearchRunSnapshot>>) {
-  if (res.writableEnded) return;
-  res.write(`event: ${event}\n`);
-  res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
 function getErrorMessage(error: unknown) {
