@@ -64,7 +64,7 @@ flowchart LR
 - Node.js 20+
 - pnpm 10+
 - Docker 与 Docker Compose
-- DeepSeek API Key
+- DeepSeek 或 MiniMax API Key
 - 支持 OpenAI Embeddings 协议的 Embedding API Key
 
 ```bash
@@ -74,10 +74,20 @@ pnpm qdrant:up
 pnpm dev
 ```
 
-启动前编辑 `backend/.env`，至少填写：
+启动前编辑 `backend/.env`，选择一个文本模型 Provider，并填写 Embedding Key。DeepSeek 示例：
 
 ```dotenv
 DEEPSEEK_API_KEY=你的_DeepSeek_Key
+EMBEDDING_API_KEY=你的_Embedding_Key
+```
+
+MiniMax 示例：
+
+```dotenv
+LLM_PROVIDER=minimax
+MINIMAX_API_KEY=你的_MiniMax_Key
+MINIMAX_MODEL=MiniMax-M3
+MINIMAX_BASE_URL=https://api.minimaxi.com/v1
 EMBEDDING_API_KEY=你的_Embedding_Key
 ```
 
@@ -104,16 +114,20 @@ TAVILY_API_KEY=你的_Tavily_Key
 ├── frontend/                   # Vue 3 + Vite + TypeScript
 ├── backend/                    # Express + TypeScript + SQLite
 │   └── src/
+│       ├── modules/            # 模块应用层入口与边界
+│       ├── llm/                # LLM Provider 端口与适配器
 │       ├── agent/              # Function Calling Agent Loop
 │       ├── runtime/            # 状态机、Checkpoint、证据链和任务执行
 │       ├── rag/                # Chunk、检索、融合、改写和评测
-│       ├── tools/              # Agent 工具注册与执行
+│       ├── tools/              # 工具契约、能力目录与组合注册
 │       └── documents/          # Word 文档 Schema 与渲染
 ├── docs/knowledge/             # 内置评测和演示知识文档
 ├── knowledge-samples/          # 可导入知识库的示例资料
 ├── docker-compose.yml          # 本地 Qdrant
 └── RUNNING.md                  # 完整运行指南
 ```
+
+后端模块依赖方向和新增 Provider/Tool 的约定见 [模块化架构约定](./docs/development/modular-architecture.md)。
 
 ## 如何参与共创
 

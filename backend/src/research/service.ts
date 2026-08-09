@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 
 import { DEFAULT_MAX_TOOL_ROUNDS } from '../agent/config.js';
 import { runAgentLoop, type AgentLoopEvent, type RunAgentLoopOptions } from '../agent/agentLoop.js';
+import type { LlmProvider } from '../llm/contracts.js';
 import { isExplicitWordDocumentRequest } from '../tools/wordDocumentTool.js';
 import { buildResearchContext, createConversationTitle } from './context.js';
 import {
@@ -85,7 +86,8 @@ export function createAndStartResearchRun(options: {
   conversationId: string;
   content: string;
   allowedToolNames?: string[];
-  apiKey: string;
+  apiKey?: string;
+  llm?: LlmProvider;
   model?: string;
   runAgent?: ResearchAgentRunner;
   schedule?: (callback: () => void) => void;
@@ -137,6 +139,7 @@ export function createAndStartResearchRun(options: {
     void executePersistedResearchRun({
       runId: run.id,
       apiKey: options.apiKey,
+      llm: options.llm,
       model: options.model ?? DEFAULT_MODEL,
       runAgent: options.runAgent ?? runAgentLoop
     });
@@ -203,7 +206,8 @@ export function failOrphanedResearchRuns() {
 
 async function executePersistedResearchRun(options: {
   runId: string;
-  apiKey: string;
+  apiKey?: string;
+  llm?: LlmProvider;
   model: string;
   runAgent: ResearchAgentRunner;
 }) {
@@ -229,6 +233,7 @@ async function executePersistedResearchRun(options: {
   try {
     const result = await options.runAgent({
       apiKey: options.apiKey,
+      llm: options.llm,
       message: runInput.content,
       contextMessages: runInput.contextMessages,
       model: options.model,

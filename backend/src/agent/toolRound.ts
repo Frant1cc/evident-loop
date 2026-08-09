@@ -1,7 +1,7 @@
 import { getRagSourcesFromToolTraces } from '../rag/index.js';
+import type { LlmProvider } from '../llm/contracts.js';
 import { executeToolCall as executeRegisteredToolCall } from '../tools/index.js';
-import type { ToolDefinition } from '../tools/registry.js';
-import { createDeepSeekChatCompletion } from './deepseekClient.js';
+import type { ToolDefinition } from '../tools/contracts.js';
 import type { RagSource } from '../rag/types.js';
 import type {
   AgentTraceStep,
@@ -24,7 +24,7 @@ export type AgentToolExecutor = (
 ) => Promise<unknown>;
 
 type ExecuteToolRoundOptions = {
-  apiKey: string;
+  llm: LlmProvider;
   model: string;
   messages: ChatMessage[];
   tools: ToolDefinition[];
@@ -53,7 +53,7 @@ export type ToolRoundResult = {
  * to retry it, accept it as final, or replace it with a required-tool instruction.
  */
 export async function executeToolRound({
-  apiKey,
+  llm,
   model,
   messages,
   tools,
@@ -68,8 +68,7 @@ export async function executeToolRound({
   requiredSingleToolName
 }: ExecuteToolRoundOptions): Promise<ToolRoundResult> {
   throwIfAborted(signal);
-  const completion = await createDeepSeekChatCompletion({
-    apiKey,
+  const completion = await llm.complete({
     model,
     messages,
     tools: tools.length ? tools : undefined,

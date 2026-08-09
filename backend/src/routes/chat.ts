@@ -1,5 +1,6 @@
 import { Router } from 'express';
 
+import { createConfiguredLlm } from '../llm/config.js';
 import { failure, success } from '../response.js';
 import {
   createChatConversation,
@@ -14,24 +15,13 @@ import {
   updateChatMessage
 } from '../chat/store.js';
 import type { ChatMessage } from '../chat/types.js';
-import { createSseStream, parseSseChunk, type SseStream } from '../sse.js';
+import { createSseStream } from '../sse.js';
 
-const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
-const DEFAULT_MODEL = 'deepseek-v4-flash';
 const CHAT_TIMEOUT_MS = 90_000;
 
-type DeepSeekMessage = {
+type ProviderMessage = {
   role: 'user' | 'assistant';
   content: string;
-};
-
-type DeepSeekChunk = {
-  choices?: Array<{
-    delta?: {
-      content?: string | null;
-      reasoning_content?: string | null;
-    };
-  }>;
 };
 
 export const chatRouter = Router();
@@ -80,9 +70,9 @@ chatRouter.delete('/chat/conversations/:conversationId', (req, res) => {
 });
 
 chatRouter.post('/chat/conversations/:conversationId/messages/stream', async (req, res) => {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
-  if (!apiKey) {
-    res.status(500).json(failure('DEEPSEEK_API_KEY is not configured'));
+  const configuredLlm = createConfiguredLlm();
+  if (!configuredLlm.llm) {
+    res.status(500).json(failure(`${configuredLlm.providerName} API key is not configured`));
     return;
   }
 
@@ -103,7 +93,7 @@ chatRouter.post('/chat/conversations/:conversationId/messages/stream', async (re
     conversation = updateChatConversationTitle(conversationId, createConversationTitle(content)) ?? conversation;
   }
 
-  const contextMessages = toDeepSeekMessages(listChatMessages(conversationId));
+  const contextMessages = toProviderMessages(listChatMessages(conversationId));
   const userMessage = createChatMessage({ conversationId, role: 'user', content, status: 'complete' });
   const assistantMessage = createChatMessage({ conversationId, role: 'assistant', content: '', status: 'streaming' });
 
@@ -122,43 +112,17 @@ chatRouter.post('/chat/conversations/:conversationId/messages/stream', async (re
   const timeout = setTimeout(() => abortController.abort(new Error('Chat request timed out')), CHAT_TIMEOUT_MS);
 
   try {
-    const response = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: process.env.DEEPSEEK_MODEL ?? DEFAULT_MODEL,
-        messages: [...contextMessages, { role: 'user', content }],
-        stream: true,
-        stream_options: { include_usage: true },
-        thinking: { type: process.env.DEEPSEEK_THINKING === 'enabled' ? 'enabled' : 'disabled' }
-      }),
+    await configuredLlm.llm.stream({
+      model: configuredLlm.model,
+      messages: [...contextMessages, { role: 'user', content }],
+      reasoning: getReasoningEnabled(),
       signal: abortController.signal
-    });
-
-    if (!response.ok || !response.body) {
-      const errorText = await response.text();
-      throw new Error(errorText || `DeepSeek request failed with status ${response.status}`);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      buffer = processDeepSeekBuffer(buffer, stream, (delta) => {
-        reply += delta;
-      });
-    }
-
-    buffer += decoder.decode();
-    processDeepSeekBuffer(`${buffer}\n\n`, stream, (delta) => {
-      reply += delta;
+    }, (delta) => {
+      if (delta.reasoning) stream.send('reasoning', { content: delta.reasoning });
+      if (delta.content) {
+        reply += delta.content;
+        stream.send('message', { content: delta.content });
+      }
     });
 
     const completedMessage = updateChatMessage(assistantMessage.id, { content: reply, status: 'complete' });
@@ -184,35 +148,21 @@ chatRouter.post('/chat/conversations/:conversationId/messages/stream', async (re
   }
 });
 
-function toDeepSeekMessages(messages: ChatMessage[]): DeepSeekMessage[] {
+function toProviderMessages(messages: ChatMessage[]): ProviderMessage[] {
   return messages
     .filter((message) => message.status === 'complete' && message.content.trim())
     .map((message) => ({ role: message.role, content: message.content }));
-}
-
-function processDeepSeekBuffer(buffer: string, stream: SseStream, onMessage: (content: string) => void) {
-  return parseSseChunk(buffer, ({ data }) => {
-    if (!data || data === '[DONE]') return;
-
-    let chunk: DeepSeekChunk;
-    try {
-      chunk = JSON.parse(data) as DeepSeekChunk;
-    } catch {
-      throw new Error('Failed to parse DeepSeek stream chunk');
-    }
-
-    const delta = chunk.choices?.[0]?.delta;
-    if (delta?.reasoning_content) stream.send('reasoning', { content: delta.reasoning_content });
-    if (delta?.content) {
-      onMessage(delta.content);
-      stream.send('message', { content: delta.content });
-    }
-  });
 }
 
 function getFailureMessage(error: unknown, signal: AbortSignal) {
   const reason = signal.reason instanceof Error ? signal.reason.message : '';
   if (reason.includes('timed out')) return '对话请求超时，请稍后重试。';
   if (signal.aborted) return '对话请求已取消。';
-  return error instanceof Error ? error.message : 'DeepSeek stream failed';
+  return error instanceof Error ? error.message : 'LLM stream failed';
+}
+
+function getReasoningEnabled() {
+  const configured = process.env.LLM_REASONING?.trim().toLowerCase();
+  if (configured) return ['1', 'true', 'on', 'yes', 'enabled'].includes(configured);
+  return process.env.DEEPSEEK_THINKING === 'enabled';
 }

@@ -5,7 +5,9 @@ import test from 'node:test';
 import express from 'express';
 
 import { initDb } from '../db.js';
-import { researchRouter } from '../routes/research.js';
+import { createResearchApplication } from '../modules/research/index.js';
+import { createResearchRouter } from '../routes/research.js';
+import { toolCatalog } from '../tools/registry.js';
 import {
   cancelResearchRun,
   createAndStartResearchRun
@@ -103,7 +105,7 @@ test('closing an SSE subscription does not cancel its research run', async () =>
   assert.ok(scheduled);
 
   const app = express();
-  app.use('/api', researchRouter);
+  app.use('/api', createResearchRouter(createResearchApplication({ model: 'test-model', tools: toolCatalog })));
   const server = createServer(app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();

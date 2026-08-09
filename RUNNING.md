@@ -40,6 +40,7 @@ Copy-Item backend/.env.example backend/.env
 PORT=3000
 
 # 对话、研究工作台、Agent 规划/执行/审查/报告生成
+LLM_PROVIDER=deepseek
 DEEPSEEK_API_KEY=请填写真实密钥
 DEEPSEEK_MODEL=deepseek-v4-flash
 DEEPSEEK_REQUEST_TIMEOUT_MS=60000
@@ -55,13 +56,25 @@ QDRANT_COLLECTION=knowledge_chunks
 
 RAG_HYBRID=on
 RAG_QUERY_REWRITE=on
-RAG_QUERY_REWRITE_MODEL=deepseek-v4-flash
+RAG_QUERY_REWRITE_MODEL=
+```
+
+使用 MiniMax 时，将文本模型部分替换为：
+
+```dotenv
+LLM_PROVIDER=minimax
+MINIMAX_API_KEY=请填写真实密钥
+MINIMAX_MODEL=MiniMax-M3
+# 中国区；国际账号使用 https://api.minimax.io/v1
+MINIMAX_BASE_URL=https://api.minimaxi.com/v1
+MINIMAX_REQUEST_TIMEOUT_MS=90000
 ```
 
 说明：
 
-- `DEEPSEEK_API_KEY` 是对话和 Agent 功能的必需配置。
-- `DEEPSEEK_REQUEST_TIMEOUT_MS` 只限制单次模型请求尝试；后台研究任务没有总时长硬限制。
+- `LLM_PROVIDER` 支持 `deepseek` 和 `minimax`；未填写时默认使用 DeepSeek，只有 MiniMax Key 时会自动选择 MiniMax。
+- 所选 Provider 对应的 API Key 是对话和 Agent 功能的必需配置。
+- `DEEPSEEK_REQUEST_TIMEOUT_MS`、`MINIMAX_REQUEST_TIMEOUT_MS` 只限制单次模型请求尝试；后台研究任务没有总时长硬限制。
 - `EMBEDDING_API_KEY` 是知识库向量化和检索功能的必需配置。
 - 本地 Qdrant 不需要 `QDRANT_API_KEY`；连接远程实例时再填写。
 - `backend/.env` 含真实密钥，已被 `.gitignore` 忽略，禁止提交或截图公开。
@@ -175,9 +188,9 @@ docker compose ps
 
 并检查 `QDRANT_URL` 是否为 `http://localhost:6333`。
 
-### 提示 `DEEPSEEK_API_KEY is not configured`
+### 提示 API key is not configured
 
-检查密钥是否写在 `backend/.env`，不要写在项目根目录的 `.env`。修改后重启后端。
+检查 `LLM_PROVIDER` 和对应的 `DEEPSEEK_API_KEY` 或 `MINIMAX_API_KEY` 是否写在 `backend/.env`，不要写在项目根目录的 `.env`。修改后重启后端。
 
 ### 提示 `EMBEDDING_API_KEY is not configured`
 

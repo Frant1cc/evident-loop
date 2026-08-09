@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import type { LlmProvider } from '../llm/contracts.js';
 import { assertTaskTransition } from './stateMachine.js';
 import {
   appendEvent,
@@ -522,7 +523,8 @@ export function retryAgentPlanStep(taskId: string, stepId: string): AgentTaskDet
 
 export async function planAgentTask(options: {
   id: string;
-  apiKey: string;
+  apiKey?: string;
+  llm?: LlmProvider;
   model: string;
   signal?: AbortSignal;
 }) {

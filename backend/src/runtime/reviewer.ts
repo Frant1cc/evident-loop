@@ -1,4 +1,4 @@
-import { createDeepSeekChatCompletion } from '../agent/deepseekClient.js';
+import type { LlmProvider } from '../llm/contracts.js';
 import { claimExtractionOutput } from './evidenceChainBuilder.js';
 import type {
   AgentClaim,
@@ -44,13 +44,12 @@ export type AgentStepReviewer = (context: {
   signal?: AbortSignal;
 }) => Promise<AgentReviewDraft>;
 
-export function createModelStepReviewer(apiKey: string, model: string): AgentStepReviewer {
+export function createModelStepReviewer(llm: LlmProvider, model: string): AgentStepReviewer {
   return async (context) => {
     const { signal } = context;
     const input = JSON.stringify(buildReviewerInput(context));
     const boundedInput = input.length > 60_000 ? `${input.slice(0, 60_000)}\n[review input truncated]` : input;
     const request = {
-      apiKey,
       model,
       messages: [
         { role: 'system' as const, content: reviewerSystemPrompt },
@@ -58,10 +57,10 @@ export function createModelStepReviewer(apiKey: string, model: string): AgentSte
       ],
       signal
     };
-    let completion = await createDeepSeekChatCompletion(request);
+    let completion = await llm.complete(request);
     let content = completion.choices?.[0]?.message?.content;
     if (typeof content !== 'string' || !content.trim()) {
-      completion = await createDeepSeekChatCompletion(request);
+      completion = await llm.complete(request);
       content = completion.choices?.[0]?.message?.content;
     }
     if (typeof content !== 'string' || !content.trim()) {

@@ -1,4 +1,4 @@
-import type { ToolTrace } from '../agent/types.js';
+import type { ToolTrace } from '../tools/contracts.js';
 import { assessRetrievalConfidence, type RetrievalConfidence, type RetrievalVerdict } from './confidence.js';
 import { mergeAdjacentChunks } from './contextAssembly.js';
 import { createEmbedding } from './embeddingClient.js';

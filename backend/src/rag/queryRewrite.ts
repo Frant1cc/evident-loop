@@ -1,4 +1,6 @@
-import { createDeepSeekChatCompletion } from '../agent/deepseekClient.js';
+import type { LlmProvider } from '../llm/contracts.js';
+import { createConfiguredLlm } from '../llm/config.js';
+import { resolveLlmProvider } from '../llm/provider.js';
 import type { RagSource } from './types.js';
 
 const defaultRewriteModel = 'deepseek-v4-flash';
@@ -14,6 +16,7 @@ export type QueryRewriteResult = {
 export type RewriteRetrievalQueryOptions = {
   signal?: AbortSignal;
   apiKey?: string;
+  llm?: LlmProvider;
   model?: string;
   topicCatalog?: string[];
 };
@@ -33,15 +36,16 @@ export async function rewriteRetrievalQuery(
   candidates: RagSource[],
   options: RewriteRetrievalQueryOptions = {}
 ): Promise<QueryRewriteResult> {
-  const apiKey = options.apiKey ?? process.env.DEEPSEEK_API_KEY;
-  if (!apiKey) throw new Error('DEEPSEEK_API_KEY is required when RAG query rewrite is enabled');
+  const configuredLlm = createConfiguredLlm();
+  const apiKey = options.apiKey;
 
-  const model = options.model ?? process.env.RAG_QUERY_REWRITE_MODEL
-    ?? process.env.DEEPSEEK_MODEL
-    ?? defaultRewriteModel;
+  const model = options.model ?? (
+    process.env.RAG_QUERY_REWRITE_MODEL?.trim()
+    || configuredLlm.model
+    || defaultRewriteModel
+  );
   const startedAt = Date.now();
-  const completion = await createDeepSeekChatCompletion({
-    apiKey,
+  const completion = await resolveLlmProvider({ llm: options.llm ?? configuredLlm.llm, apiKey }).complete({
     model,
     temperature: 0,
     timeoutMs: 30_000,

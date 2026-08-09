@@ -44,10 +44,10 @@ pnpm rag:eval
 - `QDRANT_URL`：默认 `http://localhost:6333`。
 - `RAG_EVAL_REPORT_PATH`：JSON 报告位置，默认 `.rag-eval/report.json`。
 - `RAG_HYBRID=on`：启用 Dense + FTS5 Hybrid 检索。
-- `RAG_QUERY_REWRITE=on`：启用 P3 置信度驱动的查询改写；需要配置 `DEEPSEEK_API_KEY`。
-- `RAG_QUERY_REWRITE_MODEL`：改写模型，默认 `deepseek-v4-flash`，其次回退 `DEEPSEEK_MODEL`。
+- `RAG_QUERY_REWRITE=on`：启用 P3 置信度驱动的查询改写；需要配置当前 LLM Provider 的 API Key。
+- `RAG_QUERY_REWRITE_MODEL`：可单独覆盖改写模型；留空时跟随当前 Provider 的模型。
 
-关闭 Query Rewrite 时，测评不使用 `DEEPSEEK_API_KEY`。启用 P3 后会调用 DeepSeek 生成检索查询，但仍不生成最终 Agent 回答。
+关闭 Query Rewrite 时，测评不使用文本模型。启用 P3 后会调用当前 LLM Provider 生成检索查询，但仍不生成最终 Agent 回答。
 
 评测拒绝使用默认生产 collection `knowledge_chunks` 或默认生产数据库 `backend/data/evident-loop.sqlite`，以避免覆盖本地工作数据。
 
@@ -66,7 +66,7 @@ A/B 流程：以 dense-baseline 为基线 → 用 Hybrid 再跑一次 → 在「
 Query Rewrite 默认只在首轮检索为 `weak`，或只有偏低语义信号且无关键词证据时触发。`empty` 不改写；最多调用模型一次、生成 2 个改写查询，总查询数不超过 3。
 
 ```bash
-DEEPSEEK_API_KEY=your_deepseek_key \
+LLM_PROVIDER=deepseek DEEPSEEK_API_KEY=your_deepseek_key \
 RAG_HYBRID=on \
 RAG_QUERY_REWRITE=on \
 pnpm rag:eval

@@ -1,4 +1,6 @@
-import { createDeepSeekChatCompletion } from '../agent/deepseekClient.js';
+import type { LlmProvider } from '../llm/contracts.js';
+import { createConfiguredLlm } from '../llm/config.js';
+import { resolveLlmProvider } from '../llm/provider.js';
 import { normalizeQuery } from './quality.js';
 
 export type RewriteWebQueryOptions = {
@@ -6,16 +8,16 @@ export type RewriteWebQueryOptions = {
   previousQueries: string[];
   reason: string;
   signal?: AbortSignal;
+  llm?: LlmProvider;
 };
 
 export async function rewriteWebQuery(options: RewriteWebQueryOptions): Promise<string | undefined> {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
-  if (!apiKey) return fallbackRewrite(options);
+  const configuredLlm = createConfiguredLlm();
+  if (!configuredLlm.llm && !options.llm) return fallbackRewrite(options);
 
   try {
-    const response = await createDeepSeekChatCompletion({
-      apiKey,
-      model: process.env.DEEPSEEK_MODEL ?? 'deepseek-v4-flash',
+    const response = await resolveLlmProvider({ llm: options.llm ?? configuredLlm.llm }).complete({
+      model: configuredLlm.model,
       temperature: 0,
       maxRetries: 1,
       signal: options.signal,
@@ -63,4 +65,3 @@ function hasSeen(query: string, previousQueries: string[]) {
 function stripCodeFence(value: string) {
   return value.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
 }
-

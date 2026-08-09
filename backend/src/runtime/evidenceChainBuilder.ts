@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
-import { createDeepSeekChatCompletion } from '../agent/deepseekClient.js';
 import type { DeepSeekChatResponse } from '../agent/types.js';
+import type { LlmProvider } from '../llm/contracts.js';
 import type {
   AgentPlanStep,
   AgentTask,
@@ -47,7 +47,7 @@ export type AgentEvidenceChainBuilder = (context: {
   signal?: AbortSignal;
 }) => Promise<EvidenceChainDraft>;
 
-export function createModelEvidenceChainBuilder(apiKey: string, model: string): AgentEvidenceChainBuilder {
+export function createModelEvidenceChainBuilder(llm: LlmProvider, model: string): AgentEvidenceChainBuilder {
   return async ({ task, step, output, toolExecutions, signal }) => {
     const base = buildEvidenceFromToolExecutions(toolExecutions);
     const serialized = JSON.stringify({
@@ -67,7 +67,6 @@ export function createModelEvidenceChainBuilder(apiKey: string, model: string): 
     });
     const boundedInput = serialized.length > 60_000 ? `${serialized.slice(0, 60_000)}\n[claim input truncated]` : serialized;
     const request = {
-      apiKey,
       model,
       messages: [
         { role: 'system' as const, content: claimExtractorPrompt },
@@ -75,10 +74,10 @@ export function createModelEvidenceChainBuilder(apiKey: string, model: string): 
       ],
       signal
     };
-    let completion = await createDeepSeekChatCompletion(request);
+    let completion = await llm.complete(request);
     let content = completion.choices?.[0]?.message?.content;
     if (typeof content !== 'string' || !content.trim()) {
-      completion = await createDeepSeekChatCompletion(request);
+      completion = await llm.complete(request);
       content = completion.choices?.[0]?.message?.content;
     }
     if (typeof content !== 'string' || !content.trim()) {

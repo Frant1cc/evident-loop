@@ -1,4 +1,5 @@
-import { createDeepSeekChatCompletion } from '../agent/deepseekClient.js';
+import type { LlmProvider } from '../llm/contracts.js';
+import { resolveLlmProvider } from '../llm/provider.js';
 import type { AgentTask, PlanStepDraft } from './types.js';
 
 const plannerSystemPrompt = `You are the Planner in a durable research agent.
@@ -18,13 +19,13 @@ Rules:
 
 export async function generatePlanWithModel(options: {
   task: AgentTask;
-  apiKey: string;
+  apiKey?: string;
+  llm?: LlmProvider;
   model: string;
   signal?: AbortSignal;
 }) {
   const outputLanguage = detectPlanLanguage(options.task.goal);
-  const completion = await createDeepSeekChatCompletion({
-    apiKey: options.apiKey,
+  const completion = await resolveLlmProvider(options).complete({
     model: options.model,
     messages: [
       { role: 'system', content: plannerSystemPrompt },

@@ -4,6 +4,8 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { createConfiguredLlm } from '../../llm/config.js';
+
 import { ragEvalConfig } from './fixtures.js';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
@@ -62,14 +64,15 @@ async function main() {
 }
 
 function validateEnvironment() {
+  const configuredLlm = createConfiguredLlm();
   if (!process.env.EMBEDDING_API_KEY) {
-    throw new Error('EMBEDDING_API_KEY is required for RAG evaluation. DEEPSEEK_API_KEY is not required.');
+    throw new Error('EMBEDDING_API_KEY is required for RAG evaluation. An LLM key is not required when query rewrite is disabled.');
   }
   if (
     ['1', 'true', 'on', 'yes'].includes((process.env.RAG_QUERY_REWRITE ?? '').trim().toLowerCase())
-    && !process.env.DEEPSEEK_API_KEY
+    && !configuredLlm.llm
   ) {
-    throw new Error('DEEPSEEK_API_KEY is required when RAG_QUERY_REWRITE is enabled.');
+    throw new Error(`${configuredLlm.providerName} API key is required when RAG_QUERY_REWRITE is enabled.`);
   }
 
   const collection = process.env.RAG_EVAL_COLLECTION ?? process.env.QDRANT_COLLECTION;

@@ -2,7 +2,7 @@ import { artifactStore } from '../artifacts/store.js';
 import { resolveDocumentSpec } from '../documents/presets.js';
 import { renderWordDocument } from '../documents/renderer.js';
 import { parseDocumentSpec } from '../documents/schema.js';
-import type { ToolContext } from './registry.js';
+import type { ToolContext } from './contracts.js';
 
 export async function generateWordDocument(args: unknown, context?: ToolContext) {
   throwIfAborted(context?.signal);

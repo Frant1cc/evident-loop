@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import { runAgentLoop } from '../agent/agentLoop.js';
+import type { LlmProvider } from '../llm/contracts.js';
+import { resolveLlmProvider } from '../llm/provider.js';
 import { executeToolCall } from '../tools/index.js';
 import {
   completeToolExecution,
@@ -38,7 +40,8 @@ const activeTaskRuns = new Set<string>();
 
 export async function executeAgentTask(options: {
   id: string;
-  apiKey: string;
+  apiKey?: string;
+  llm?: LlmProvider;
   model: string;
   signal?: AbortSignal;
   runStep?: AgentStepRunner;
@@ -57,7 +60,8 @@ export async function executeAgentTask(options: {
 
 export async function finalizeAgentTask(options: {
   id: string;
-  apiKey: string;
+  apiKey?: string;
+  llm?: LlmProvider;
   model: string;
   signal?: AbortSignal;
   reviewStep?: AgentStepReviewer;
@@ -71,7 +75,7 @@ export async function finalizeAgentTask(options: {
   }
 
   if (detail.task.status === 'completed') {
-    const writeArtifact = options.writeArtifact ?? createModelArtifactWriter(options.apiKey, options.model);
+    const writeArtifact = options.writeArtifact ?? createModelArtifactWriter(resolveLlmProvider(options), options.model);
     const draft = await writeArtifact({
       task: detail.task,
       steps: detail.steps,
@@ -96,7 +100,8 @@ export async function finalizeAgentTask(options: {
 
 async function executeAgentTaskInternal(options: {
   id: string;
-  apiKey: string;
+  apiKey?: string;
+  llm?: LlmProvider;
   model: string;
   signal?: AbortSignal;
   runStep?: AgentStepRunner;
@@ -119,7 +124,7 @@ async function executeAgentTaskInternal(options: {
       const startedAt = new Date().toISOString();
       appendEvent(detail.task.id, 'review_started', { stepId: unreviewedStep.id, sequence: unreviewedStep.sequence }, startedAt);
       try {
-        const reviewStep = options.reviewStep ?? createModelStepReviewer(options.apiKey, options.model);
+        const reviewStep = options.reviewStep ?? createModelStepReviewer(resolveLlmProvider(options), options.model);
         const reviewEvidence = detail.evidence.filter((item) => item.stepId === unreviewedStep.id);
         const reviewClaims = detail.claims.filter((claim) => claim.stepId === unreviewedStep.id);
         const reviewEvidenceIds = new Set(reviewEvidence.map((item) => item.id));
@@ -153,7 +158,7 @@ async function executeAgentTaskInternal(options: {
       if (detail.steps.every((step) => step.status === 'completed' || step.status === 'skipped')) {
         if (!detail.artifacts.length) {
           try {
-            const writeArtifact = options.writeArtifact ?? createModelArtifactWriter(options.apiKey, options.model);
+            const writeArtifact = options.writeArtifact ?? createModelArtifactWriter(resolveLlmProvider(options), options.model);
             const draft = await writeArtifact({
               task: detail.task,
               steps: detail.steps,
@@ -184,7 +189,7 @@ async function executeAgentTaskInternal(options: {
 
     let phase: 'step_execution' | 'evidence_chain' = 'step_execution';
     try {
-      const runStep = options.runStep ?? createDefaultStepRunner(options.apiKey, options.model);
+      const runStep = options.runStep ?? createDefaultStepRunner(resolveLlmProvider(options), options.model);
       const output = await runStep({
         task: detail.task,
         step: activeStep,
@@ -199,7 +204,7 @@ async function executeAgentTaskInternal(options: {
       const refreshed = getAgentTaskDetail(detail.task.id);
       if (!refreshed) throw new Error('Agent task disappeared before evidence extraction');
       const buildEvidenceChain = options.buildEvidenceChain
-        ?? createModelEvidenceChainBuilder(options.apiKey, options.model);
+        ?? createModelEvidenceChainBuilder(resolveLlmProvider(options), options.model);
       const chain = await buildEvidenceChain({
         task: refreshed.task,
         step: activeStep,
@@ -225,10 +230,10 @@ async function executeAgentTaskInternal(options: {
   return detail;
 }
 
-function createDefaultStepRunner(apiKey: string, model: string): AgentStepRunner {
+function createDefaultStepRunner(llm: LlmProvider, model: string): AgentStepRunner {
   return async ({ task, step, completedSteps, signal }) => {
     const result = await runAgentLoop({
-      apiKey,
+      llm,
       model,
       systemPrompt: executorSystemPrompt,
       message: buildStepMessage(task, step, completedSteps),

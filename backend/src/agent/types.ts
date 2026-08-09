@@ -1,36 +1,8 @@
 import type { RagSource } from '../rag/types.js';
-
-export type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
-
-export type ChatMessage = {
-  role: ChatRole;
-  content: string;
-  tool_call_id?: string;
-  tool_calls?: ToolCall[];
-};
-
-export type ToolCall = {
-  id: string;
-  type: 'function';
-  function: {
-    name: string;
-    arguments: string;
-  };
-};
-
-export type DeepSeekChatResponse = {
-  choices?: Array<{
-    message?: ChatMessage;
-  }>;
-};
-
-export type ToolTrace = {
-  id: string;
-  name: string;
-  arguments: unknown;
-  result?: unknown;
-  error?: string;
-};
+import type { ToolTrace } from '../tools/contracts.js';
+export type { ChatMessage, ChatRole, ToolCall } from '../llm/contracts.js';
+export type { ChatCompletion as DeepSeekChatResponse } from '../llm/contracts.js';
+export type { ToolTrace } from '../tools/contracts.js';
 
 export type ParsedToolCall = {
   id: string;

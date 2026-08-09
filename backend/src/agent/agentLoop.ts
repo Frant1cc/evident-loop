@@ -1,7 +1,8 @@
 import { getRagSourcesFromToolTraces } from '../rag/index.js';
+import type { LlmProvider } from '../llm/contracts.js';
+import { resolveLlmProvider } from '../llm/provider.js';
 import { getToolDefinitions } from '../tools/definitions.js';
 import { DEFAULT_MAX_TOOL_ROUNDS } from './config.js';
-import { createDeepSeekChatCompletion } from './deepseekClient.js';
 import {
   executeToolRound,
   type AgentLoopEvent,
@@ -24,7 +25,8 @@ const leakedMarkupCorrectionPrompt =
 export type { AgentLoopEvent } from './toolRound.js';
 
 export type RunAgentLoopOptions = {
-  apiKey: string;
+  apiKey?: string;
+  llm?: LlmProvider;
   message: string;
   model: string;
   systemPrompt: string;
@@ -44,6 +46,7 @@ export type RunAgentLoopOptions = {
 
 export async function runAgentLoop({
   apiKey,
+  llm: providedLlm,
   message,
   model,
   systemPrompt,
@@ -57,6 +60,7 @@ export async function runAgentLoop({
   requiredToolName,
   executeTool
 }: RunAgentLoopOptions): Promise<AgentLoopResult> {
+  const llm = resolveLlmProvider({ llm: providedLlm, apiKey });
   const messages: ChatMessage[] = [
     { role: 'system', content: systemPrompt },
     ...contextMessages,
@@ -91,7 +95,7 @@ export async function runAgentLoop({
       ? tools.filter((tool) => tool.function.name !== 'retrieve_web_evidence')
       : tools;
     const roundResult = await executeToolRound({
-      apiKey,
+      llm,
       model,
       messages,
       tools: roundTools,
@@ -220,7 +224,7 @@ export async function runAgentLoop({
     });
 
     const reservedRound = await executeToolRound({
-      apiKey,
+      llm,
       model,
       messages,
       tools: reservedTools,
@@ -252,7 +256,7 @@ export async function runAgentLoop({
       role: 'system',
       content: 'Tool rounds are complete. Answer now using the available tool results. Do not call tools. If the evidence is insufficient, say so clearly.'
     });
-    const completion = await createDeepSeekChatCompletion({ apiKey, model, messages, temperature, signal });
+    const completion = await llm.complete({ model, messages, temperature, signal });
     const assistantMessage = completion.choices?.[0]?.message;
 
     if (!assistantMessage) {

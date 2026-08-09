@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { createDeepSeekChatCompletion } from '../agent/deepseekClient.js';
+import type { LlmProvider } from '../llm/contracts.js';
 import { appendEvent, insertArtifact, runInTransaction } from './store.js';
 import type {
   AgentArtifact,
@@ -41,10 +41,9 @@ export type AgentArtifactWriter = (context: {
   signal?: AbortSignal;
 }) => Promise<{ title: string; content: string }>;
 
-export function createModelArtifactWriter(apiKey: string, model: string): AgentArtifactWriter {
+export function createModelArtifactWriter(llm: LlmProvider, model: string): AgentArtifactWriter {
   return async ({ task, steps, reviews, evidenceGaps, sources, evidence, claims, claimEvidence, signal }) => {
-    const completion = await createDeepSeekChatCompletion({
-      apiKey,
+    const completion = await llm.complete({
       model,
       messages: [
         { role: 'system', content: writerSystemPrompt },

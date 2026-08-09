@@ -2,11 +2,11 @@ import { Router } from 'express';
 
 import { DEFAULT_MAX_TOOL_ROUNDS } from '../agent/config.js';
 import { runAgentLoop } from '../agent/agentLoop.js';
-import { DeepSeekApiError } from '../agent/deepseekClient.js';
+import { createConfiguredLlm } from '../llm/config.js';
+import { LlmProviderApiError } from '../llm/openAiCompatibleClient.js';
 import { failure, success } from '../response.js';
 import { isExplicitWordDocumentRequest } from '../tools/wordDocumentTool.js';
 
-const DEFAULT_MODEL = 'deepseek-v4-flash';
 const AGENT_SYSTEM_PROMPT = `You are EvidentLoop, an evidence-first durable research agent.
 
 Use tools when they help answer with real local project data.
@@ -34,10 +34,10 @@ Rules:
 export const agentRouter = Router();
 
 agentRouter.post('/agent/chat', async (req, res) => {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
+  const configuredLlm = createConfiguredLlm();
 
-  if (!apiKey) {
-    res.status(500).json(failure('DEEPSEEK_API_KEY is not configured'));
+  if (!configuredLlm.llm) {
+    res.status(500).json(failure(`${configuredLlm.providerName} API key is not configured`));
     return;
   }
 
@@ -58,9 +58,9 @@ agentRouter.post('/agent/chat', async (req, res) => {
 
   try {
     const result = await runAgentLoop({
-      apiKey,
+      llm: configuredLlm.llm,
       message,
-      model: process.env.DEEPSEEK_MODEL ?? DEFAULT_MODEL,
+      model: configuredLlm.model,
       systemPrompt: AGENT_SYSTEM_PROMPT,
       maxToolRounds: DEFAULT_MAX_TOOL_ROUNDS,
       requiredToolName: isExplicitWordDocumentRequest(message)
@@ -74,7 +74,7 @@ agentRouter.post('/agent/chat', async (req, res) => {
     // Connection is already gone; nothing to respond to.
     if (controller.signal.aborted) return;
 
-    if (error instanceof DeepSeekApiError) {
+    if (error instanceof LlmProviderApiError) {
       // 401/403 mean a misconfigured key on our side; anything else is an upstream failure.
       const isConfigIssue = error.status === 401 || error.status === 403;
       res.status(isConfigIssue ? 500 : 502).json(failure(error.message));

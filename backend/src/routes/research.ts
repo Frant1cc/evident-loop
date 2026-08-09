@@ -1,178 +1,132 @@
 import { Router } from 'express';
 
-import { getToolDefinitions } from '../tools/definitions.js';
-import { toolRegistry } from '../tools/registry.js';
+import { LlmNotConfiguredError } from '../llm/errors.js';
+import type { ResearchApplication, ResearchRunStatus } from '../modules/research/index.js';
 import { failure, success } from '../response.js';
-import { buildResearchContext } from '../research/context.js';
-import {
-  cancelResearchRun,
-  createAndStartResearchRun,
-  getResearchRunSnapshot,
-  subscribeToResearchRun
-} from '../research/service.js';
-import {
-  createResearchConversation,
-  createResearchNote,
-  deleteResearchConversation,
-  deleteResearchNote,
-  getActiveResearchRun,
-  getResearchConversation,
-  getResearchConversationDetail,
-  getResearchRun,
-  listResearchConversations,
-  listResearchMessages,
-  updateResearchNote
-} from '../research/store.js';
-import type { ResearchRunStatus } from '../research/types.js';
 import { createSseStream } from '../sse.js';
 
-export const researchRouter = Router();
+/** HTTP/SSE adapter for research use cases. Persistence and tools are hidden behind the application boundary. */
+export function createResearchRouter(research: ResearchApplication) {
+  const router = Router();
 
-researchRouter.get('/research/tools', (_req, res) => {
-  res.json(
-    success({
-      tools: Object.values(toolRegistry).filter((tool) => tool.exposedToModel !== false).map((tool) => ({
-        name: tool.definition.function.name,
-        label: tool.label,
-        description: tool.definition.function.description
-      }))
-    })
-  );
-});
-
-researchRouter.get('/research/conversations', (_req, res) => {
-  res.json(success({ conversations: listResearchConversations() }));
-});
-
-researchRouter.post('/research/conversations', (_req, res) => {
-  res.status(201).json(success({ conversation: createResearchConversation() }));
-});
-
-researchRouter.get('/research/conversations/:conversationId', (req, res) => {
-  const conversation = getResearchConversation(req.params.conversationId);
-  if (!conversation) {
-    res.status(404).json(failure('Research conversation not found'));
-    return;
-  }
-
-  const { promptPreview } = buildResearchContext(conversation, listResearchMessages(conversation.id), '');
-  res.json(success(getResearchConversationDetail(conversation.id, promptPreview)));
-});
-
-researchRouter.delete('/research/conversations/:conversationId', (req, res) => {
-  if (getActiveResearchRun(req.params.conversationId)) {
-    res.status(409).json(failure('Stop the active research task before deleting this conversation'));
-    return;
-  }
-  if (!deleteResearchConversation(req.params.conversationId)) {
-    res.status(404).json(failure('Research conversation not found'));
-    return;
-  }
-
-  res.json(success({ deleted: true }));
-});
-
-researchRouter.post('/research/conversations/:conversationId/notes', (req, res) => {
-  const conversationId = req.params.conversationId;
-  if (!getResearchConversation(conversationId)) {
-    res.status(404).json(failure('Research conversation not found'));
-    return;
-  }
-
-  const content = String(req.body?.content ?? '').trim();
-  if (!content) {
-    res.status(400).json(failure('content is required'));
-    return;
-  }
-
-  res.status(201).json(success({ note: createResearchNote(conversationId, content) }));
-});
-
-researchRouter.put('/research/notes/:noteId', (req, res) => {
-  const content = String(req.body?.content ?? '').trim();
-  if (!content) {
-    res.status(400).json(failure('content is required'));
-    return;
-  }
-
-  const note = updateResearchNote(req.params.noteId, content);
-  if (!note) {
-    res.status(404).json(failure('Research note not found'));
-    return;
-  }
-
-  res.json(success({ note }));
-});
-
-researchRouter.delete('/research/notes/:noteId', (req, res) => {
-  if (!deleteResearchNote(req.params.noteId)) {
-    res.status(404).json(failure('Research note not found'));
-    return;
-  }
-
-  res.json(success({ deleted: true }));
-});
-
-researchRouter.post('/research/conversations/:conversationId/messages', (req, res) => {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
-  if (!apiKey) {
-    res.status(500).json(failure('DEEPSEEK_API_KEY is not configured'));
-    return;
-  }
-
-  const content = String(req.body?.content ?? '').trim();
-  if (!content) {
-    res.status(400).json(failure('content is required'));
-    return;
-  }
-
-  try {
-    const started = createAndStartResearchRun({
-      conversationId: req.params.conversationId,
-      content,
-      allowedToolNames: parseAllowedToolNames(req.body?.allowedTools),
-      apiKey,
-      model: process.env.DEEPSEEK_MODEL
-    });
-    res.status(202).json(success(started, 'Research task queued'));
-  } catch (error) {
-    const message = getErrorMessage(error);
-    res.status(message === 'Research conversation not found' ? 404 : 409).json(failure(message));
-  }
-});
-
-researchRouter.get('/research/runs/:runId/events', (req, res) => {
-  const initial = getResearchRunSnapshot(req.params.runId);
-  if (!initial) {
-    res.status(404).json(failure('Research task not found'));
-    return;
-  }
-
-  const stream = createSseStream(res);
-  const unsubscribe = subscribeToResearchRun(initial.run.id, (event) => {
-    stream.send(event.type, event);
-    if (event.type === 'done' || event.type === 'error') stream.close();
+  router.get('/research/tools', (_req, res) => {
+    res.json(success({ tools: research.listTools() }));
   });
-  stream.onClose(unsubscribe);
 
-  stream.send('snapshot', initial);
-  if (isTerminal(initial.run.status)) stream.close();
-});
+  router.get('/research/conversations', (_req, res) => {
+    res.json(success({ conversations: research.listConversations() }));
+  });
 
-researchRouter.post('/research/runs/:runId/cancel', (req, res) => {
-  const current = getResearchRun(req.params.runId);
-  if (!current) {
-    res.status(404).json(failure('Research task not found'));
-    return;
-  }
-  const run = cancelResearchRun(current.id);
-  res.json(success({ run }, run?.status === 'cancelled' ? 'Research task stopped' : 'Research task already finished'));
-});
+  router.post('/research/conversations', (_req, res) => {
+    res.status(201).json(success({ conversation: research.createConversation() }));
+  });
 
-function parseAllowedToolNames(value: unknown) {
-  if (!Array.isArray(value)) return undefined;
-  const registered = new Set(getToolDefinitions().map((tool) => tool.function.name));
-  return value.filter((name): name is string => typeof name === 'string' && registered.has(name));
+  router.get('/research/conversations/:conversationId', (req, res) => {
+    const detail = research.getConversation(req.params.conversationId);
+    if (!detail) {
+      res.status(404).json(failure('Research conversation not found'));
+      return;
+    }
+    res.json(success(detail));
+  });
+
+  router.delete('/research/conversations/:conversationId', (req, res) => {
+    try {
+      if (!research.deleteConversation(req.params.conversationId)) {
+        res.status(404).json(failure('Research conversation not found'));
+        return;
+      }
+      res.json(success({ deleted: true }));
+    } catch (error) {
+      res.status(409).json(failure(getErrorMessage(error)));
+    }
+  });
+
+  router.post('/research/conversations/:conversationId/notes', (req, res) => {
+    const content = String(req.body?.content ?? '').trim();
+    if (!content) {
+      res.status(400).json(failure('content is required'));
+      return;
+    }
+    const note = research.createNote(req.params.conversationId, content);
+    if (!note) {
+      res.status(404).json(failure('Research conversation not found'));
+      return;
+    }
+    res.status(201).json(success({ note }));
+  });
+
+  router.put('/research/notes/:noteId', (req, res) => {
+    const content = String(req.body?.content ?? '').trim();
+    if (!content) {
+      res.status(400).json(failure('content is required'));
+      return;
+    }
+    const note = research.updateNote(req.params.noteId, content);
+    if (!note) {
+      res.status(404).json(failure('Research note not found'));
+      return;
+    }
+    res.json(success({ note }));
+  });
+
+  router.delete('/research/notes/:noteId', (req, res) => {
+    if (!research.deleteNote(req.params.noteId)) {
+      res.status(404).json(failure('Research note not found'));
+      return;
+    }
+    res.json(success({ deleted: true }));
+  });
+
+  router.post('/research/conversations/:conversationId/messages', (req, res) => {
+    const content = String(req.body?.content ?? '').trim();
+    if (!content) {
+      res.status(400).json(failure('content is required'));
+      return;
+    }
+    try {
+      const started = research.startMessage(
+        req.params.conversationId,
+        content,
+        research.normalizeAllowedTools(req.body?.allowedTools)
+      );
+      res.status(202).json(success(started, 'Research task queued'));
+    } catch (error) {
+      const message = getErrorMessage(error);
+      const status = error instanceof LlmNotConfiguredError
+        ? 500
+        : message === 'Research conversation not found' ? 404 : 409;
+      res.status(status).json(failure(message));
+    }
+  });
+
+  router.get('/research/runs/:runId/events', (req, res) => {
+    const initial = research.getRunSnapshot(req.params.runId);
+    if (!initial) {
+      res.status(404).json(failure('Research task not found'));
+      return;
+    }
+    const stream = createSseStream(res);
+    const unsubscribe = research.subscribeToRun(initial.run.id, (event) => {
+      stream.send(event.type, event);
+      if (event.type === 'done' || event.type === 'error') stream.close();
+    });
+    stream.onClose(unsubscribe);
+    stream.send('snapshot', initial);
+    if (isTerminal(initial.run.status)) stream.close();
+  });
+
+  router.post('/research/runs/:runId/cancel', (req, res) => {
+    const current = research.getRun(req.params.runId);
+    if (!current) {
+      res.status(404).json(failure('Research task not found'));
+      return;
+    }
+    const run = research.cancelRun(current.id);
+    res.json(success({ run }, run?.status === 'cancelled' ? 'Research task stopped' : 'Research task already finished'));
+  });
+
+  return router;
 }
 
 function isTerminal(status: ResearchRunStatus) {
