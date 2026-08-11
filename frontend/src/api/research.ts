@@ -9,6 +9,7 @@ import type {
   ResearchStep
 } from '../types/research';
 import { consumeResumableSse } from './resumableSse';
+import type { StreamConnectionState } from '../types/streaming';
 
 type ApiResponse<T> = {
   code: 0 | 1;
@@ -97,7 +98,8 @@ export function cancelResearchRun(runId: string) {
 export async function streamResearchRun(
   runId: string,
   onEvent: (event: ResearchStreamEvent) => void,
-  signal: AbortSignal
+  signal: AbortSignal,
+  onStatus?: (state: StreamConnectionState) => void
 ) {
   await consumeResumableSse({
     url: `/api/research/runs/${encodeURIComponent(runId)}/events`,
@@ -108,7 +110,8 @@ export async function streamResearchRun(
       const eventName = envelope.type === 'snapshot' ? 'snapshot' : String(payload.type ?? envelope.type);
       const event = toResearchStreamEvent(eventName, payload);
       if (event) onEvent(event);
-    }
+    },
+    ...(onStatus ? { onStatus } : {})
   });
 }
 

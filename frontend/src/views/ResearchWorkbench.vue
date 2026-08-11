@@ -38,6 +38,7 @@ import type {
   ResearchSource,
   ResearchStep
 } from '../types/research';
+import type { StreamConnectionState } from '../types/streaming';
 
 const conversations = ref<ResearchConversation[]>([]);
 const activeConversationId = ref<string>();
@@ -65,6 +66,22 @@ const enabledTools = ref<Record<string, boolean>>({});
 const previewArtifact = ref<WordArtifact>();
 let requestController: AbortController | undefined;
 let subscriptionSequence = 0;
+
+// §5.5: low-noise connection status. Reconnects under 1s stay silent; a longer
+// recovery shows a hint, and a successful recovery briefly shows "已恢复".
+const connectionState = ref<StreamConnectionState>('open');
+const reconnectingSince = ref<number>();
+const recovered = ref(false);
+const showReconnecting = ref(false);
+let reconnectHintTimer: number | undefined;
+let recoveredTimer: number | undefined;
+
+const connectionHint = computed(() => {
+  if (connectionState.value === 'failed') return '连接中断，可重新连接';
+  if (showReconnecting.value) return '正在恢复连接…';
+  if (recovered.value) return '已恢复';
+  return '';
+});
 
 const sidebarBounds: PanelWidthBounds = { defaultWidth: 220, min: 168, max: 420 };
 const inspectorBounds: PanelWidthBounds = { defaultWidth: 400, min: 280, max: 720 };
@@ -197,7 +214,10 @@ function connectToRun(run: ResearchRun) {
   const controller = new AbortController();
   const sequence = ++subscriptionSequence;
   requestController = controller;
-  void streamResearchRun(run.id, handleStreamEvent, controller.signal)
+  resetConnectionHint();
+  void streamResearchRun(run.id, handleStreamEvent, controller.signal, (state) => {
+    if (sequence === subscriptionSequence) handleConnectionStatus(state);
+  })
     .catch(async (err) => {
       if ((err as Error).name === 'AbortError' || sequence !== subscriptionSequence) return;
       error.value = err instanceof Error ? `${err.message}，任务仍在后台运行。` : '研究进度连接已断开，任务仍在后台运行。';
@@ -210,11 +230,64 @@ function connectToRun(run: ResearchRun) {
     });
 }
 
+function handleConnectionStatus(state: StreamConnectionState) {
+  connectionState.value = state;
+
+  if (state === 'reconnecting') {
+    if (reconnectingSince.value === undefined) reconnectingSince.value = Date.now();
+    recovered.value = false;
+    if (reconnectHintTimer === undefined) {
+      // Only surface a hint if the outage lasts longer than 1s (§5.5).
+      reconnectHintTimer = window.setTimeout(() => {
+        if (connectionState.value === 'reconnecting' || connectionState.value === 'connecting') {
+          showReconnecting.value = true;
+        }
+      }, 1_000);
+    }
+    return;
+  }
+
+  if (state === 'open' || state === 'completed') {
+    const wasRecovering = reconnectingSince.value !== undefined || showReconnecting.value;
+    clearReconnectHintTimer();
+    reconnectingSince.value = undefined;
+    if (wasRecovering && showReconnecting.value) {
+      showReconnecting.value = false;
+      recovered.value = true;
+      if (recoveredTimer !== undefined) window.clearTimeout(recoveredTimer);
+      recoveredTimer = window.setTimeout(() => (recovered.value = false), 1_500);
+    } else {
+      showReconnecting.value = false;
+    }
+  }
+}
+
+function resetConnectionHint() {
+  connectionState.value = 'connecting';
+  reconnectingSince.value = undefined;
+  showReconnecting.value = false;
+  recovered.value = false;
+  clearReconnectHintTimer();
+  if (recoveredTimer !== undefined) {
+    window.clearTimeout(recoveredTimer);
+    recoveredTimer = undefined;
+  }
+}
+
+function clearReconnectHintTimer() {
+  if (reconnectHintTimer !== undefined) {
+    window.clearTimeout(reconnectHintTimer);
+    reconnectHintTimer = undefined;
+  }
+}
+
 function disconnectResearchStream() {
   subscriptionSequence += 1;
   requestController?.abort();
   requestController = undefined;
   messageRenderer.flush();
+  resetConnectionHint();
+  connectionState.value = 'open';
 }
 
 function handleStreamEvent(event: ResearchStreamEvent) {
@@ -405,6 +478,10 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
       </div>
       <footer class="border-t border-[var(--agent-border)] p-4">
         <p v-if="error" class="m-0 mb-2 text-sm font-semibold text-[var(--agent-error-text)]">{{ error }}</p>
+        <p v-if="connectionHint" class="m-0 mb-2 inline-flex items-center gap-1.5 text-xs font-semibold" :class="connectionState === 'failed' ? 'text-[var(--agent-error-text)]' : 'text-[var(--agent-text-muted)]'">
+          <PhCircleNotch v-if="connectionState === 'reconnecting' || connectionState === 'connecting'" class="animate-spin" :size="13" />
+          {{ connectionHint }}
+        </p>
         <div v-if="loading" class="mb-3 flex items-center justify-between gap-3 rounded-md border border-[var(--agent-selected-border)] bg-[var(--agent-selected-bg)] px-3 py-2 text-[var(--agent-selected-text)]">
           <span class="inline-flex min-w-0 items-center gap-2 text-xs font-semibold"><PhCircleNotch class="shrink-0 animate-spin" :size="15" /><span class="truncate">后台研究中 · 离开页面不会中断</span></span>
           <button type="button" class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-[var(--agent-error-text)]/30 bg-[var(--agent-surface)] px-2.5 text-xs font-bold text-[var(--agent-error-text)] hover:bg-[var(--agent-error-bg)] disabled:cursor-wait disabled:opacity-60" :disabled="stopping" @click="stopResearch"><PhCircleNotch v-if="stopping" class="animate-spin" :size="14" /><PhStopCircle v-else :size="14" weight="fill" />{{ stopping ? '停止中' : '停止研究' }}</button>

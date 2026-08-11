@@ -1,5 +1,7 @@
 import { onScopeDispose, type Ref } from 'vue';
 
+import { StreamRenderScheduler, type PendingMessageDelta } from '../streaming/StreamRenderScheduler';
+
 type StreamMessage = {
   id: string;
   content: string;
@@ -7,32 +9,40 @@ type StreamMessage = {
 
 export function useStreamingMessageRenderer<Message extends StreamMessage>(
   messages: Ref<Message[]>,
-  options: { flushIntervalMs?: number } = {}
+  _options: { flushIntervalMs?: number } = {}
 ) {
-  const flushIntervalMs = options.flushIntervalMs ?? 80;
-  const pendingChunks = new Map<string, string[]>();
-  const pendingTimers = new Map<string, number>();
+  const scheduler = new StreamRenderScheduler({
+    now: () => performance.now(),
+    requestAnimationFrame: (cb) => window.requestAnimationFrame(cb),
+    cancelAnimationFrame: (handle) => window.cancelAnimationFrame(handle),
+    setTimeout: (cb, ms) => window.setTimeout(cb, ms),
+    clearTimeout: (handle) => window.clearTimeout(handle),
+    isDocumentHidden: () => document.hidden,
+    onFlush: commit
+  });
+
+  function commit(batch: PendingMessageDelta[]) {
+    for (const entry of batch) {
+      const index = messages.value.findIndex((message) => message.id === entry.messageId);
+      if (index === -1) continue;
+      const current = messages.value[index]!;
+      // One join and one reference replacement per message (plan §5.3 steps 2–3).
+      messages.value[index] = { ...current, content: `${current.content}${entry.chunks.join('')}` };
+    }
+  }
 
   function append(messageId: string, content: string) {
-    if (!content) return;
-    const chunks = pendingChunks.get(messageId) ?? [];
-    chunks.push(content);
-    pendingChunks.set(messageId, chunks);
-    if (pendingTimers.has(messageId)) return;
-
-    pendingTimers.set(messageId, window.setTimeout(() => flush(messageId), flushIntervalMs));
+    scheduler.enqueue(messageId, content);
   }
 
   function flush(messageId?: string) {
-    if (messageId !== undefined) {
-      flushMessage(messageId);
-      return;
-    }
-    for (const id of [...pendingChunks.keys()]) flushMessage(id);
+    if (messageId !== undefined) scheduler.flushMessage(messageId);
+    else scheduler.flushAll();
   }
 
   function upsert(message: Message) {
-    flushMessage(message.id);
+    // Flush any buffered deltas before we overwrite the message wholesale.
+    scheduler.flushMessage(message.id);
     const index = messages.value.findIndex((current) => current.id === message.id);
     if (index === -1) messages.value.push(message);
     else messages.value[index] = message;
@@ -44,24 +54,7 @@ export function useStreamingMessageRenderer<Message extends StreamMessage>(
   }
 
   function reset() {
-    for (const timer of pendingTimers.values()) window.clearTimeout(timer);
-    pendingTimers.clear();
-    pendingChunks.clear();
-  }
-
-  function flushMessage(messageId: string) {
-    const timer = pendingTimers.get(messageId);
-    if (timer !== undefined) window.clearTimeout(timer);
-    pendingTimers.delete(messageId);
-
-    const chunks = pendingChunks.get(messageId);
-    pendingChunks.delete(messageId);
-    if (!chunks?.length) return;
-
-    const index = messages.value.findIndex((message) => message.id === messageId);
-    if (index === -1) return;
-    const current = messages.value[index]!;
-    messages.value[index] = { ...current, content: `${current.content}${chunks.join('')}` };
+    scheduler.dispose();
   }
 
   onScopeDispose(reset);
