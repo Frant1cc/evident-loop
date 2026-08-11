@@ -437,7 +437,7 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
 
 <template>
   <section
-    class="relative grid min-h-0 h-full grid-cols-[var(--sidebar-width)_minmax(0,1fr)_var(--inspector-width)] max-md:grid-cols-1 max-md:grid-rows-[auto_minmax(380px,1fr)_auto]"
+    class="relative grid h-full min-h-0 grid-cols-[var(--sidebar-width)_minmax(0,1fr)_var(--inspector-width)] grid-rows-[minmax(0,1fr)] overflow-hidden max-md:grid-cols-1 max-md:grid-rows-[auto_minmax(380px,1fr)_auto] max-md:overflow-y-auto"
     :style="{ '--sidebar-width': sidebarTrack, '--inspector-width': inspectorTrack }"
   >
     <ResearchConversationSidebar :conversations="conversations" :active-conversation-id="activeConversationId" :collapsed="collapsed" :busy="deleting" @create="createConversation" @select="selectConversation" @delete="deleteTarget = $event" @toggle="collapsed = !collapsed" />

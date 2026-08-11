@@ -120,7 +120,7 @@ function removeCitationsFromLinks(html: string) {
   return template.innerHTML;
 }
 
-function normalizeLanguage(value?: string) {
+export function normalizeLanguage(value?: string) {
   const language = value?.trim().split(/\s+/, 1)[0]?.toLowerCase() ?? '';
   const aliases: Record<string, string> = {
     cjs: 'javascript',
@@ -144,7 +144,7 @@ function normalizeLanguage(value?: string) {
   return aliases[language] ?? language.replace(/[^a-z0-9_+#.-]/g, '');
 }
 
-function getLanguageLabel(language: string) {
+export function getLanguageLabel(language: string) {
   const labels: Record<string, string> = {
     bash: 'Shell',
     cpp: 'C++',

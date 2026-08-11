@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",
-    "test": "tsx --test src/streaming/*.test.ts",
+    "test": "tsx --test src/streaming/*.test.ts src/markdown/*.test.ts",
     "typecheck": "vue-tsc -b --noEmit && tsc -p tsconfig.test.json --noEmit"
   },
   "dependencies": {
