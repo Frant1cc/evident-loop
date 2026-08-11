@@ -17,6 +17,8 @@ export const dbPath = process.env.SQLITE_DB_PATH ?? defaultDbPath;
 mkdirSync(dirname(dbPath), { recursive: true });
 
 export const sqlite = new Database(dbPath);
+sqlite.pragma('journal_mode = WAL');
+sqlite.pragma('busy_timeout = 5000');
 sqlite.pragma('foreign_keys = ON');
 export const db = drizzle({ client: sqlite });
 
@@ -114,6 +116,19 @@ export const initDb = () => {
       FOREIGN KEY (user_message_id) REFERENCES research_messages(id) ON DELETE CASCADE,
       FOREIGN KEY (assistant_message_id) REFERENCES research_messages(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS stream_events (
+      stream_id TEXT NOT NULL,
+      sequence INTEGER NOT NULL,
+      event_type TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      occurred_at TEXT NOT NULL,
+      PRIMARY KEY (stream_id, sequence)
+    );
+
+    CREATE INDEX IF NOT EXISTS stream_events_occurred_at_idx
+      ON stream_events (occurred_at);
+
 
     CREATE TABLE IF NOT EXISTS research_steps (
       id TEXT PRIMARY KEY,

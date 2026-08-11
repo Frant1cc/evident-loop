@@ -17,6 +17,9 @@ importers:
 
   backend:
     dependencies:
+      '@evident-loop/stream-protocol':
+        specifier: workspace:*
+        version: link:../packages/stream-protocol
       '@qdrant/js-client-rest':
         specifier: ^1.18.0
         version: 1.18.0(typescript@5.9.3)
@@ -63,6 +66,9 @@ importers:
 
   frontend:
     dependencies:
+      '@evident-loop/stream-protocol':
+        specifier: workspace:*
+        version: link:../packages/stream-protocol
       '@phosphor-icons/vue':
         specifier: ^2.2.1
         version: 2.2.1(vue@3.5.39(typescript@5.9.3))
@@ -106,6 +112,8 @@ importers:
       vue-tsc:
         specifier: ^2.2.0
         version: 2.2.12(typescript@5.9.3)
+
+  packages/stream-protocol: {}
 
 packages:
 

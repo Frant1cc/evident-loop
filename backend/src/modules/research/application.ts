@@ -22,6 +22,7 @@ import {
 } from '../../research/store.js';
 import { getToolDefinitions } from '../../tools/definitions.js';
 import type { ToolCatalog } from '../../tools/contracts.js';
+import { getMaxSequence, listStreamEventsAfter } from '../../streaming/eventStore.js';
 
 export type ResearchApplicationDependencies = {
   llm?: LlmProvider;
@@ -78,6 +79,8 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
     getRun: getResearchRun,
     getRunSnapshot: getResearchRunSnapshot,
     subscribeToRun: subscribeToResearchRun,
+    getStreamEventsAfter: listStreamEventsAfter,
+    getStreamMaxSequence: getMaxSequence,
     cancelRun: cancelResearchRun
   };
 }

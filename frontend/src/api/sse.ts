@@ -8,19 +8,22 @@ export async function consumeSse(options: {
   url: string;
   method?: 'GET' | 'POST';
   body?: unknown;
+  headers?: Record<string, string>;
   signal?: AbortSignal;
   onMessage: (message: SseMessage) => void;
+  onActivity?: () => void;
 }) {
-  const headers = options.body === undefined ? undefined : { 'Content-Type': 'application/json' };
+  const headers: Record<string, string> = { ...options.headers };
+  if (options.body !== undefined) headers['Content-Type'] = 'application/json';
   const response = await fetch(options.url, {
     method: options.method,
-    headers,
+    headers: Object.keys(headers).length ? headers : undefined,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
     signal: options.signal
   });
 
   if (!response.ok || !response.body) {
-    throw new Error(await readApiError(response));
+    throw new SseHttpError(response.status, await readApiError(response));
   }
 
   const reader = response.body.getReader();
@@ -30,12 +33,20 @@ export async function consumeSse(options: {
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
+    options.onActivity?.();
     buffer += decoder.decode(value, { stream: true });
     buffer = parseSseChunk(buffer, options.onMessage);
   }
 
   buffer += decoder.decode();
   parseSseChunk(`${buffer}\n\n`, options.onMessage);
+}
+
+export class SseHttpError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+    this.name = 'SseHttpError';
+  }
 }
 
 export function parseSseJson<T>(message: SseMessage): T {
