@@ -121,6 +121,50 @@ test('expands the default budget for a single explicitly constrained domain', as
   assert.equal(result.diagnostics.budgetExhaustedBy, 'queries');
 });
 
+test('stops as soon as evaluator-required evidence points are covered', async () => {
+  const queries: string[] = [];
+  const result = await retrieveWebEvidence(
+    {
+      question: 'Search depth details', includeDomains: ['docs.example.com'], maxQueries: 4, maxPages: 8,
+      requiredEvidence: [
+        { id: 'values', label: 'values', groups: [['basic'], ['advanced']] },
+        { id: 'cost', label: 'cost', groups: [['advanced'], ['2 credits']] }
+      ]
+    },
+    {
+      dependencies: {
+        rewrite: async () => 'should never be used',
+        search: async ({ query }) => {
+          queries.push(query);
+          return { query, results: [{ title: 'Search API', url: 'https://docs.example.com/search', snippet: 'basic advanced 2 credits', score: 0.7 }] };
+        },
+        fetch: async (args) => page(String((args as { url: string }).url), 'Search depth supports basic and advanced. Advanced costs 2 credits.'.repeat(10))
+      }
+    }
+  );
+  assert.equal(result.verdict, 'sufficient');
+  assert.equal(result.diagnostics.queriesUsed, 1);
+  assert.match(result.diagnostics.stopReason, /All required evidence points/i);
+  assert.equal(queries.length, 1);
+});
+
+test('early-stops an expected-unanswerable question after two empty official searches', async () => {
+  let rewrites = 0;
+  const result = await retrieveWebEvidence(
+    { question: 'missing quantum parameter', includeDomains: ['docs.example.com'], expectNoAnswer: true },
+    {
+      dependencies: {
+        rewrite: async () => `missing quantum parameter ${++rewrites}`,
+        search: async ({ query }) => ({ query, results: [{ title: 'Overview', url: `https://docs.example.com/${rewrites}`, snippet: 'Generic documentation', score: 0.6 }] }),
+        fetch: async (args) => page(String((args as { url: string }).url), 'Unrelated release notes.'.repeat(30))
+      }
+    }
+  );
+  assert.equal(result.verdict, 'empty');
+  assert.equal(result.diagnostics.queriesUsed, 2);
+  assert.match(result.diagnostics.stopReason, /expected-unanswerable/i);
+});
+
 function page(url: string, content: string): FetchPageResult {
   return {
     url,

@@ -62,6 +62,9 @@ retrieve_web_evidence
 - `queryAttempts`：每次查询的搜索深度、结果数、最高分和选中 URL；
 - `pageAttempts`：每次页面抓取的分数、状态、Chunk 数和错误；
 - `sources`：可以进入研究来源面板和引用链的网页证据；
+- `claims`：从问题中提取的待验证事实，以及每条 Claim 的支持分数和来源 URL；
+- `coverageScore` / `coveredClaimCount` / `totalClaimCount`：问题覆盖情况；
+- `uncoveredClaims`：仍未被网页证据支持的具体事实；
 - `diagnostics`：查询数、抓取数、对应预算、具体耗尽项、独立域名数、耗时和停止原因。
 
 原有 `web_search` 与 `fetch_page` 仍保留为可执行的内部能力，但默认不再暴露给模型和前端工具开关，避免模型绕过评分、重写和预算控制。
@@ -271,8 +274,8 @@ backend/package.json
 验证结果：
 
 ```text
-联网模块测试：10/10 通过
-完整后端测试：79/79 通过
+联网模块测试：13/13 通过
+完整后端测试：93/93 通过
 前端 TypeScript/Vue 类型检查：通过
 ```
 

@@ -59,6 +59,41 @@ export const initDb = () => {
     CREATE INDEX IF NOT EXISTS rag_evaluations_created_at_idx
     ON rag_evaluations(created_at DESC);
 
+    CREATE TABLE IF NOT EXISTS web_evaluations (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed')),
+      completed_cases INTEGER NOT NULL DEFAULT 0,
+      total_cases INTEGER NOT NULL,
+      current_case_id TEXT,
+      config_json TEXT NOT NULL,
+      report_json TEXT,
+      error TEXT,
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      completed_at TEXT,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS web_evaluations_created_at_idx
+    ON web_evaluations(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS web_evaluation_cases (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      question TEXT NOT NULL,
+      category TEXT NOT NULL,
+      answerable INTEGER NOT NULL,
+      include_domains_json TEXT,
+      expected_domains_json TEXT NOT NULL,
+      expected_evidence_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS web_evaluation_cases_created_at_idx
+    ON web_evaluation_cases(created_at DESC);
+
     CREATE TABLE IF NOT EXISTS chat_conversations (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,

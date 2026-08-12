@@ -170,3 +170,78 @@ export type RagEvaluationDiff = {
   addedCases: RagEvaluationCaseChange[];
   removedCases: RagEvaluationCaseChange[];
 };
+
+export type WebEvaluationStatus = 'queued' | 'running' | 'completed' | 'failed';
+export type WebEvaluationCategory = 'official_api' | 'freshness' | 'multi_claim' | 'unanswerable';
+
+export type WebEvaluationCase = {
+  id: string;
+  title: string;
+  question: string;
+  category: WebEvaluationCategory;
+  answerable: boolean;
+  includeDomains?: string[];
+  timeRange?: 'day' | 'week' | 'month' | 'year';
+  expectedDomains: string[];
+  evidenceNeeds: Array<{ id: string; label: string }>;
+  custom?: boolean;
+};
+
+export type WebEvaluationCaseResult = {
+  id: string;
+  title: string;
+  question: string;
+  category: WebEvaluationCategory;
+  answerable: boolean;
+  verdict: 'sufficient' | 'weak' | 'empty' | 'exhausted';
+  score: number;
+  hitAtK: number;
+  reciprocalRank: number;
+  evidencePrecision: number;
+  evidenceRecall: number;
+  falseSufficient: boolean;
+  passed: boolean;
+  supportedNeeds: Array<{ id: string; label: string; supported: boolean }>;
+  retrieved: Array<{ rank: number; title: string; url: string; domain: string; score: number; relevant: boolean; supportedNeedIds: string[] }>;
+  queryCount: number;
+  pageCount: number;
+  durationMs: number;
+  coverageScore: number;
+  retrievalQueries: string[];
+  stopReason: string;
+};
+
+export type WebEvaluationMetrics = {
+  caseCount: number;
+  passRate: number;
+  hitAtK: number;
+  mrr: number;
+  evidencePrecision: number;
+  evidenceRecall: number;
+  falseSufficientCount: number;
+  falseSufficientRate: number;
+  avgQueryCount: number;
+  avgPageCount: number;
+  avgDurationMs: number;
+};
+
+export type WebEvaluation = {
+  id: string;
+  name: string;
+  status: WebEvaluationStatus;
+  completedCases: number;
+  totalCases: number;
+  currentCaseId?: string;
+  config: { caseIds: string[]; suiteVersion: number; k: number };
+  report?: { schemaVersion: 1; suiteVersion: number; evaluatedAt: string; durationMs: number; k: number; metrics: WebEvaluationMetrics; cases: WebEvaluationCaseResult[] };
+  error?: string;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  updatedAt: string;
+};
+
+export type WebEvaluationStreamEvent = {
+  type: 'snapshot' | 'progress' | 'completed' | 'failed';
+  evaluation: WebEvaluation;
+};

@@ -16,7 +16,7 @@ import ChatTabs from '../components/chat/ChatTabs.vue';
 import KnowledgeBasePanel from '../components/chat/KnowledgeBasePanel.vue';
 import { useStreamingMessageRenderer } from '../composables/useStreamingMessageRenderer';
 import ResearchWorkbench from './ResearchWorkbench.vue';
-import RagEvaluationView from './RagEvaluationView.vue';
+import EvaluationHubView from './EvaluationHubView.vue';
 import SettingsView from './SettingsView.vue';
 import TaskConsoleView from './TaskConsoleView.vue';
 import type { ChatConversation, ChatMessage } from '../types/chat';
@@ -219,7 +219,7 @@ function updateTabVisibility(visibility: TabVisibility) {
         <ChatPanel v-model="input" :conversation-id="activeConversationId" :messages="messages" :loading="loading" :error="error" @send="sendMessage" />
       </div>
       <ResearchWorkbench v-else-if="activeTab === 'research'" />
-      <RagEvaluationView v-else-if="activeTab === 'evaluations'" />
+      <EvaluationHubView v-else-if="activeTab === 'evaluations'" />
       <KnowledgeBasePanel v-else-if="activeTab === 'knowledge'" />
       <SettingsView v-else :tab-visibility="tabVisibility" @update:tab-visibility="updateTabVisibility" />
     </section>
