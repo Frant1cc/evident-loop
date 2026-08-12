@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 
+import { Badge } from '@/components/ui/badge';
 import type { ResearchStep } from '../../types/research';
 
 const props = defineProps<{
@@ -12,10 +13,10 @@ const emit = defineEmits<{ select: [step: ResearchStep] }>();
 
 const orderedSteps = computed(() => [...props.steps].sort((a, b) => a.sequence - b.sequence));
 
-function statusClass(status: ResearchStep['status']) {
-  if (status === 'error') return 'bg-[var(--agent-error-bg)] text-[var(--agent-error-text)]';
-  if (status === 'running') return 'bg-amber-100 text-amber-800';
-  return 'bg-[var(--agent-selected-bg)] text-[var(--agent-selected-text)]';
+function statusVariant(status: ResearchStep['status']) {
+  if (status === 'error') return 'destructive' as const;
+  if (status === 'running') return 'secondary' as const;
+  return 'outline' as const;
 }
 
 function statusLabel(status: ResearchStep['status']) {
@@ -39,26 +40,34 @@ function formatTime(value: string) {
 </script>
 
 <template>
-  <section class="min-h-0 overflow-auto">
-    <div class="grid content-start gap-3 p-4">
-      <button
-        v-for="step in orderedSteps"
-        :key="step.id"
-        type="button"
-        class="rounded-md border p-3.5 text-left transition-colors"
-        :class="step.id === selectedStepId ? 'border-[var(--agent-selected-border)] bg-[var(--agent-selected-bg)]' : 'border-[var(--agent-border)] bg-[var(--agent-surface)] hover:bg-[var(--agent-surface-muted)]'"
-        @click="emit('select', step)"
-      >
-        <div class="flex items-start justify-between gap-2">
-          <span class="flex items-center gap-2 text-xs font-semibold text-[var(--agent-text-muted)]"><span class="font-mono">#{{ step.sequence }}</span>{{ stepTypeLabel(step.type) }}</span>
-          <span class="rounded px-2 py-0.5 text-[10px] font-bold" :class="statusClass(step.status)">{{ statusLabel(step.status) }}</span>
-        </div>
-        <p class="m-0 mt-2 text-sm font-bold leading-5 text-[var(--agent-text)]">{{ step.title }}</p>
-        <p v-if="stepInputSummary(step)" class="m-0 mt-2 line-clamp-2 rounded-md bg-[var(--agent-surface-muted)] px-2.5 py-2 text-xs font-medium leading-5 text-[var(--agent-text-muted)]">{{ stepInputSummary(step) }}</p>
-        <p v-if="step.error" class="m-0 mt-2 rounded-md bg-[var(--agent-error-bg)] px-2.5 py-2 text-xs leading-5 text-[var(--agent-error-text)]">{{ step.error }}</p>
-        <p class="m-0 mt-2 font-mono text-[10px] text-[var(--agent-text-muted)]">{{ formatTime(step.startedAt) }}</p>
-      </button>
-      <p v-if="!orderedSteps.length" class="m-0 rounded-md border border-dashed border-[var(--agent-border)] bg-[var(--agent-surface)] px-4 py-10 text-center text-sm leading-6 text-[var(--agent-text-muted)]">等待研究任务开始。</p>
-    </div>
+  <section class="app-scrollbar min-h-0 overflow-auto">
+    <ol class="m-0 grid list-none content-start gap-1.5 p-3">
+      <li v-for="step in orderedSteps" :key="step.id">
+        <button
+          type="button"
+          class="w-full rounded-lg border px-3 py-2.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          :class="[
+            step.id === selectedStepId ? 'border-border bg-muted' : 'border-border bg-background hover:bg-muted',
+            step.status === 'running' ? 'animate-pulse motion-reduce:animate-none' : ''
+          ]"
+          @click="emit('select', step)"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <span class="flex min-w-0 items-center gap-2 text-[11px] font-medium text-muted-foreground">
+              <span class="font-mono tabular-nums">#{{ step.sequence }}</span>
+              <span class="truncate">{{ stepTypeLabel(step.type) }}</span>
+            </span>
+            <Badge :variant="statusVariant(step.status)" class="shrink-0">{{ statusLabel(step.status) }}</Badge>
+          </div>
+          <p class="m-0 mt-1.5 text-sm font-medium leading-5 text-foreground">{{ step.title }}</p>
+          <p v-if="stepInputSummary(step)" class="m-0 mt-1.5 line-clamp-2 text-xs leading-5 text-muted-foreground">{{ stepInputSummary(step) }}</p>
+          <p v-if="step.error" class="m-0 mt-1.5 line-clamp-2 text-xs leading-5 text-destructive">{{ step.error }}</p>
+          <p class="m-0 mt-1.5 font-mono text-[10px] tabular-nums text-muted-foreground">{{ formatTime(step.startedAt) }}</p>
+        </button>
+      </li>
+      <li v-if="!orderedSteps.length" class="rounded-lg border border-dashed border-border px-4 py-10 text-center text-sm leading-6 text-muted-foreground">
+        等待研究任务开始。
+      </li>
+    </ol>
   </section>
 </template>

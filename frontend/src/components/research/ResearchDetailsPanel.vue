@@ -1,23 +1,28 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Textarea } from '@/components/ui/textarea';
 import type { ResearchNote, ResearchPromptPreview, ResearchStep } from '../../types/research';
 
 type DetailsTab = 'notes' | 'memory' | 'tool' | 'prompt';
 
 const props = defineProps<{
-  activeTab: DetailsTab;
   notes: ResearchNote[];
   promptPreview: ResearchPromptPreview;
   selectedStep?: ResearchStep;
 }>();
 
+const activeTab = defineModel<DetailsTab>('activeTab', { required: true });
+
 const emit = defineEmits<{
-  changeTab: [tab: DetailsTab];
   createNote: [content: string];
-  updateNote: [note: ResearchNote, content: string];
   deleteNote: [note: ResearchNote];
 }>();
+
 const noteContent = ref('');
 
 function saveNote() {
@@ -25,6 +30,14 @@ function saveNote() {
   if (!content) return;
   emit('createNote', content);
   noteContent.value = '';
+}
+
+function statusLabel(status: ResearchStep['status']) {
+  return status === 'complete' ? '已完成' : status === 'running' ? '执行中' : '失败';
+}
+
+function statusVariant(status: ResearchStep['status']) {
+  return status === 'error' ? 'destructive' as const : 'secondary' as const;
 }
 
 function formatJson(value: unknown) {
@@ -80,43 +93,109 @@ function toRecord(value: unknown) {
 </script>
 
 <template>
-  <section class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] bg-[var(--agent-surface-muted)]">
-    <header class="grid grid-cols-4 gap-1 border-b border-[var(--agent-border)] px-4 py-3">
-      <button v-for="tab in [{ key: 'notes', label: '笔记' }, { key: 'memory', label: '记忆' }, { key: 'tool', label: '工具' }, { key: 'prompt', label: '问题' }]" :key="tab.key" type="button" class="h-8 rounded-md px-2 text-xs font-bold" :class="props.activeTab === tab.key ? 'bg-[var(--agent-selected-bg)] text-[var(--agent-selected-text)]' : 'text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface)]'" @click="emit('changeTab', tab.key as DetailsTab)">
-        {{ tab.label }}
-      </button>
-    </header>
-    <div class="min-h-0 overflow-auto p-4">
-      <div v-if="props.activeTab === 'notes'" class="grid gap-3.5">
-        <textarea v-model="noteContent" rows="4" class="w-full resize-y rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3 text-sm leading-6 text-[var(--agent-text)] outline-none focus:border-[var(--agent-selected-border)] focus:ring-4 focus:ring-[var(--agent-focus-ring)]" placeholder="记录研究结论或待办" />
-        <button type="button" class="justify-self-start rounded-md bg-[var(--agent-selected-bg)] px-3.5 py-2 text-xs font-bold text-[var(--agent-selected-text)]" @click="saveNote">添加笔记</button>
-        <article v-for="note in props.notes" :key="note.id" class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5">
-          <p class="m-0 whitespace-pre-wrap text-sm leading-6 text-[var(--agent-text)]">{{ note.content }}</p>
-          <div class="mt-3 flex items-center justify-between gap-3"><span class="text-[11px] text-[var(--agent-text-muted)]">{{ formatTime(note.updatedAt) }}</span><button type="button" class="text-xs font-bold text-[var(--agent-error-text)]" @click="emit('deleteNote', note)">删除</button></div>
-        </article>
-        <p v-if="!props.notes.length" class="m-0 rounded-md border border-dashed border-[var(--agent-border)] bg-[var(--agent-surface)] px-4 py-8 text-center text-sm text-[var(--agent-text-muted)]">还没有研究笔记。</p>
-      </div>
-      <div v-else-if="props.activeTab === 'memory'" class="grid gap-3">
-        <section class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><p class="m-0 text-xs font-bold text-[var(--agent-text-muted)]">研究主题</p><p class="m-0 mt-1.5 text-sm font-semibold leading-6 text-[var(--agent-text)]">{{ props.promptPreview.topic || '将在首次提问后生成' }}</p></section>
-        <section class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><p class="m-0 text-xs font-bold text-[var(--agent-text-muted)]">摘要记忆</p><p class="m-0 mt-1.5 whitespace-pre-wrap text-[13px] leading-6 text-[var(--agent-text)]">{{ props.promptPreview.summary || '当前使用最近对话作为上下文。' }}</p></section>
-        <section class="flex items-center justify-between rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><span class="text-xs font-bold text-[var(--agent-text-muted)]">进入上下文的历史消息</span><strong class="font-mono text-xl text-[var(--agent-text)]">{{ props.promptPreview.historyMessageCount }}</strong></section>
-      </div>
-      <div v-else-if="props.activeTab === 'tool'" class="grid gap-3">
-        <p v-if="!props.selectedStep" class="m-0 rounded-md border border-dashed border-[var(--agent-border)] bg-[var(--agent-surface)] px-4 py-10 text-center text-sm leading-6 text-[var(--agent-text-muted)]">请先从“过程”中选择一个工具步骤。</p>
-        <template v-else>
-          <section class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><div class="flex items-start justify-between gap-3"><p class="m-0 text-sm font-bold leading-5 text-[var(--agent-text)]">{{ props.selectedStep.title }}</p><span class="shrink-0 rounded bg-[var(--agent-selected-bg)] px-2 py-0.5 text-[10px] font-bold text-[var(--agent-selected-text)]">{{ props.selectedStep.status === 'complete' ? '已完成' : props.selectedStep.status === 'running' ? '执行中' : '失败' }}</span></div><p class="m-0 mt-2 text-[11px] text-[var(--agent-text-muted)]">{{ formatTime(props.selectedStep.startedAt) }}</p></section>
-          <section v-if="inputSummary(props.selectedStep.input)" class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><p class="m-0 text-xs font-bold text-[var(--agent-text-muted)]">调用内容</p><p class="m-0 mt-1.5 break-words text-[13px] font-semibold leading-6 text-[var(--agent-text)]">{{ inputSummary(props.selectedStep.input) }}</p></section>
-          <section v-if="claimCoverage(props.selectedStep.output)" class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><div class="flex items-center justify-between gap-3"><p class="m-0 text-xs font-bold text-[var(--agent-text)]">问题覆盖</p><span class="font-mono text-xs font-bold text-[var(--agent-text)]">{{ claimCoverage(props.selectedStep.output)?.covered }}/{{ claimCoverage(props.selectedStep.output)?.total }} · {{ (claimCoverage(props.selectedStep.output)?.score ?? 0).toFixed(2) }}</span></div><ul v-if="claimCoverage(props.selectedStep.output)?.uncovered.length" class="m-0 mt-2 list-disc pl-4 text-xs leading-5 text-[var(--agent-error-text)]"><li v-for="claim in claimCoverage(props.selectedStep.output)?.uncovered" :key="claim">未覆盖：{{ claim }}</li></ul></section>
-          <section v-if="resultItems(props.selectedStep.output).length" class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><p class="m-0 mb-2.5 text-xs font-bold text-[var(--agent-text)]">命中来源 · {{ resultItems(props.selectedStep.output).length }}</p><ol class="m-0 grid list-none gap-2 p-0"><li v-for="(item, index) in resultItems(props.selectedStep.output)" :key="`${item.title}-${item.heading}-${index}`" class="rounded-md bg-[var(--agent-surface-muted)] px-3 py-2"><div class="flex items-start justify-between gap-2"><strong class="text-xs leading-5 text-[var(--agent-text)]">{{ item.title }}</strong><span v-if="item.score !== undefined" class="shrink-0 font-mono text-[10px] text-[var(--agent-text-muted)]">{{ item.score.toFixed(3) }}</span></div><p v-if="item.heading" class="m-0 mt-0.5 text-[11px] leading-4 text-[var(--agent-text-muted)]">{{ item.heading }}</p></li></ol></section>
-          <section v-if="props.selectedStep.error" class="rounded-md bg-[var(--agent-error-bg)] p-3.5"><p class="m-0 text-xs font-bold text-[var(--agent-error-text)]">错误信息</p><p class="m-0 mt-1.5 whitespace-pre-wrap text-[13px] leading-6 text-[var(--agent-error-text)]">{{ props.selectedStep.error }}</p></section>
-          <details class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><summary class="cursor-pointer text-xs font-bold text-[var(--agent-text-muted)] hover:text-[var(--agent-text)]">查看调用参数</summary><pre class="m-0 mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--agent-surface-muted)] p-3 font-mono text-[11px] leading-5 text-[var(--agent-text)]">{{ formatJson(props.selectedStep.input) }}</pre></details>
-          <details v-if="props.selectedStep.output !== undefined" class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><summary class="cursor-pointer text-xs font-bold text-[var(--agent-text-muted)] hover:text-[var(--agent-text)]">查看原始结果</summary><pre class="m-0 mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--agent-surface-muted)] p-3 font-mono text-[11px] leading-5 text-[var(--agent-text)]">{{ formatJson(props.selectedStep.output) }}</pre></details>
-        </template>
-      </div>
-      <div v-else class="grid gap-3">
-        <section class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-4"><p class="m-0 text-xs font-bold text-[var(--agent-text-muted)]">当前研究问题</p><p class="m-0 mt-2 whitespace-pre-wrap text-sm font-medium leading-7 text-[var(--agent-text)]">{{ props.promptPreview.currentMessage || '发送问题后显示。' }}</p></section>
-        <section class="flex items-center justify-between rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><span class="text-xs font-bold text-[var(--agent-text-muted)]">上下文消息数</span><strong class="font-mono text-xl text-[var(--agent-text)]">{{ props.promptPreview.historyMessageCount }}</strong></section>
-      </div>
+  <Tabs v-model="activeTab" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-0 bg-card">
+    <div class="border-b border-border px-3 py-2.5">
+      <TabsList class="w-full">
+        <TabsTrigger value="notes">笔记</TabsTrigger>
+        <TabsTrigger value="memory">记忆</TabsTrigger>
+        <TabsTrigger value="tool">工具</TabsTrigger>
+        <TabsTrigger value="prompt">问题</TabsTrigger>
+      </TabsList>
     </div>
-  </section>
+
+    <div class="app-scrollbar min-h-0 overflow-auto p-3">
+      <TabsContent value="notes" class="m-0 grid gap-3">
+        <Textarea v-model="noteContent" rows="4" class="resize-y" placeholder="记录研究结论或待办" />
+        <Button variant="secondary" size="sm" class="justify-self-start" @click="saveNote">添加笔记</Button>
+        <article v-for="note in notes" :key="note.id" class="rounded-lg border border-border bg-background p-3">
+          <p class="m-0 whitespace-pre-wrap text-sm leading-6 text-foreground">{{ note.content }}</p>
+          <div class="mt-2.5 flex items-center justify-between gap-3">
+            <span class="text-[11px] text-muted-foreground">{{ formatTime(note.updatedAt) }}</span>
+            <Button variant="ghost" size="xs" class="text-destructive" :aria-label="`删除笔记`" @click="emit('deleteNote', note)">删除</Button>
+          </div>
+        </article>
+        <p v-if="!notes.length" class="m-0 rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">还没有研究笔记。</p>
+      </TabsContent>
+
+      <TabsContent value="memory" class="m-0 grid gap-3">
+        <section class="rounded-lg border border-border bg-background p-3">
+          <p class="m-0 text-xs font-semibold text-muted-foreground">研究主题</p>
+          <p class="m-0 mt-1.5 text-sm font-medium leading-6 text-foreground">{{ promptPreview.topic || '将在首次提问后生成' }}</p>
+        </section>
+        <section class="rounded-lg border border-border bg-background p-3">
+          <p class="m-0 text-xs font-semibold text-muted-foreground">摘要记忆</p>
+          <p class="m-0 mt-1.5 whitespace-pre-wrap text-[13px] leading-6 text-foreground">{{ promptPreview.summary || '当前使用最近对话作为上下文。' }}</p>
+        </section>
+        <section class="flex items-center justify-between rounded-lg border border-border bg-background p-3">
+          <span class="text-xs font-semibold text-muted-foreground">进入上下文的历史消息</span>
+          <strong class="font-mono text-xl tabular-nums text-foreground">{{ promptPreview.historyMessageCount }}</strong>
+        </section>
+      </TabsContent>
+
+      <TabsContent value="tool" class="m-0 grid gap-3">
+        <p v-if="!selectedStep" class="m-0 rounded-lg border border-dashed border-border px-4 py-10 text-center text-sm leading-6 text-muted-foreground">请先从“过程”中选择一个工具步骤。</p>
+        <template v-else>
+          <section class="rounded-lg border border-border bg-background p-3">
+            <div class="flex items-start justify-between gap-3">
+              <p class="m-0 text-sm font-medium leading-5 text-foreground">{{ selectedStep.title }}</p>
+              <Badge :variant="statusVariant(selectedStep.status)" class="shrink-0">{{ statusLabel(selectedStep.status) }}</Badge>
+            </div>
+            <p class="m-0 mt-2 text-[11px] text-muted-foreground">{{ formatTime(selectedStep.startedAt) }}</p>
+          </section>
+          <section v-if="inputSummary(selectedStep.input)" class="rounded-lg border border-border bg-background p-3">
+            <p class="m-0 text-xs font-semibold text-muted-foreground">调用内容</p>
+            <p class="m-0 mt-1.5 break-words text-[13px] font-medium leading-6 text-foreground">{{ inputSummary(selectedStep.input) }}</p>
+          </section>
+          <section v-if="claimCoverage(selectedStep.output)" class="rounded-lg border border-border bg-background p-3">
+            <div class="flex items-center justify-between gap-3">
+              <p class="m-0 text-xs font-semibold text-foreground">问题覆盖</p>
+              <span class="font-mono text-xs font-semibold tabular-nums text-foreground">{{ claimCoverage(selectedStep.output)?.covered }}/{{ claimCoverage(selectedStep.output)?.total }} · {{ (claimCoverage(selectedStep.output)?.score ?? 0).toFixed(2) }}</span>
+            </div>
+            <ul v-if="claimCoverage(selectedStep.output)?.uncovered.length" class="m-0 mt-2 list-disc pl-4 text-xs leading-5 text-destructive">
+              <li v-for="claim in claimCoverage(selectedStep.output)?.uncovered" :key="claim">未覆盖：{{ claim }}</li>
+            </ul>
+          </section>
+          <section v-if="resultItems(selectedStep.output).length" class="rounded-lg border border-border bg-background p-3">
+            <p class="m-0 mb-2.5 text-xs font-semibold text-foreground">命中来源 · {{ resultItems(selectedStep.output).length }}</p>
+            <ol class="m-0 grid list-none gap-2 p-0">
+              <li v-for="(item, index) in resultItems(selectedStep.output)" :key="`${item.title}-${item.heading}-${index}`" class="rounded-md bg-muted px-3 py-2">
+                <div class="flex items-start justify-between gap-2">
+                  <strong class="text-xs leading-5 text-foreground">{{ item.title }}</strong>
+                  <span v-if="item.score !== undefined" class="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">{{ item.score.toFixed(3) }}</span>
+                </div>
+                <p v-if="item.heading" class="m-0 mt-0.5 text-[11px] leading-4 text-muted-foreground">{{ item.heading }}</p>
+              </li>
+            </ol>
+          </section>
+          <section v-if="selectedStep.error" class="rounded-lg border border-destructive/30 bg-destructive/10 p-3">
+            <p class="m-0 text-xs font-semibold text-destructive">错误信息</p>
+            <p class="m-0 mt-1.5 whitespace-pre-wrap text-[13px] leading-6 text-destructive">{{ selectedStep.error }}</p>
+          </section>
+          <Collapsible class="rounded-lg border border-border bg-background p-3">
+            <CollapsibleTrigger class="cursor-pointer text-xs font-semibold text-muted-foreground hover:text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring rounded">查看调用参数</CollapsibleTrigger>
+            <CollapsibleContent>
+              <pre class="m-0 mt-2.5 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-3 font-mono text-[11px] leading-5 text-foreground">{{ formatJson(selectedStep.input) }}</pre>
+            </CollapsibleContent>
+          </Collapsible>
+          <Collapsible v-if="selectedStep.output !== undefined" class="rounded-lg border border-border bg-background p-3">
+            <CollapsibleTrigger class="cursor-pointer text-xs font-semibold text-muted-foreground hover:text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring rounded">查看原始结果</CollapsibleTrigger>
+            <CollapsibleContent>
+              <pre class="m-0 mt-2.5 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-3 font-mono text-[11px] leading-5 text-foreground">{{ formatJson(selectedStep.output) }}</pre>
+            </CollapsibleContent>
+          </Collapsible>
+        </template>
+      </TabsContent>
+
+      <TabsContent value="prompt" class="m-0 grid gap-3">
+        <section class="rounded-lg border border-border bg-background p-3">
+          <p class="m-0 text-xs font-semibold text-muted-foreground">当前研究问题</p>
+          <p class="m-0 mt-2 whitespace-pre-wrap text-sm font-medium leading-7 text-foreground">{{ promptPreview.currentMessage || '发送问题后显示。' }}</p>
+        </section>
+        <section class="flex items-center justify-between rounded-lg border border-border bg-background p-3">
+          <span class="text-xs font-semibold text-muted-foreground">上下文消息数</span>
+          <strong class="font-mono text-xl tabular-nums text-foreground">{{ promptPreview.historyMessageCount }}</strong>
+        </section>
+      </TabsContent>
+    </div>
+  </Tabs>
 </template>
