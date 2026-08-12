@@ -2,6 +2,7 @@
 import {
   PhArrowClockwise,
   PhCheckCircle,
+  PhCircleNotch,
   PhDatabase,
   PhEye,
   PhFilePlus,
@@ -16,6 +17,21 @@ import {
   PhX
 } from '@phosphor-icons/vue';
 import { computed, onMounted, ref } from 'vue';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Switch } from '@/components/ui/switch';
+import { Textarea } from '@/components/ui/textarea';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import {
   createKnowledgeDocument,
   deleteKnowledgeDocument,
@@ -69,12 +85,21 @@ const filteredDocuments = computed(() => {
   );
 });
 
+const selectedSummary = computed(() => documents.value.find((document) => document.path === selectedPath.value));
+
 const statusLabel: Record<KnowledgeDocumentSummary['indexStatus'], string> = {
   indexed: '已索引',
   pending: '待向量化',
   outdated: '需更新',
   unavailable: '索引不可用'
 };
+
+function statusClass(status: KnowledgeDocumentSummary['indexStatus']) {
+  if (status === 'indexed') return 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300';
+  if (status === 'outdated') return 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300';
+  if (status === 'unavailable') return 'border-destructive/25 bg-destructive/10 text-destructive';
+  return 'border-border bg-muted text-muted-foreground';
+}
 
 onMounted(loadDocuments);
 
@@ -349,183 +374,159 @@ function getErrorMessage(error: unknown) {
 </script>
 
 <template>
-  <section class="min-h-0 overflow-auto bg-[var(--agent-surface)]" aria-label="知识库管理">
-    <div class="mx-auto grid w-full max-w-7xl gap-6 px-5 py-7 md:px-8 md:py-9">
-      <header class="flex flex-wrap items-end justify-between gap-5 border-b border-[var(--agent-border)] pb-6">
-        <div>
-          <p class="m-0 font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--agent-text-muted)]">Knowledge Base</p>
-          <h1 class="m-0 mt-2 text-2xl font-bold leading-tight text-[var(--agent-text)]">知识库</h1>
-          <p class="m-0 mt-2 text-sm leading-6 text-[var(--agent-text-muted)]">管理智能体用于检索的 Markdown 文档与索引。</p>
+  <section class="h-full min-h-0 overflow-auto bg-background" aria-label="知识库管理">
+    <div class="mx-auto flex min-h-full w-full max-w-[1500px] flex-col gap-5 px-5 py-6 md:px-8 md:py-8">
+      <header class="flex flex-wrap items-end justify-between gap-5 border-b border-border pb-5">
+        <div class="min-w-0">
+          <p class="m-0 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Knowledge base</p>
+          <h1 class="m-0 mt-1.5 text-2xl font-semibold tracking-[-0.035em] text-foreground">知识库</h1>
+          <p class="m-0 mt-1.5 text-sm leading-6 text-muted-foreground">维护 Agent 可检索的 Markdown 来源，并掌握每篇文档的切片与索引状态。</p>
         </div>
 
         <div class="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            class="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] px-3 text-sm font-semibold text-[var(--agent-text)] transition-colors hover:bg-[var(--agent-surface-muted)] disabled:cursor-wait disabled:opacity-60"
-            :disabled="syncing"
-            @click="syncKnowledge"
-          >
-            <PhArrowClockwise :size="16" weight="bold" :class="syncing ? 'animate-spin' : ''" aria-hidden="true" />
+          <Button variant="outline" :disabled="syncing" @click="syncKnowledge">
+            <PhCircleNotch v-if="syncing" class="animate-spin" aria-hidden="true" />
+            <PhArrowClockwise v-else aria-hidden="true" />
             {{ syncing ? '同步中' : '同步索引' }}
-          </button>
-          <button type="button" class="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] px-3 text-sm font-semibold text-[var(--agent-text)] transition-colors hover:bg-[var(--agent-surface-muted)]" @click="openFilePicker">
-            <PhUploadSimple :size="16" weight="bold" aria-hidden="true" />
-            上传 Markdown
-          </button>
-          <button type="button" class="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md bg-[var(--agent-primary)] px-3 text-sm font-semibold text-[var(--agent-primary-text)] transition-colors hover:bg-[var(--agent-primary-hover)]" @click="startCreating">
-            <PhPlus :size="16" weight="bold" aria-hidden="true" />
-            添加文档
-          </button>
+          </Button>
+          <Button variant="outline" @click="openFilePicker"><PhUploadSimple aria-hidden="true" />上传 Markdown</Button>
+          <Button @click="startCreating"><PhPlus aria-hidden="true" />添加文档</Button>
           <input ref="fileInput" class="sr-only" type="file" accept=".md,text/markdown,text/plain" @change="uploadMarkdownFile" />
         </div>
       </header>
 
-      <p v-if="error" role="alert" class="m-0 rounded-md border border-[var(--agent-error-text)] bg-[var(--agent-error-bg)] px-4 py-3 text-sm font-medium text-[var(--agent-error-text)]">{{ error }}</p>
-      <p v-else-if="notice" class="m-0 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-4 py-3 text-sm font-medium text-[var(--agent-text)]">{{ notice }}</p>
+      <div v-if="error" role="alert" class="flex items-center gap-2 rounded-lg border border-destructive/25 bg-destructive/10 px-4 py-3 text-sm font-medium text-destructive">
+        <PhWarningCircle class="shrink-0" :size="17" weight="fill" aria-hidden="true" />{{ error }}
+      </div>
+      <div v-else-if="notice" class="flex items-center gap-2 rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-700 dark:text-emerald-300">
+        <PhCheckCircle class="shrink-0" :size="17" weight="fill" aria-hidden="true" />{{ notice }}
+      </div>
 
-      <section class="grid gap-px overflow-hidden rounded-lg border border-[var(--agent-border)] bg-[var(--agent-border)] sm:grid-cols-3" aria-label="知识库概况">
-        <div class="bg-[var(--agent-surface)] px-5 py-4">
-          <p class="m-0 font-mono text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--agent-text-muted)]">文档</p>
-          <p class="m-0 mt-2 text-2xl font-bold text-[var(--agent-text)]">{{ summary.documentCount }}</p>
-          <p class="m-0 mt-1 text-xs font-medium text-[var(--agent-text-muted)]">{{ summary.indexedDocumentCount }} 个已建立索引</p>
+      <section class="grid overflow-hidden rounded-xl border border-border bg-card sm:grid-cols-3 sm:divide-x sm:divide-border" aria-label="知识库概况">
+        <div class="px-5 py-4">
+          <p class="m-0 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">文档</p>
+          <p class="m-0 mt-2 font-mono text-2xl font-semibold tabular-nums">{{ summary.documentCount }}</p>
+          <p class="m-0 mt-1 text-xs text-muted-foreground">{{ summary.indexedDocumentCount }} 篇已建立索引</p>
         </div>
-        <div class="bg-[var(--agent-surface)] px-5 py-4">
-          <p class="m-0 font-mono text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--agent-text-muted)]">知识片段</p>
-          <p class="m-0 mt-2 text-2xl font-bold text-[var(--agent-text)]">{{ summary.indexedChunkCount }} / {{ summary.chunkCount }}</p>
-          <p class="m-0 mt-1 text-xs font-medium text-[var(--agent-text-muted)]">已索引 / 当前切片</p>
+        <div class="border-t border-border px-5 py-4 sm:border-t-0">
+          <p class="m-0 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">知识片段</p>
+          <p class="m-0 mt-2 font-mono text-2xl font-semibold tabular-nums">{{ summary.indexedChunkCount }} <span class="text-sm font-normal text-muted-foreground">/ {{ summary.chunkCount }}</span></p>
+          <p class="m-0 mt-1 text-xs text-muted-foreground">已索引 / 当前切片</p>
         </div>
-        <div class="bg-[var(--agent-surface)] px-5 py-4">
-          <p class="m-0 font-mono text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--agent-text-muted)]">最近同步</p>
-          <p class="m-0 mt-2 truncate text-sm font-bold text-[var(--agent-text)]">{{ lastSync || '尚未执行' }}</p>
-          <p class="m-0 mt-1 text-xs font-medium text-[var(--agent-text-muted)]">同步后会刷新索引状态</p>
+        <div class="border-t border-border px-5 py-4 sm:border-t-0">
+          <p class="m-0 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">最近同步</p>
+          <p class="m-0 mt-2 truncate text-sm font-semibold">{{ lastSync || '本次打开后尚未执行' }}</p>
+          <p class="m-0 mt-1 text-xs text-muted-foreground">同步会刷新全部文档状态</p>
         </div>
       </section>
 
-      <section class="grid min-h-0 gap-5 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
-        <div class="grid min-h-0 content-start gap-4">
-          <div class="flex flex-wrap items-center justify-between gap-3">
+      <section class="grid min-h-[540px] flex-1 overflow-hidden rounded-xl border border-border bg-card xl:grid-cols-[minmax(360px,0.82fr)_minmax(0,1.18fr)]">
+        <div class="flex min-h-0 flex-col border-b border-border xl:border-b-0 xl:border-r">
+          <div class="flex flex-wrap items-start justify-between gap-3 border-b border-border px-4 py-4">
             <div>
-              <h2 class="m-0 text-base font-bold text-[var(--agent-text)]">来源文档</h2>
-              <p class="m-0 mt-1 text-sm text-[var(--agent-text-muted)]">正文安全存储在 SQLite，向量索引存储在 Qdrant。</p>
+              <h2 class="m-0 text-sm font-semibold">来源文档</h2>
+              <p class="m-0 mt-1 text-xs leading-5 text-muted-foreground">正文存储于 SQLite，向量写入 Qdrant。</p>
             </div>
-            <label class="relative block w-full sm:w-56">
-              <PhMagnifyingGlass class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--agent-text-muted)]" :size="16" weight="bold" aria-hidden="true" />
-              <input v-model="searchQuery" type="search" placeholder="搜索文档" class="h-9 w-full rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] py-2 pl-9 pr-3 text-sm text-[var(--agent-text)] outline-none placeholder:text-[var(--agent-text-muted)] focus:border-[var(--agent-selected-border)] focus:ring-4 focus:ring-[var(--agent-focus-ring)]" />
+            <span class="font-mono text-xs text-muted-foreground">{{ filteredDocuments.length }} / {{ documents.length }}</span>
+          </div>
+
+          <div class="border-b border-border p-3">
+            <label class="relative block">
+              <PhMagnifyingGlass class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" :size="16" aria-hidden="true" />
+              <input v-model="searchQuery" type="search" placeholder="按标题或路径搜索" class="h-9 w-full rounded-lg border border-input bg-background py-2 pl-9 pr-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50" />
             </label>
           </div>
 
-          <div class="overflow-hidden rounded-lg border border-[var(--agent-border)]">
-            <div class="hidden grid-cols-[minmax(0,1fr)_92px_96px] gap-3 border-b border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--agent-text-muted)] md:grid">
-              <span>文件</span>
-              <span>更新</span>
-              <span>索引</span>
-            </div>
-
-            <div v-if="loading" class="grid place-items-center px-4 py-12 text-sm font-medium text-[var(--agent-text-muted)]">正在加载文档…</div>
-            <ul v-else class="m-0 list-none divide-y divide-[var(--agent-border)] p-0">
+          <div v-if="loading" class="grid gap-3 p-4">
+            <div v-for="index in 5" :key="index" class="flex items-center gap-3"><Skeleton class="size-9 rounded-lg" /><div class="grid flex-1 gap-2"><Skeleton class="h-3.5 w-2/3" /><Skeleton class="h-3 w-1/2" /></div></div>
+          </div>
+          <ScrollArea v-else class="min-h-[330px] flex-1 xl:h-0">
+            <ul class="m-0 list-none divide-y divide-border p-0" aria-label="知识库文档">
               <li v-for="document in filteredDocuments" :key="document.path">
-                <button type="button" class="grid w-full cursor-pointer gap-2 px-4 py-3.5 text-left transition-colors hover:bg-[var(--agent-surface-muted)] md:grid-cols-[minmax(0,1fr)_92px_96px] md:items-center md:gap-3" :class="selectedPath === document.path ? 'bg-[var(--agent-selected-bg)]' : ''" @click="selectDocument(document.path)">
-                  <span class="flex min-w-0 items-center gap-3">
-                    <span class="grid size-8 shrink-0 place-items-center rounded-md bg-[var(--agent-primary-soft)] text-[var(--agent-text-muted)]">
-                      <PhFileText :size="17" weight="bold" aria-hidden="true" />
+                <button type="button" class="group grid w-full cursor-pointer gap-2 px-4 py-3.5 text-left outline-none transition-colors hover:bg-muted/60 focus-visible:bg-muted focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" :class="selectedPath === document.path ? 'bg-muted' : ''" @click="selectDocument(document.path)">
+                  <span class="flex min-w-0 items-start gap-3">
+                    <span class="mt-0.5 grid size-9 shrink-0 place-items-center rounded-lg border border-border bg-background text-muted-foreground"><PhFileText :size="18" weight="bold" aria-hidden="true" /></span>
+                    <span class="min-w-0 flex-1">
+                      <span class="flex min-w-0 items-center justify-between gap-2"><strong class="truncate text-sm font-semibold">{{ document.title }}</strong><Badge variant="outline" class="shrink-0 text-[10px]" :class="statusClass(document.indexStatus)">{{ statusLabel[document.indexStatus] }}</Badge></span>
+                      <span class="mt-1 block truncate font-mono text-[10px] text-muted-foreground">{{ document.path }}</span>
+                      <span class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"><span>{{ document.lineCount }} 行</span><span>{{ document.indexedChunkCount }}/{{ document.chunkCount }} 切片</span><span>{{ formatDate(document.updatedAt) }}</span></span>
                     </span>
-                    <span class="min-w-0">
-                      <span class="block truncate text-sm font-semibold text-[var(--agent-text)]">{{ document.title }}</span>
-                      <span class="mt-0.5 block truncate font-mono text-[11px] text-[var(--agent-text-muted)]">{{ document.path }}</span>
-                    </span>
-                  </span>
-                  <span class="text-xs font-medium text-[var(--agent-text-muted)]">{{ formatDate(document.updatedAt) }}</span>
-                  <span class="flex items-center gap-1.5 text-xs font-semibold text-[var(--agent-text-muted)]">
-                    <PhCheckCircle v-if="document.indexStatus === 'indexed'" :size="15" weight="fill" class="text-[var(--agent-text)]" aria-hidden="true" />
-                    <PhWarningCircle v-else-if="document.indexStatus === 'outdated'" :size="15" weight="fill" aria-hidden="true" />
-                    <PhDatabase v-else-if="document.indexStatus === 'unavailable'" :size="15" weight="bold" aria-hidden="true" />
-                    <PhStack v-else :size="15" weight="bold" aria-hidden="true" />
-                    <span>{{ document.indexedChunkCount }}/{{ document.chunkCount }} · {{ statusLabel[document.indexStatus] }}</span>
                   </span>
                 </button>
               </li>
-              <li v-if="!filteredDocuments.length" class="px-4 py-10 text-center text-sm font-medium text-[var(--agent-text-muted)]">{{ documents.length ? '没有匹配的文档。' : '知识库中还没有文档。' }}</li>
+              <li v-if="!filteredDocuments.length" class="grid min-h-56 place-items-center px-6 py-10 text-center"><div><PhDatabase class="mx-auto text-muted-foreground" :size="25" /><p class="m-0 mt-3 text-sm font-medium">{{ documents.length ? '没有匹配的文档' : '知识库中还没有文档' }}</p><p class="m-0 mt-1 text-xs text-muted-foreground">{{ documents.length ? '尝试调整搜索关键词。' : '上传 Markdown 或创建第一篇文档。' }}</p></div></li>
             </ul>
-          </div>
+          </ScrollArea>
         </div>
 
-        <aside class="min-h-0 rounded-lg border border-[var(--agent-border)] bg-[var(--agent-surface)]" aria-label="文档详情">
-          <div v-if="loadingDocument" class="grid min-h-72 place-items-center p-6 text-sm font-medium text-[var(--agent-text-muted)]">正在读取文档…</div>
-          <div v-else-if="editorMode === 'create' || editorMode === 'edit'" class="grid gap-4 p-5">
-            <div class="flex items-center justify-between gap-3 border-b border-[var(--agent-border)] pb-4">
-              <div class="min-w-0">
-                <p class="m-0 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--agent-text-muted)]">{{ editorMode === 'create' ? 'New document' : 'Edit document' }}</p>
-                <h2 class="m-0 mt-1 text-base font-bold text-[var(--agent-text)]">{{ editorMode === 'create' ? '添加 Markdown 文档' : selectedDocument?.title }}</h2>
-              </div>
-              <button type="button" class="icon-tooltip grid size-8 cursor-pointer place-items-center rounded-md text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface-muted)] hover:text-[var(--agent-text)]" aria-label="取消编辑" title="取消编辑" data-tooltip="取消编辑" @click="cancelEditing"><PhX :size="18" weight="bold" aria-hidden="true" /></button>
-            </div>
+        <aside class="min-h-0 bg-background/35" aria-label="文档详情">
+          <div v-if="loadingDocument" class="grid min-h-[420px] place-items-center p-6 text-sm text-muted-foreground"><PhCircleNotch class="animate-spin" :size="22" aria-hidden="true" /></div>
 
-            <label class="grid gap-1.5 text-sm font-semibold text-[var(--agent-text)]">
-              文件路径
-              <input v-model="draftPath" :readonly="editorMode === 'edit'" type="text" placeholder="guides/getting-started.md" class="h-9 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] px-3 text-sm font-mono font-medium text-[var(--agent-text)] outline-none focus:border-[var(--agent-selected-border)] focus:ring-4 focus:ring-[var(--agent-focus-ring)] read-only:bg-[var(--agent-surface-muted)]" />
-            </label>
-            <label class="grid gap-1.5 text-sm font-semibold text-[var(--agent-text)]">
-              Markdown 内容
-              <textarea v-model="draftContent" rows="16" class="min-h-64 resize-y rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3 font-mono text-xs leading-5 text-[var(--agent-text)] outline-none focus:border-[var(--agent-selected-border)] focus:ring-4 focus:ring-[var(--agent-focus-ring)]" />
-            </label>
-            <label class="flex cursor-pointer items-center justify-between gap-4 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-3 py-2.5">
-              <span><span class="block text-sm font-semibold text-[var(--agent-text)]">保存后自动向量化</span><span class="mt-0.5 block text-xs text-[var(--agent-text-muted)]">关闭后可通过文档操作单独处理。</span></span>
-              <input v-model="autoIndex" type="checkbox" class="size-4 accent-[var(--agent-primary)]" />
-            </label>
-            <div class="flex flex-wrap justify-end gap-2">
-              <button type="button" class="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border border-[var(--agent-border)] px-3 text-sm font-semibold text-[var(--agent-text)] hover:bg-[var(--agent-surface-muted)]" :disabled="saving" @click="cancelEditing">取消</button>
-              <button type="button" class="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md bg-[var(--agent-primary)] px-3 text-sm font-semibold text-[var(--agent-primary-text)] hover:bg-[var(--agent-primary-hover)] disabled:cursor-wait disabled:opacity-60" :disabled="saving" @click="saveDocument"><PhFloppyDisk :size="16" weight="bold" aria-hidden="true" />{{ saving ? '保存中' : '保存文档' }}</button>
+          <div v-else-if="editorMode === 'create' || editorMode === 'edit'" class="flex min-h-full flex-col">
+            <div class="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
+              <div class="min-w-0"><p class="m-0 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">{{ editorMode === 'create' ? 'New document' : 'Edit document' }}</p><h2 class="m-0 mt-1 truncate text-base font-semibold">{{ editorMode === 'create' ? '添加 Markdown 文档' : selectedDocument?.title }}</h2></div>
+              <Button variant="ghost" size="icon" aria-label="取消编辑" @click="cancelEditing"><PhX aria-hidden="true" /></Button>
+            </div>
+            <div class="grid flex-1 content-start gap-5 p-5">
+              <label class="grid gap-2 text-sm font-medium">文件路径<input v-model="draftPath" :readonly="editorMode === 'edit'" type="text" placeholder="guides/getting-started.md" class="h-10 rounded-lg border border-input bg-background px-3 font-mono text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 read-only:bg-muted read-only:text-muted-foreground" /></label>
+              <label class="grid gap-2 text-sm font-medium">Markdown 内容<Textarea v-model="draftContent" rows="18" class="min-h-80 resize-y font-mono text-xs leading-5" /></label>
+              <div class="flex items-center justify-between gap-4 rounded-lg border border-border bg-muted/45 px-4 py-3">
+                <div><p class="m-0 text-sm font-medium">保存后自动向量化</p><p class="m-0 mt-1 text-xs text-muted-foreground">关闭后仍可在文档工具栏单独处理。</p></div><Switch v-model="autoIndex" aria-label="保存后自动向量化" />
+              </div>
+              <div class="flex flex-wrap justify-end gap-2"><Button variant="outline" :disabled="saving" @click="cancelEditing">取消</Button><Button :disabled="saving" @click="saveDocument"><PhCircleNotch v-if="saving" class="animate-spin" aria-hidden="true" /><PhFloppyDisk v-else aria-hidden="true" />{{ saving ? '保存中' : '保存文档' }}</Button></div>
             </div>
           </div>
 
-          <div v-else-if="selectedDocument" class="grid min-h-0 gap-4 p-5">
-            <div class="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--agent-border)] pb-4">
-              <div class="min-w-0">
-                <p class="m-0 truncate font-mono text-[11px] font-semibold text-[var(--agent-text-muted)]">{{ selectedDocument.path }}</p>
-                <h2 class="m-0 mt-1 truncate text-lg font-bold text-[var(--agent-text)]">{{ selectedDocument.title }}</h2>
-                <p class="m-0 mt-1 text-xs text-[var(--agent-text-muted)]">{{ selectedDocument.lineCount }} 行 · 更新于 {{ formatDate(selectedDocument.updatedAt) }}</p>
+          <div v-else-if="selectedDocument" class="flex min-h-full flex-col">
+            <div class="flex flex-wrap items-start justify-between gap-3 border-b border-border px-5 py-4">
+              <div class="min-w-0 flex-1">
+                <div class="flex flex-wrap items-center gap-2"><Badge v-if="selectedSummary" variant="outline" :class="statusClass(selectedSummary.indexStatus)">{{ statusLabel[selectedSummary.indexStatus] }}</Badge><span class="font-mono text-[10px] text-muted-foreground">{{ selectedDocument.path }}</span></div>
+                <h2 class="m-0 mt-2 truncate text-lg font-semibold tracking-[-0.02em]">{{ selectedDocument.title }}</h2>
+                <p class="m-0 mt-1 text-xs text-muted-foreground">{{ selectedDocument.lineCount }} 行 · 更新于 {{ formatDate(selectedDocument.updatedAt) }}</p>
               </div>
               <div class="flex items-center gap-1">
-                <button type="button" class="icon-tooltip grid size-8 cursor-pointer place-items-center rounded-md text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface-muted)] hover:text-[var(--agent-text)] disabled:cursor-wait disabled:opacity-60" :disabled="loadingChunks" aria-label="预览切片" title="预览切片" data-tooltip="预览切片" @click="showChunks()"><PhEye :size="18" weight="bold" :class="loadingChunks ? 'animate-pulse' : ''" aria-hidden="true" /></button>
-                <button type="button" class="icon-tooltip grid size-8 cursor-pointer place-items-center rounded-md text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface-muted)] hover:text-[var(--agent-text)] disabled:cursor-wait disabled:opacity-60" :disabled="Boolean(vectorizingPath)" aria-label="向量化文档" title="向量化文档" data-tooltip="向量化文档" @click="vectorizeDocument()"><PhStack :size="18" weight="bold" :class="vectorizingPath === selectedPath ? 'animate-pulse' : ''" aria-hidden="true" /></button>
-                <button type="button" class="icon-tooltip grid size-8 cursor-pointer place-items-center rounded-md text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface-muted)] hover:text-[var(--agent-text)]" aria-label="编辑文档" title="编辑文档" data-tooltip="编辑文档" @click="startEditing"><PhFileText :size="18" weight="bold" aria-hidden="true" /></button>
-                <button type="button" class="icon-tooltip grid size-8 cursor-pointer place-items-center rounded-md text-[var(--agent-error-text)] hover:bg-[var(--agent-error-bg)]" aria-label="删除文档" title="删除文档" data-tooltip="删除文档" @click="deleteTarget = documents.find((document) => document.path === selectedPath)"><PhTrash :size="18" weight="bold" aria-hidden="true" /></button>
+                <Tooltip><TooltipTrigger as-child><Button variant="ghost" size="icon" :disabled="loadingChunks" aria-label="预览切片" @click="showChunks()"><PhCircleNotch v-if="loadingChunks" class="animate-spin" aria-hidden="true" /><PhEye v-else aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>预览切片</TooltipContent></Tooltip>
+                <Tooltip><TooltipTrigger as-child><Button variant="ghost" size="icon" :disabled="Boolean(vectorizingPath)" aria-label="向量化文档" @click="vectorizeDocument()"><PhCircleNotch v-if="vectorizingPath === selectedPath" class="animate-spin" aria-hidden="true" /><PhStack v-else aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>向量化文档</TooltipContent></Tooltip>
+                <Tooltip><TooltipTrigger as-child><Button variant="ghost" size="icon" aria-label="编辑文档" @click="startEditing"><PhFileText aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>编辑文档</TooltipContent></Tooltip>
+                <Tooltip><TooltipTrigger as-child><Button variant="ghost" size="icon" class="text-destructive hover:bg-destructive/10 hover:text-destructive" aria-label="删除文档" @click="deleteTarget = documents.find((document) => document.path === selectedPath)"><PhTrash aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>删除文档</TooltipContent></Tooltip>
               </div>
             </div>
 
-            <pre class="m-0 max-h-80 overflow-auto rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] p-3 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-[var(--agent-text)]">{{ selectedDocument.content }}</pre>
+            <div class="grid min-h-0 flex-1 content-start gap-4 p-5">
+              <pre class="m-0 max-h-[430px] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-muted/45 p-4 font-mono text-xs leading-6 text-foreground">{{ selectedDocument.content }}</pre>
 
-            <section v-if="indexResult" class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] p-3">
-              <p class="m-0 text-sm font-bold text-[var(--agent-text)]">最近一次向量化</p>
-              <p class="m-0 mt-1 text-xs leading-5 text-[var(--agent-text-muted)]">{{ indexResult.chunkCount }} 个切片，{{ indexResult.upserted }} 个更新，{{ indexResult.unchanged }} 个保持不变，{{ indexResult.deleted }} 个已清理。</p>
-            </section>
+              <section v-if="indexResult" class="rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-4">
+                <p class="m-0 text-sm font-semibold text-emerald-700 dark:text-emerald-300">最近一次向量化</p>
+                <p class="m-0 mt-1 text-xs leading-5 text-muted-foreground">{{ indexResult.chunkCount }} 个切片，{{ indexResult.upserted }} 个更新，{{ indexResult.unchanged }} 个保持不变，{{ indexResult.deleted }} 个已清理。</p>
+              </section>
 
-            <section v-if="chunkPath === selectedPath" class="grid gap-2 border-t border-[var(--agent-border)] pt-4">
-              <div class="flex items-center justify-between gap-3"><h3 class="m-0 text-sm font-bold text-[var(--agent-text)]">切片预览</h3><span class="font-mono text-xs text-[var(--agent-text-muted)]">{{ chunks.length }} 段</span></div>
-              <p v-if="!chunks.length" class="m-0 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-3 py-2 text-xs text-[var(--agent-text-muted)]">当前文档没有可展示的切片。</p>
-              <div v-else class="grid max-h-80 gap-2 overflow-auto">
-                <article v-for="chunk in chunks" :key="chunk.id" class="rounded-md border border-[var(--agent-border)] p-3">
-                  <p class="m-0 text-xs font-bold text-[var(--agent-text)]">{{ chunk.headingPath?.join(' › ') || chunk.heading || '文档内容' }}</p>
-                  <p class="m-0 mt-0.5 font-mono text-[10px] text-[var(--agent-text-muted)]">第 {{ chunk.startLine }}–{{ chunk.endLine }} 行 · {{ chunk.tokenCount ?? '—' }} tokens · {{ chunk.contentType ?? 'text' }}</p>
-                  <pre class="m-0 mt-2 whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-[var(--agent-text-muted)]">{{ chunk.content }}</pre>
-                </article>
-              </div>
-            </section>
+              <section v-if="chunkPath === selectedPath" class="grid gap-3 border-t border-border pt-4">
+                <div class="flex items-center justify-between gap-3"><div><h3 class="m-0 text-sm font-semibold">切片预览</h3><p class="m-0 mt-1 text-xs text-muted-foreground">检查实际进入向量索引的文本边界。</p></div><Badge variant="secondary" class="font-mono">{{ chunks.length }} 段</Badge></div>
+                <p v-if="!chunks.length" class="m-0 rounded-lg border border-border bg-muted/45 px-4 py-3 text-xs text-muted-foreground">当前文档没有可展示的切片。</p>
+                <div v-else class="grid max-h-[420px] gap-2 overflow-auto pr-1">
+                  <article v-for="(chunk, index) in chunks" :key="chunk.id" class="rounded-lg border border-border bg-card p-4">
+                    <div class="flex items-start justify-between gap-3"><p class="m-0 text-xs font-semibold">{{ chunk.headingPath?.join(' › ') || chunk.heading || '文档内容' }}</p><span class="font-mono text-[10px] text-muted-foreground">#{{ index + 1 }}</span></div>
+                    <p class="m-0 mt-1 font-mono text-[10px] text-muted-foreground">第 {{ chunk.startLine }}–{{ chunk.endLine }} 行 · {{ chunk.tokenCount ?? '—' }} tokens · {{ chunk.contentType ?? 'text' }}</p>
+                    <pre class="m-0 mt-3 whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-muted-foreground">{{ chunk.content }}</pre>
+                  </article>
+                </div>
+              </section>
+            </div>
           </div>
 
-          <div v-else class="grid min-h-72 place-items-center p-6 text-center">
-            <div class="grid justify-items-center gap-3 text-[var(--agent-text-muted)]"><span class="grid size-10 place-items-center rounded-md bg-[var(--agent-primary-soft)]"><PhFilePlus :size="21" weight="bold" aria-hidden="true" /></span><p class="m-0 text-sm font-medium">选择一篇文档以查看和管理内容。</p></div>
+          <div v-else class="grid min-h-[420px] place-items-center p-8 text-center">
+            <div class="max-w-xs"><span class="mx-auto grid size-11 place-items-center rounded-xl border border-border bg-muted text-muted-foreground"><PhFilePlus :size="22" weight="bold" aria-hidden="true" /></span><h2 class="m-0 mt-4 text-sm font-semibold">选择一篇文档</h2><p class="m-0 mt-1.5 text-xs leading-5 text-muted-foreground">在左侧查看文档内容、切片结果与索引状态，或创建新的 Markdown 来源。</p></div>
           </div>
         </aside>
       </section>
     </div>
 
-    <div v-if="deleteTarget" class="fixed inset-0 z-20 grid place-items-center bg-black/20 p-5" role="dialog" aria-modal="true" aria-label="删除文档确认">
-      <div class="grid w-full max-w-md gap-4 rounded-lg border border-[var(--agent-border)] bg-[var(--agent-surface)] p-5 shadow-lg">
-        <div class="flex items-start gap-3"><span class="grid size-9 shrink-0 place-items-center rounded-md bg-[var(--agent-error-bg)] text-[var(--agent-error-text)]"><PhTrash :size="18" weight="bold" aria-hidden="true" /></span><div><h2 class="m-0 text-base font-bold text-[var(--agent-text)]">删除文档</h2><p class="m-0 mt-1 break-all font-mono text-xs leading-5 text-[var(--agent-text-muted)]">{{ deleteTarget.path }}</p></div></div>
-        <label class="flex cursor-pointer items-center justify-between gap-4 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-3 py-2.5"><span><span class="block text-sm font-semibold text-[var(--agent-text)]">同时清理向量</span><span class="mt-0.5 block text-xs text-[var(--agent-text-muted)]">默认移除该文档的 Qdrant 索引。</span></span><input v-model="autoIndex" type="checkbox" class="size-4 accent-[var(--agent-primary)]" /></label>
-        <div class="flex justify-end gap-2"><button type="button" class="inline-flex h-9 cursor-pointer items-center rounded-md border border-[var(--agent-border)] px-3 text-sm font-semibold text-[var(--agent-text)] hover:bg-[var(--agent-surface-muted)]" :disabled="deleting" @click="deleteTarget = undefined">取消</button><button type="button" class="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md bg-[var(--agent-error-text)] px-3 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-wait disabled:opacity-60" :disabled="deleting" @click="confirmDelete"><PhTrash :size="16" weight="bold" aria-hidden="true" />{{ deleting ? '删除中' : '删除' }}</button></div>
-      </div>
-    </div>
+    <Dialog :open="Boolean(deleteTarget)" @update:open="deleteTarget = $event ? deleteTarget : undefined">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader><div class="mb-1 flex size-10 items-center justify-center rounded-lg bg-destructive/10 text-destructive"><PhTrash :size="19" weight="bold" aria-hidden="true" /></div><DialogTitle>删除文档</DialogTitle><DialogDescription class="break-all">{{ deleteTarget?.path }} 将从知识库中永久删除，此操作无法撤销。</DialogDescription></DialogHeader>
+        <div class="flex items-center justify-between gap-4 rounded-lg border border-border bg-muted/45 px-4 py-3"><div><p class="m-0 text-sm font-medium">同时清理向量</p><p class="m-0 mt-1 text-xs text-muted-foreground">移除该文档在 Qdrant 中的索引。</p></div><Switch v-model="autoIndex" aria-label="同时清理向量" /></div>
+        <DialogFooter><Button variant="outline" :disabled="deleting" @click="deleteTarget = undefined">取消</Button><Button variant="destructive" :disabled="deleting" @click="confirmDelete"><PhCircleNotch v-if="deleting" class="animate-spin" aria-hidden="true" /><PhTrash v-else aria-hidden="true" />{{ deleting ? '删除中' : '确认删除' }}</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
   </section>
 </template>
