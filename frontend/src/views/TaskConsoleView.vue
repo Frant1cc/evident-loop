@@ -936,7 +936,7 @@ function getErrorMessage(value: unknown) {
           </span>
         </div>
       </header>
-      <div class="chat-session-scroll overflow-auto p-2">
+      <div class="app-scrollbar overflow-auto p-2">
         <div v-for="task in tasks" :key="task.id" class="group relative mb-1 rounded-md border border-transparent transition-colors" :class="task.id === activeTaskId ? 'bg-[var(--agent-selected-bg)] text-[var(--agent-selected-text)]' : 'text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface)] hover:text-[var(--agent-text)]'">
           <button type="button" class="grid w-full gap-2 px-2.5 py-2.5 pr-9 text-left" :disabled="Boolean(busyAction && busyAction !== 'run')" @click="selectTask(task.id)">
             <span class="line-clamp-2 text-[13px] font-bold leading-5 text-[var(--agent-text)]">{{ task.goal }}</span>
@@ -1111,7 +1111,7 @@ function getErrorMessage(value: unknown) {
         </div>
       </header>
 
-      <div class="chat-session-scroll min-h-0 overflow-auto p-4">
+      <div class="app-scrollbar min-h-0 overflow-auto p-4">
         <div v-if="inspectorTab === 'events'" class="grid gap-3">
           <article v-for="event in [...events].reverse()" :key="event.id" class="min-w-0 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5">
             <div class="flex items-start justify-between gap-3">

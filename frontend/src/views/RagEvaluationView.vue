@@ -286,7 +286,7 @@ function getError(err: unknown) {
 
 <template>
   <section class="grid min-h-0 grid-cols-[260px_minmax(0,1fr)] overflow-hidden max-lg:grid-cols-1" aria-label="RAG 评测">
-    <aside class="chat-session-scroll min-h-0 overflow-y-auto border-r border-[var(--agent-border)] bg-[var(--agent-surface-muted)] max-lg:hidden">
+    <aside class="app-scrollbar min-h-0 overflow-y-auto border-r border-[var(--agent-border)] bg-[var(--agent-surface-muted)] max-lg:hidden">
       <div class="sticky top-0 z-10 border-b border-[var(--agent-border)] bg-[var(--agent-surface-muted)] p-4">
         <div class="flex items-center justify-between gap-3">
           <div><h1 class="m-0 text-sm font-bold">运行历史</h1><p class="m-0 mt-1 text-xs text-[var(--agent-text-muted)]">最近 {{ evaluations.length }} 次评测</p></div>
@@ -319,7 +319,7 @@ function getError(err: unknown) {
       </div>
     </aside>
 
-    <main class="chat-session-scroll min-h-0 overflow-y-auto bg-[var(--agent-bg)]">
+    <main class="app-scrollbar min-h-0 overflow-y-auto bg-[var(--agent-bg)]">
       <div class="mx-auto grid w-full max-w-[1180px] gap-6 p-5 md:p-7 lg:p-9">
         <header class="flex items-start justify-between gap-5 max-md:flex-col">
           <div><div class="flex items-center gap-2 text-xs font-semibold text-[var(--agent-text-muted)]"><PhFlask :size="16" weight="bold" />RAG Evaluation</div><h2 class="m-0 mt-2 text-2xl font-bold tracking-tight md:text-3xl">检索质量评测</h2><p class="m-0 mt-2 max-w-2xl text-sm leading-6 text-[var(--agent-text-muted)]">按文件、章节、证据锚点三级衡量 Recall 与 MRR，支持不可答用例分数统计和历史运行对比。</p></div>

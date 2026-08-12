@@ -35,6 +35,14 @@ export function useStreamingMessageRenderer<Message extends StreamMessage>(
     scheduler.enqueue(messageId, content);
   }
 
+  function beginStream() {
+    scheduler.dispose();
+  }
+
+  function markTerminal() {
+    scheduler.markTerminal();
+  }
+
   function flush(messageId?: string) {
     if (messageId !== undefined) scheduler.flushMessage(messageId);
     else scheduler.flushAll();
@@ -59,5 +67,5 @@ export function useStreamingMessageRenderer<Message extends StreamMessage>(
 
   onScopeDispose(reset);
 
-  return { append, flush, replaceAll, reset, upsert };
+  return { append, beginStream, flush, markTerminal, replaceAll, reset, upsert };
 }

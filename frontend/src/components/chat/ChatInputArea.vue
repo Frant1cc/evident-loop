@@ -14,8 +14,12 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <footer class="grid gap-2 border-t border-[var(--agent-border)] p-4">
-    <p v-if="error" class="m-0 text-sm font-semibold text-[var(--agent-error-text)]">{{ error }}</p>
-    <ChatComposer v-model="model" :loading="loading" @send="emit('send')" />
+  <footer class="px-3 pb-2 pt-0 md:px-5">
+    <div class="mx-auto grid w-full max-w-4xl gap-1.5">
+      <div v-if="error" class="rounded-md bg-destructive/5 px-2.5 py-1.5 text-xs text-destructive" role="alert">
+        {{ error }}
+      </div>
+      <ChatComposer v-model="model" :loading="loading" @send="emit('send')" />
+    </div>
   </footer>
 </template>

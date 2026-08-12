@@ -12,7 +12,11 @@
     "noEmit": true,
     "jsx": "preserve",
     "strict": true,
-    "types": []
+    "types": [],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue"],
   "exclude": ["src/**/*.test.ts"]

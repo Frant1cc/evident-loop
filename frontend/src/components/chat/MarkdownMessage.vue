@@ -139,7 +139,7 @@ async function copyCode(button: HTMLButtonElement) {
 <style scoped>
 .markdown-message {
   overflow-wrap: anywhere;
-  color: var(--agent-text);
+  color: inherit;
   font-size: 15px;
   line-height: 1.65;
 }
@@ -166,7 +166,7 @@ async function copyCode(button: HTMLButtonElement) {
 .markdown-message :deep(h2),
 .markdown-message :deep(h3) {
   margin: 0.15rem 0 0.55rem;
-  color: var(--agent-text);
+  color: inherit;
   font-weight: 750;
   letter-spacing: 0;
   line-height: 1.25;
@@ -189,7 +189,7 @@ async function copyCode(button: HTMLButtonElement) {
 }
 
 .markdown-message :deep(a) {
-  color: var(--agent-text);
+  color: inherit;
   font-weight: 700;
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -250,10 +250,10 @@ async function copyCode(button: HTMLButtonElement) {
 .markdown-message :deep(.markdown-code-block) {
   margin-top: 0.8rem;
   overflow: hidden;
-  border: 1px solid #ddd8cd;
+  border: 1px solid var(--code-border);
   border-radius: 8px;
-  background: #f8f6f1;
-  box-shadow: 0 1px 2px rgb(42 37 29 / 4%);
+  background: var(--code-background);
+  box-shadow: 0 1px 2px color-mix(in oklch, var(--foreground), transparent 96%);
 }
 
 .markdown-message :deep(.markdown-code-toolbar) {
@@ -261,13 +261,13 @@ async function copyCode(button: HTMLButtonElement) {
   min-height: 2.2rem;
   align-items: center;
   gap: 0.55rem;
-  border-bottom: 1px solid #ddd8cd;
-  background: #f0ede6;
+  border-bottom: 1px solid var(--code-border);
+  background: var(--code-toolbar);
   padding: 0 0.55rem 0 0.8rem;
 }
 
 .markdown-message :deep(.markdown-code-language) {
-  color: #6f695f;
+  color: var(--code-muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.68rem;
   font-weight: 700;
@@ -297,7 +297,7 @@ async function copyCode(button: HTMLButtonElement) {
   margin-left: auto;
   border-radius: 4px;
   background: transparent;
-  color: #6f695f;
+  color: var(--code-muted);
   padding: 0.28rem 0.48rem;
   font-size: 0.7rem;
   font-weight: 700;
@@ -307,8 +307,8 @@ async function copyCode(button: HTMLButtonElement) {
 
 .markdown-message :deep(.markdown-code-copy:hover:not(:disabled)),
 .markdown-message :deep(.markdown-code-copy:focus-visible) {
-  background: #e4dfd4;
-  color: #24211d;
+  background: var(--code-border);
+  color: var(--code-foreground);
   outline: none;
 }
 
@@ -338,7 +338,7 @@ async function copyCode(button: HTMLButtonElement) {
   border: 0;
   border-radius: 0;
   background: transparent;
-  color: #2d2a26;
+  color: var(--code-foreground);
   padding: 0;
   font-size: 0.88rem;
   line-height: 1.65;
@@ -347,7 +347,7 @@ async function copyCode(button: HTMLButtonElement) {
 
 .markdown-message :deep(.hljs-comment),
 .markdown-message :deep(.hljs-quote) {
-  color: #7b756d;
+  color: var(--code-muted);
   font-style: italic;
 }
 

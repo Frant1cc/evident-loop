@@ -12,9 +12,21 @@ import {
 } from '../api/chat';
 import ChatPanel from '../components/chat/ChatPanel.vue';
 import ChatSidebar from '../components/chat/ChatSidebar.vue';
-import ChatTabs from '../components/chat/ChatTabs.vue';
 import KnowledgeBasePanel from '../components/chat/KnowledgeBasePanel.vue';
+import AppShell from '../components/layout/AppShell.vue';
+import WorkspaceSidebarLayout from '../components/layout/WorkspaceSidebarLayout.vue';
+import AppTopNavigation from '../components/navigation/AppTopNavigation.vue';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog';
 import { useStreamingMessageRenderer } from '../composables/useStreamingMessageRenderer';
+import { useResizablePanel, type PanelWidthBounds } from '../composables/useResizablePanel';
 import ResearchWorkbench from './ResearchWorkbench.vue';
 import EvaluationHubView from './EvaluationHubView.vue';
 import SettingsView from './SettingsView.vue';
@@ -32,7 +44,7 @@ const input = ref('');
 const loading = ref(false);
 const error = ref('');
 const tabVisibility = ref(loadTabVisibility());
-const activeTab = ref<AppTabKey>(tabVisibility.value.tasks ? 'tasks' : 'settings');
+const activeTab = ref<AppTabKey>(tabVisibility.value.chat ? 'chat' : 'settings');
 const sidebarCollapsed = ref(false);
 const conversations = ref<ChatConversation[]>([]);
 const activeConversationId = ref<string>();
@@ -44,6 +56,9 @@ let requestController: AbortController | undefined;
 let streamingAssistantMessageId: string | undefined;
 
 const activeConversation = computed(() => conversations.value.find((conversation) => conversation.id === activeConversationId.value));
+const chatSidebarBounds: PanelWidthBounds = { defaultWidth: 264, min: 60, max: 440 };
+const chatSidebarWidth = useResizablePanel('chat:sidebar-width', chatSidebarBounds);
+const chatSidebarCompact = computed(() => sidebarCollapsed.value || chatSidebarWidth.value < 128);
 
 onMounted(async () => {
   try {
@@ -104,6 +119,7 @@ async function sendMessage() {
   input.value = '';
   error.value = '';
   loading.value = true;
+  messageRenderer.beginStream();
   requestController = new AbortController();
 
   try {
@@ -159,10 +175,12 @@ function handleStreamEvent(event: ChatStreamEvent) {
     messageRenderer.append(streamingAssistantMessageId, event.content);
   }
   if (event.type === 'done') {
+    messageRenderer.markTerminal();
     messageRenderer.upsert(event.message);
     streamingAssistantMessageId = undefined;
   }
   if (event.type === 'error') {
+    messageRenderer.markTerminal();
     error.value = event.message;
     if (event.assistantMessage) messageRenderer.upsert(event.assistantMessage);
     streamingAssistantMessageId = undefined;
@@ -205,39 +223,68 @@ function updateTabVisibility(visibility: TabVisibility) {
     activeTab.value = 'settings';
   }
 }
+
+function toggleChatSidebar() {
+  if (sidebarCollapsed.value) {
+    sidebarCollapsed.value = false;
+    if (chatSidebarWidth.value < 128) chatSidebarWidth.value = chatSidebarBounds.defaultWidth;
+    return;
+  }
+
+  if (chatSidebarWidth.value < 128) {
+    chatSidebarWidth.value = chatSidebarBounds.defaultWidth;
+    return;
+  }
+
+  sidebarCollapsed.value = true;
+}
 </script>
 
 <template>
-  <main class="grid min-h-screen bg-[var(--agent-bg)] text-[var(--agent-text)]">
-    <section class="grid h-screen w-full grid-rows-[auto_minmax(0,1fr)] overflow-hidden bg-[var(--agent-surface)]" aria-label="EvidentLoop">
-      <div class="border-b border-[var(--agent-border)] px-5 pb-4 pt-4 md:px-7">
-        <ChatTabs :active-tab="activeTab" :tab-visibility="tabVisibility" @change="changeTab" />
-      </div>
+  <AppShell>
+    <template #navigation>
+      <AppTopNavigation :active-tab="activeTab" :tab-visibility="tabVisibility" @change="changeTab" />
+    </template>
+
       <TaskConsoleView v-if="activeTab === 'tasks'" />
-      <div v-else-if="activeTab === 'chat'" class="grid min-h-0 max-md:grid-cols-1 max-md:grid-rows-[auto_minmax(0,1fr)]" :class="sidebarCollapsed ? 'grid-cols-[52px_minmax(0,1fr)]' : 'grid-cols-[220px_minmax(0,1fr)]'">
-        <ChatSidebar :sessions="conversations" :active-session-id="activeConversationId" :collapsed="sidebarCollapsed" :busy="loading || deleting" @create="createConversation" @select="selectConversation" @delete="deleteTarget = $event" @toggle-collapse="sidebarCollapsed = !sidebarCollapsed" />
-        <ChatPanel v-model="input" :conversation-id="activeConversationId" :messages="messages" :loading="loading" :error="error" @send="sendMessage" />
-      </div>
+      <WorkspaceSidebarLayout
+        v-else-if="activeTab === 'chat'"
+        v-model:width="chatSidebarWidth"
+        :collapsed="sidebarCollapsed"
+        :collapsed-width="60"
+        :min-width="chatSidebarBounds.min"
+        :max-width="chatSidebarBounds.max"
+        :default-width="chatSidebarBounds.defaultWidth"
+        resize-label="调整会话栏宽度"
+      >
+        <template #sidebar>
+          <ChatSidebar :sessions="conversations" :active-session-id="activeConversationId" :collapsed="chatSidebarCompact" :busy="loading || deleting" @create="createConversation" @select="selectConversation" @delete="deleteTarget = $event" @toggle-collapse="toggleChatSidebar" />
+        </template>
+        <ChatPanel v-model="input" :conversation-id="activeConversationId" :conversation-title="activeConversation?.title" :messages="messages" :loading="loading" :error="error" @send="sendMessage" />
+      </WorkspaceSidebarLayout>
       <ResearchWorkbench v-else-if="activeTab === 'research'" />
       <EvaluationHubView v-else-if="activeTab === 'evaluations'" />
       <KnowledgeBasePanel v-else-if="activeTab === 'knowledge'" />
       <SettingsView v-else :tab-visibility="tabVisibility" @update:tab-visibility="updateTabVisibility" />
-    </section>
-
-    <div v-if="deleteTarget" class="fixed inset-0 z-20 grid place-items-center bg-black/20 p-5" role="dialog" aria-modal="true" aria-label="删除会话确认">
-      <div class="grid w-full max-w-md gap-4 rounded-lg border border-[var(--agent-border)] bg-[var(--agent-surface)] p-5 shadow-lg">
-        <div class="flex items-start gap-3">
-          <span class="grid size-9 shrink-0 place-items-center rounded-md bg-[var(--agent-error-bg)] text-[var(--agent-error-text)]"><PhTrash :size="18" weight="bold" aria-hidden="true" /></span>
-          <div>
-            <h2 class="m-0 text-base font-bold text-[var(--agent-text)]">删除会话</h2>
-            <p class="m-0 mt-1 text-sm leading-5 text-[var(--agent-text-muted)]">“{{ deleteTarget.title }}”及其所有消息将被永久删除。</p>
+    <Dialog :open="Boolean(deleteTarget)" @update:open="deleteTarget = $event ? deleteTarget : undefined">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <div class="mb-1 flex size-10 items-center justify-center rounded-lg bg-destructive/10 text-destructive">
+            <PhTrash :size="19" weight="bold" aria-hidden="true" />
           </div>
-        </div>
-        <div class="flex justify-end gap-2">
-          <button type="button" class="inline-flex h-9 cursor-pointer items-center rounded-md border border-[var(--agent-border)] px-3 text-sm font-semibold text-[var(--agent-text)] hover:bg-[var(--agent-surface-muted)]" :disabled="deleting" @click="deleteTarget = undefined">取消</button>
-          <button type="button" class="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md bg-[var(--agent-error-text)] px-3 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-wait disabled:opacity-60" :disabled="deleting" @click="confirmDeleteConversation"><PhTrash :size="16" weight="bold" aria-hidden="true" />{{ deleting ? '删除中' : '删除' }}</button>
-        </div>
-      </div>
-    </div>
-  </main>
+          <DialogTitle>删除会话</DialogTitle>
+          <DialogDescription>
+            “{{ deleteTarget?.title }}”及其所有消息将被永久删除，此操作无法撤销。
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" :disabled="deleting" @click="deleteTarget = undefined">取消</Button>
+          <Button variant="destructive" :disabled="deleting" @click="confirmDeleteConversation">
+            <PhTrash :size="16" weight="bold" aria-hidden="true" />
+            {{ deleting ? '删除中' : '确认删除' }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  </AppShell>
 </template>

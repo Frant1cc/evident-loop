@@ -43,7 +43,7 @@ defineEmits<{
           <PhCaretDoubleLeft :size="17" />
         </button>
       </div>
-      <div class="chat-session-scroll grid content-start gap-1 overflow-auto">
+      <div class="app-scrollbar grid content-start gap-1 overflow-auto">
         <div
           v-for="conversation in conversations"
           :key="conversation.id"
