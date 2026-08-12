@@ -4,19 +4,15 @@ import {
   PhArrowClockwise,
   PhArrowDown,
   PhArrowUp,
-  PhCaretDoubleLeft,
-  PhCaretDoubleRight,
   PhCheck,
   PhCircleNotch,
   PhClockCounterClockwise,
   PhFileText,
-  PhLightning,
   PhListChecks,
   PhMagnifyingGlass,
   PhPlay,
   PhPlus,
   PhShieldCheck,
-  PhStack,
   PhTrash,
   PhWrench
 } from '@phosphor-icons/vue';
@@ -48,17 +44,30 @@ import type {
 import { listResearchTools } from '../api/research';
 import MarkdownMessage from '../components/chat/MarkdownMessage.vue';
 import PanelResizeHandle from '../components/common/PanelResizeHandle.vue';
+import TaskCreateForm from '../components/tasks/TaskCreateForm.vue';
+import TaskHistorySidebar from '../components/tasks/TaskHistorySidebar.vue';
+import TaskInspector, { type TaskInspectorTab } from '../components/tasks/TaskInspector.vue';
+import TaskRuntimeHeader from '../components/tasks/TaskRuntimeHeader.vue';
+import TaskStatusBadge from '../components/tasks/TaskStatusBadge.vue';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog';
 import { useCollapsiblePanel, useResizablePanel, type PanelWidthBounds } from '../composables/useResizablePanel';
 
-type InspectorTab = 'events' | 'reviews' | 'evidence' | 'tools' | 'checkpoint';
-
-const sidebarBounds: PanelWidthBounds = { defaultWidth: 252, min: 180, max: 460 };
-const inspectorBounds: PanelWidthBounds = { defaultWidth: 400, min: 300, max: 760 };
+const sidebarBounds: PanelWidthBounds = { defaultWidth: 252, min: 60, max: 440 };
+const inspectorBounds: PanelWidthBounds = { defaultWidth: 400, min: 300, max: 680 };
 const sidebarWidth = useResizablePanel('tasks:sidebar-width', sidebarBounds);
 const inspectorWidth = useResizablePanel('tasks:inspector-width', inspectorBounds);
 const sidebarCollapsed = useCollapsiblePanel('tasks:sidebar-collapsed');
 const inspectorCollapsed = useCollapsiblePanel('tasks:inspector-collapsed');
-const sidebarTrack = computed(() => (sidebarCollapsed.value ? '48px' : `${sidebarWidth.value}px`));
+const sidebarCompact = computed(() => sidebarCollapsed.value || sidebarWidth.value < 128);
+const sidebarTrack = computed(() => (sidebarCollapsed.value ? '60px' : `${sidebarWidth.value}px`));
 const inspectorTrack = computed(() => (inspectorCollapsed.value ? '48px' : `${inspectorWidth.value}px`));
 
 const tasks = ref<AgentTask[]>([]);
@@ -66,7 +75,9 @@ const activeTaskId = ref<string>();
 const runningTaskId = ref<string>();
 const detail = ref<AgentTaskDetail>();
 const events = ref<AgentEvent[]>([]);
-const inspectorTab = ref<InspectorTab>('events');
+const inspectorTab = ref<TaskInspectorTab>('events');
+const mobileInspectorOpen = ref(false);
+const mobileTasksOpen = ref(false);
 const creating = ref(false);
 const initialLoading = ref(true);
 const busyAction = ref<'create' | 'plan' | 'save-plan' | 'approve' | 'run' | 'retry' | 'finalize' | 'delete'>();
@@ -161,6 +172,7 @@ onMounted(async () => {
     else creating.value = true;
   } catch (err) {
     error.value = getErrorMessage(err);
+    if (!tasks.value.length) creating.value = true;
   } finally {
     initialLoading.value = false;
   }
@@ -210,6 +222,19 @@ function openCreate() {
   planDrafts.value = [];
   events.value = [];
   error.value = '';
+}
+
+function toggleTaskSidebar() {
+  if (sidebarCollapsed.value) {
+    sidebarCollapsed.value = false;
+    if (sidebarWidth.value < 128) sidebarWidth.value = sidebarBounds.defaultWidth;
+    return;
+  }
+  if (sidebarWidth.value < 128) {
+    sidebarWidth.value = sidebarBounds.defaultWidth;
+    return;
+  }
+  sidebarCollapsed.value = true;
 }
 
 function requestTaskDelete(task: AgentTask) {
@@ -498,12 +523,6 @@ function applyVisibleEvents(id: string, next: AgentEvent[]) {
   if (nextSequence >= currentSequence) events.value = next;
 }
 
-function toggleTool(name: string) {
-  selectedTools.value = selectedTools.value.includes(name)
-    ? selectedTools.value.filter((tool) => tool !== name)
-    : [...selectedTools.value, name];
-}
-
 function statusLabel(status: AgentTaskStatus) {
   return ({
     created: '已创建',
@@ -576,10 +595,10 @@ function claimStatusLabel(status: AgentClaim['status']) {
 }
 
 function claimStatusClass(status: AgentClaim['status']) {
-  if (status === 'supported') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
-  if (status === 'unsupported') return 'border-red-200 bg-red-50 text-red-700';
-  if (status === 'conflicted') return 'border-orange-200 bg-orange-50 text-orange-800';
-  return 'border-amber-200 bg-amber-50 text-amber-800';
+  if (status === 'supported') return 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300';
+  if (status === 'unsupported') return 'border-destructive/25 bg-destructive/10 text-destructive';
+  if (status === 'conflicted') return 'border-orange-500/25 bg-orange-500/10 text-orange-700 dark:text-orange-300';
+  return 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300';
 }
 
 function claimLinks(claimId: string) {
@@ -597,9 +616,9 @@ function relationLabel(relation: AgentTaskDetail['claimEvidence'][number]['relat
 }
 
 function relationClass(relation: AgentTaskDetail['claimEvidence'][number]['relation']) {
-  if (relation === 'supports') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
-  if (relation === 'contradicts') return 'border-red-200 bg-red-50 text-red-700';
-  return 'border-sky-200 bg-sky-50 text-sky-700';
+  if (relation === 'supports') return 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300';
+  if (relation === 'contradicts') return 'border-destructive/25 bg-destructive/10 text-destructive';
+  return 'border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300';
 }
 
 function sourceTypeLabel(type: AgentTaskDetail['sources'][number]['type']) {
@@ -638,9 +657,9 @@ function evidenceGapStatusLabel(status: NonNullable<AgentTaskDetail['evidenceGap
 }
 
 function evidenceGapStatusClass(status: NonNullable<AgentTaskDetail['evidenceGaps']>[number]['status']) {
-  if (status === 'resolved') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
-  if (status === 'unresolved') return 'border-red-200 bg-red-50 text-red-700';
-  return 'border-amber-200 bg-amber-50 text-amber-800';
+  if (status === 'resolved') return 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300';
+  if (status === 'unresolved') return 'border-destructive/25 bg-destructive/10 text-destructive';
+  return 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300';
 }
 
 function toolResultItems(execution: ToolExecution) {
@@ -842,10 +861,10 @@ function eventLabel(type: string) {
 }
 
 function statusClass(status: AgentTaskStatus | AgentPlanStep['status'] | ToolExecution['status']) {
-  if (status === 'failed' || status === 'cancelled') return 'border-red-200 bg-red-50 text-red-700';
-  if (status === 'running' || status === 'planning') return 'border-amber-300 bg-amber-50 text-amber-800';
-  if (status === 'completed') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
-  if (status === 'awaiting_approval') return 'border-sky-200 bg-sky-50 text-sky-700';
+  if (status === 'failed' || status === 'cancelled') return 'border-destructive/25 bg-destructive/10 text-destructive';
+  if (status === 'running' || status === 'planning') return 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300';
+  if (status === 'completed') return 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300';
+  if (status === 'awaiting_approval') return 'border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300';
   return 'border-[var(--agent-border)] bg-[var(--agent-surface-muted)] text-[var(--agent-text-muted)]';
 }
 
@@ -854,7 +873,7 @@ function eventTone(type: string) {
   if (type.includes('completed') || type.includes('resolved')) return 'bg-emerald-500';
   if (type.includes('gap') || type.includes('supplemental')) return 'bg-amber-500';
   if (type.includes('started') || type.includes('created')) return 'bg-amber-500';
-  return 'bg-neutral-300';
+  return 'bg-muted-foreground/40';
 }
 
 function formatJson(value: unknown) {
@@ -911,176 +930,140 @@ function getErrorMessage(value: unknown) {
       class="max-lg:hidden"
     />
 
-    <aside v-if="sidebarCollapsed" class="grid min-h-0 min-w-0 content-start justify-items-center gap-2 border-r border-[var(--agent-border)] bg-[var(--agent-surface-muted)] p-2 max-md:hidden">
-      <button type="button" class="grid h-8 w-8 place-items-center rounded-md text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface)] hover:text-[var(--agent-text)]" aria-label="展开任务列表" title="展开任务列表" @click="sidebarCollapsed = false">
-        <PhCaretDoubleRight :size="17" />
-      </button>
-      <button type="button" class="grid h-8 w-8 place-items-center rounded-md bg-[var(--agent-selected-bg)] text-[var(--agent-selected-text)] hover:bg-[var(--agent-surface)] disabled:opacity-50" :disabled="Boolean(busyAction)" aria-label="新建任务" title="新建任务" @click="openCreate">
-        <PhPlus :size="17" weight="bold" />
-      </button>
-      <span class="mt-1 rounded-full bg-[var(--agent-surface)] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[var(--agent-text-muted)]" :title="`${tasks.length} 个任务`">{{ tasks.length }}</span>
-    </aside>
-
-    <aside v-else class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] border-r border-[var(--agent-border)] bg-[var(--agent-surface-muted)] max-md:hidden">
-      <header class="border-b border-[var(--agent-border)] p-3">
-        <button type="button" class="inline-flex h-8 w-full items-center justify-center gap-2 rounded-md bg-[var(--agent-selected-bg)] px-3 text-sm font-bold text-[var(--agent-selected-text)] hover:bg-[var(--agent-surface)] disabled:opacity-50" :disabled="Boolean(busyAction)" @click="openCreate">
-          <PhPlus :size="16" weight="bold" /> 新建任务
-        </button>
-        <div class="mt-4 flex items-center justify-between gap-2 font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--agent-text-muted)]">
-          <span class="truncate">任务列表</span>
-          <span class="flex shrink-0 items-center gap-1">
-            <span>{{ tasks.length }}</span>
-            <button type="button" class="grid h-6 w-6 place-items-center rounded-md text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface)] hover:text-[var(--agent-text)]" aria-label="收起任务列表" title="收起任务列表" @click="sidebarCollapsed = true">
-              <PhCaretDoubleLeft :size="14" />
-            </button>
-          </span>
-        </div>
-      </header>
-      <div class="app-scrollbar overflow-auto p-2">
-        <div v-for="task in tasks" :key="task.id" class="group relative mb-1 rounded-md border border-transparent transition-colors" :class="task.id === activeTaskId ? 'bg-[var(--agent-selected-bg)] text-[var(--agent-selected-text)]' : 'text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface)] hover:text-[var(--agent-text)]'">
-          <button type="button" class="grid w-full gap-2 px-2.5 py-2.5 pr-9 text-left" :disabled="Boolean(busyAction && busyAction !== 'run')" @click="selectTask(task.id)">
-            <span class="line-clamp-2 text-[13px] font-bold leading-5 text-[var(--agent-text)]">{{ task.goal }}</span>
-            <span class="flex items-center justify-between gap-2">
-              <span class="flex items-center gap-1.5"><PhCircleNotch v-if="task.id === runningTaskId" class="animate-spin text-amber-700" :size="12" /><span class="border px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-[0.08em]" :class="statusClass(task.status)">{{ statusLabel(task.status) }}</span></span>
-              <span class="font-mono text-[9px] text-[var(--agent-text-muted)]">{{ shortId(task.id) }}</span>
-            </span>
-          </button>
-          <button type="button" class="absolute right-1.5 top-1.5 grid size-7 place-items-center rounded-md text-[var(--agent-text-muted)] opacity-0 transition-opacity hover:bg-[var(--agent-error-bg)] hover:text-[var(--agent-error-text)] focus:opacity-100 group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-30" :disabled="Boolean(busyAction) || task.status === 'planning' || task.status === 'running'" :aria-label="`删除任务：${task.goal}`" :title="task.status === 'planning' || task.status === 'running' ? '任务执行期间不能删除' : '删除任务'" @click="requestTaskDelete(task)"><PhTrash :size="15" weight="bold" /></button>
-        </div>
-        <p v-if="!tasks.length && !initialLoading" class="m-0 px-3 py-6 text-center text-xs leading-5 text-[var(--agent-text-muted)]">还没有持久化任务。<br>创建第一个 Agent Run。</p>
-      </div>
-    </aside>
+    <TaskHistorySidebar
+      :tasks="tasks"
+      :active-task-id="activeTaskId"
+      :running-task-id="runningTaskId"
+      :compact="sidebarCompact"
+      :actions-disabled="Boolean(busyAction)"
+      :selection-disabled="Boolean(busyAction && busyAction !== 'run')"
+      @create="openCreate"
+      @select="selectTask"
+      @delete="requestTaskDelete"
+      @toggle="toggleTaskSidebar"
+    />
 
     <main class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] bg-[var(--agent-surface)]">
-      <header v-if="activeTask" class="flex items-center gap-3 border-b border-[var(--agent-border)] px-6 py-3 max-md:px-4">
-        <button type="button" class="hidden size-8 shrink-0 items-center justify-center rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] hover:bg-[var(--agent-surface-muted)] max-md:flex" :disabled="Boolean(busyAction)" aria-label="创建新任务" @click="openCreate"><PhPlus :size="16" weight="bold" /></button>
-        <div v-if="detail?.steps.length" class="flex min-w-0 flex-1 items-center gap-3">
-          <div class="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-[var(--agent-primary-soft)]"><div class="h-full rounded-full bg-[var(--agent-primary)] transition-all duration-500" :style="{ width: `${progress}%` }" /></div>
-          <span class="shrink-0 font-mono text-[10px] font-bold text-[var(--agent-text-muted)]">{{ completedStepCount }}/{{ detail.steps.length }} · {{ progress }}%</span>
-        </div>
-        <div v-else class="min-w-0 flex-1" />
-        <span class="flex shrink-0 items-center gap-1.5 font-mono text-[11px] font-bold text-[var(--agent-text)]" :title="activeTask.status === 'running' ? '本次任务已执行时间' : '本次任务执行耗时'"><PhClockCounterClockwise :size="14" /><span>{{ activeTask.status === 'running' ? '已执行' : '耗时' }} {{ taskDuration }}</span></span>
-        <span class="shrink-0 border px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.08em]" :class="statusClass(activeTask.status)">{{ statusLabel(activeTask.status) }}</span>
-        <span class="shrink-0 font-mono text-[10px] text-[var(--agent-text-muted)]">检查点 v{{ activeTask.checkpointVersion }}</span>
+      <TaskRuntimeHeader
+        v-if="activeTask"
+        :task="activeTask"
+        :completed-steps="completedStepCount"
+        :total-steps="detail?.steps.length ?? 0"
+        :progress="progress"
+        :duration="taskDuration"
+        :actions-disabled="Boolean(busyAction)"
+        @open-inspector="mobileInspectorOpen = true"
+        @open-tasks="mobileTasksOpen = true"
+        @create="openCreate"
+      />
+      <header v-else-if="creating" class="hidden min-h-14 items-center gap-2 border-b border-border bg-background px-3 max-md:flex">
+        <Button type="button" variant="ghost" size="icon" aria-label="打开任务列表" @click="mobileTasksOpen = true">
+          <PhListChecks :size="17" aria-hidden="true" />
+        </Button>
+        <span class="text-sm font-semibold">新建 Agent 任务</span>
       </header>
 
-      <div class="row-start-2 min-h-0 overflow-auto">
-        <div v-if="initialLoading" class="grid h-full place-items-center text-sm font-semibold text-[var(--agent-text-muted)]"><span class="flex items-center gap-2"><PhCircleNotch class="animate-spin" :size="18" /> 正在加载运行时</span></div>
+      <div class="app-scrollbar row-start-2 min-h-0 overflow-auto overscroll-contain">
+        <div v-if="initialLoading" class="mx-auto grid w-full max-w-4xl gap-4 px-6 py-8 max-md:px-4" aria-label="正在加载运行时">
+          <div class="h-20 animate-pulse rounded-xl bg-muted motion-reduce:animate-none" />
+          <div class="h-48 animate-pulse rounded-xl bg-muted motion-reduce:animate-none" />
+          <div class="h-32 animate-pulse rounded-xl bg-muted motion-reduce:animate-none" />
+        </div>
 
-        <form v-else-if="creating" class="mx-auto grid max-w-3xl gap-7 px-8 py-10 max-md:px-4" @submit.prevent="submitTask">
-          <div>
-            <label for="task-goal" class="font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--agent-text-muted)]">研究目标</label>
-            <textarea id="task-goal" v-model="goal" rows="5" class="mt-2 w-full resize-y rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-4 text-base font-semibold leading-7 text-[var(--agent-text)] outline-none placeholder:font-normal placeholder:text-[var(--agent-text-muted)] focus:border-[var(--agent-selected-border)] focus:ring-4 focus:ring-[var(--agent-focus-ring)]" placeholder="例如：比较两种 Agent 工作流方案，并基于知识库证据给出选型建议。" autofocus />
-          </div>
+        <TaskCreateForm
+          v-else-if="creating"
+          v-model:goal="goal"
+          v-model:max-steps="maxSteps"
+          v-model:max-tokens="maxTokens"
+          v-model:selected-tools="selectedTools"
+          :available-tools="availableTools"
+          :busy="busyAction === 'create'"
+          :error="error"
+          @submit="submitTask"
+        />
 
-          <div class="grid grid-cols-2 gap-4 max-sm:grid-cols-1">
-            <label class="grid gap-2 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] p-4">
-              <span class="font-mono text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--agent-text-muted)]">最大步骤数</span>
-              <input v-model.number="maxSteps" type="number" min="1" max="12" class="h-10 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] px-3 font-mono text-lg font-bold outline-none focus:border-[var(--agent-selected-border)] focus:ring-4 focus:ring-[var(--agent-focus-ring)]" />
-            </label>
-            <label class="grid gap-2 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] p-4">
-              <span class="font-mono text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--agent-text-muted)]">Token 预算</span>
-              <input v-model.number="maxTokens" type="number" min="1000" step="1000" class="h-10 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] px-3 font-mono text-lg font-bold outline-none focus:border-[var(--agent-selected-border)] focus:ring-4 focus:ring-[var(--agent-focus-ring)]" />
-            </label>
-          </div>
-
-          <fieldset class="m-0 border-0 p-0">
-            <legend class="font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--agent-text-muted)]">允许使用的工具</legend>
-            <div class="mt-2 grid grid-cols-2 gap-2 max-sm:grid-cols-1">
-              <button v-for="tool in availableTools" :key="tool.name" type="button" class="flex items-center justify-between rounded-md border px-3 py-3 text-left text-sm font-semibold transition-colors" :class="selectedTools.includes(tool.name) ? 'border-[var(--agent-selected-border)] bg-[var(--agent-selected-bg)] text-[var(--agent-selected-text)]' : 'border-[var(--agent-border)] bg-[var(--agent-surface)] text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface-muted)] hover:text-[var(--agent-text)]'" @click="toggleTool(tool.name)">
-                <span>{{ tool.label }}</span><PhCheck v-if="selectedTools.includes(tool.name)" :size="15" weight="bold" />
-              </button>
-            </div>
-          </fieldset>
-
-          <p v-if="error" class="m-0 border-l-2 border-red-500 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">{{ error }}</p>
-          <button type="submit" class="flex h-11 items-center justify-center gap-2 rounded-md bg-[var(--agent-primary)] px-5 text-sm font-bold text-[var(--agent-primary-text)] hover:bg-[var(--agent-primary-hover)] disabled:cursor-not-allowed disabled:opacity-50" :disabled="!goal.trim() || busyAction === 'create'">
-            <PhCircleNotch v-if="busyAction === 'create'" class="animate-spin" :size="17" />
-            <PhPlus v-else :size="17" weight="bold" />
-            {{ busyAction === 'create' ? '正在创建任务' : '创建持久化任务' }}
-          </button>
-        </form>
-
-        <div v-else-if="detail" class="mx-auto grid max-w-4xl gap-6 px-6 py-7 max-md:px-4">
-          <section class="grid grid-cols-[1fr_auto] items-center gap-5 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] p-4 max-sm:grid-cols-1">
-            <div class="grid grid-cols-4 gap-5 max-sm:grid-cols-2">
-              <div><span class="font-mono text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--agent-text-muted)]">计划步骤</span><strong class="mt-1 block font-mono text-xl">{{ detail.steps.length }}</strong></div>
-              <div><span class="font-mono text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--agent-text-muted)]">工具执行</span><strong class="mt-1 block font-mono text-xl">{{ detail.toolExecutions.length }}</strong></div>
-              <div><span class="font-mono text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--agent-text-muted)]">运行事件</span><strong class="mt-1 block font-mono text-xl">{{ events.length }}</strong></div>
-              <div><span class="font-mono text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--agent-text-muted)]">执行耗时</span><strong class="mt-1 block whitespace-nowrap font-mono text-xl">{{ taskDuration }}</strong></div>
+        <div v-else-if="detail" class="mx-auto grid w-full max-w-5xl gap-7 px-6 py-7 max-md:px-4 max-md:py-5">
+          <section class="grid grid-cols-[minmax(0,1fr)_auto] items-center overflow-hidden rounded-xl border border-border bg-card max-sm:grid-cols-1">
+            <div class="grid grid-cols-4 divide-x divide-border max-sm:grid-cols-2 max-sm:divide-x-0">
+              <div class="px-4 py-3 max-sm:border-b max-sm:border-border"><span class="text-[10px] font-medium text-muted-foreground">计划步骤</span><strong class="mt-1 block font-mono text-lg font-semibold tabular-nums">{{ detail.steps.length }}</strong></div>
+              <div class="px-4 py-3 max-sm:border-b max-sm:border-border"><span class="text-[10px] font-medium text-muted-foreground">工具执行</span><strong class="mt-1 block font-mono text-lg font-semibold tabular-nums">{{ detail.toolExecutions.length }}</strong></div>
+              <div class="px-4 py-3"><span class="text-[10px] font-medium text-muted-foreground">运行事件</span><strong class="mt-1 block font-mono text-lg font-semibold tabular-nums">{{ events.length }}</strong></div>
+              <div class="px-4 py-3"><span class="text-[10px] font-medium text-muted-foreground">执行耗时</span><strong class="mt-1 block whitespace-nowrap font-mono text-lg font-semibold tabular-nums">{{ taskDuration }}</strong></div>
             </div>
 
-            <button v-if="activeTask?.status === 'created'" type="button" class="flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--agent-primary)] px-4 text-sm font-bold text-[var(--agent-primary-text)] hover:bg-[var(--agent-primary-hover)] disabled:opacity-50" :disabled="Boolean(busyAction)" @click="generatePlan"><PhCircleNotch v-if="busyAction === 'plan'" class="animate-spin" :size="16" /><PhListChecks v-else :size="16" weight="bold" />{{ busyAction === 'plan' ? '正在生成计划' : '生成计划' }}</button>
-            <div v-else-if="activeTask?.status === 'awaiting_approval'" class="flex flex-wrap items-center justify-end gap-2">
-              <span v-if="planDirty" class="text-[11px] font-semibold text-amber-700">计划有未保存修改</span>
-              <button type="button" class="flex h-10 items-center justify-center gap-2 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] px-4 text-sm font-bold text-[var(--agent-text)] hover:bg-[var(--agent-surface-muted)] disabled:opacity-50" :disabled="Boolean(busyAction) || !planValid || !planDirty" @click="savePlanEdits"><PhCircleNotch v-if="busyAction === 'save-plan'" class="animate-spin" :size="16" /><PhCheck v-else :size="16" weight="bold" />{{ busyAction === 'save-plan' ? '保存中' : '保存计划' }}</button>
-              <button type="button" class="flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--agent-primary)] px-4 text-sm font-bold text-[var(--agent-primary-text)] hover:bg-[var(--agent-primary-hover)] disabled:opacity-50" :disabled="Boolean(busyAction) || planDirty || !planValid" @click="approveAndRun"><PhShieldCheck :size="17" weight="bold" />批准并执行</button>
+            <div class="flex flex-wrap items-center justify-end gap-2 border-l border-border px-4 py-3 max-sm:justify-start max-sm:border-l-0 max-sm:border-t">
+              <Button v-if="activeTask?.status === 'created'" size="lg" :disabled="Boolean(busyAction)" @click="generatePlan"><PhCircleNotch v-if="busyAction === 'plan'" class="animate-spin" :size="16" aria-hidden="true" /><PhListChecks v-else :size="16" weight="bold" aria-hidden="true" />{{ busyAction === 'plan' ? '正在生成计划' : '生成计划' }}</Button>
+              <template v-else-if="activeTask?.status === 'awaiting_approval'">
+                <span v-if="planDirty" class="mr-1 text-[11px] font-medium text-amber-700 dark:text-amber-300">有未保存修改</span>
+                <Button variant="outline" size="lg" :disabled="Boolean(busyAction) || !planValid || !planDirty" @click="savePlanEdits"><PhCircleNotch v-if="busyAction === 'save-plan'" class="animate-spin" :size="16" aria-hidden="true" /><PhCheck v-else :size="16" weight="bold" aria-hidden="true" />{{ busyAction === 'save-plan' ? '保存中' : '保存计划' }}</Button>
+                <Button size="lg" :disabled="Boolean(busyAction) || planDirty || !planValid" @click="approveAndRun"><PhShieldCheck :size="17" weight="bold" aria-hidden="true" />批准并执行</Button>
+              </template>
+              <Button v-else-if="activeTask?.status === 'running'" size="lg" :disabled="Boolean(busyAction) || isViewingRunningTask" @click="executeTask()"><PhCircleNotch v-if="isViewingRunningTask" class="animate-spin" :size="16" aria-hidden="true" /><PhPlay v-else :size="16" weight="fill" aria-hidden="true" />{{ isViewingRunningTask ? '正在执行' : '继续执行' }}</Button>
+              <TaskStatusBadge v-else-if="activeTask" :status="activeTask.status" :label="statusLabel(activeTask.status)" />
             </div>
-            <button v-else-if="activeTask?.status === 'running'" type="button" class="flex h-10 items-center justify-center gap-2 rounded-md bg-[var(--agent-primary)] px-4 text-sm font-bold text-[var(--agent-primary-text)] hover:bg-[var(--agent-primary-hover)] disabled:cursor-not-allowed disabled:opacity-60" :disabled="Boolean(busyAction) || isViewingRunningTask" @click="executeTask()"><PhCircleNotch v-if="isViewingRunningTask" class="animate-spin" :size="16" /><PhPlay v-else :size="16" weight="fill" />{{ isViewingRunningTask ? '正在执行' : '继续执行' }}</button>
-            <div v-else class="flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--agent-text-muted)]"><PhCheck v-if="activeTask?.status === 'completed'" :size="16" weight="bold" /><PhClockCounterClockwise v-else :size="16" />{{ statusLabel(activeTask!.status) }}</div>
           </section>
 
-          <p v-if="error" class="m-0 border-l-2 border-red-500 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">{{ error }}</p>
+          <p v-if="error" class="m-0 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2.5 text-sm font-medium text-destructive" role="alert">{{ error }}</p>
 
-          <section v-if="finalArtifact" class="overflow-hidden rounded-lg border border-[var(--agent-border)] bg-[var(--agent-surface)]">
-            <header class="flex items-start justify-between gap-5 border-b border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-5 py-4">
+          <section v-if="finalArtifact" class="overflow-hidden rounded-xl border border-border bg-card">
+            <header class="flex items-start justify-between gap-5 border-b border-border bg-muted/40 px-5 py-4">
               <div>
-                <p class="m-0 flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-emerald-800"><PhFileText :size="15" weight="bold" /> 最终任务结果</p>
-                <h2 class="m-0 mt-1 text-xl font-bold leading-7 tracking-[-0.025em]">{{ finalArtifact.title }}</h2>
+                <p class="m-0 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-emerald-700 dark:text-emerald-300"><PhFileText :size="15" weight="bold" aria-hidden="true" /> 最终任务结果</p>
+                <h2 class="m-0 mt-1 text-xl font-semibold leading-7 tracking-[-0.025em]">{{ finalArtifact.title }}</h2>
               </div>
-              <div class="shrink-0 text-right font-mono text-[9px] leading-5 text-[var(--agent-text-muted)]"><span class="block border border-emerald-200 bg-emerald-50 px-2 text-emerald-700">已完成</span><span class="mt-1 block">{{ formatTime(finalArtifact.updatedAt) }}</span></div>
+              <div class="shrink-0 text-right font-mono text-[10px] leading-5 text-muted-foreground"><TaskStatusBadge status="completed" label="已完成" /><span class="mt-1 block">{{ formatTime(finalArtifact.updatedAt) }}</span></div>
             </header>
             <article class="px-6 py-6 max-md:px-4"><MarkdownMessage :content="finalArtifact.content" /></article>
           </section>
 
-          <section v-else-if="allStepsCompleted && (activeTask?.status === 'completed' || activeTask?.status === 'failed')" class="grid justify-items-center gap-3 rounded-md border border-dashed border-amber-300 bg-amber-50/60 px-5 py-8 text-center">
-            <PhFileText :size="26" class="text-amber-700" />
-            <div><h2 class="m-0 text-base font-bold">步骤已经完成，但还没有最终报告</h2><p class="m-0 mt-1 text-sm text-[var(--agent-text-muted)]">Writer 会汇总全部步骤输出，不会重新执行检索工具。</p></div>
-            <button type="button" class="flex h-9 items-center gap-2 rounded-md bg-[var(--agent-primary)] px-4 text-xs font-bold text-[var(--agent-primary-text)] hover:bg-[var(--agent-primary-hover)] disabled:opacity-50" :disabled="Boolean(busyAction)" @click="generateFinalReport"><PhCircleNotch v-if="busyAction === 'finalize'" class="animate-spin" :size="15" /><PhFileText v-else :size="15" weight="bold" />{{ busyAction === 'finalize' ? '正在生成最终报告' : '生成最终报告' }}</button>
+          <section v-else-if="allStepsCompleted && (activeTask?.status === 'completed' || activeTask?.status === 'failed')" class="grid justify-items-center gap-3 rounded-xl border border-dashed border-amber-500/30 bg-amber-500/5 px-5 py-8 text-center">
+            <PhFileText :size="26" class="text-amber-700 dark:text-amber-300" aria-hidden="true" />
+            <div><h2 class="m-0 text-base font-semibold">步骤已经完成，但还没有最终报告</h2><p class="m-0 mt-1 text-sm text-muted-foreground">Writer 会汇总全部步骤输出，不会重新执行检索工具。</p></div>
+            <Button size="lg" :disabled="Boolean(busyAction)" @click="generateFinalReport"><PhCircleNotch v-if="busyAction === 'finalize'" class="animate-spin" :size="15" aria-hidden="true" /><PhFileText v-else :size="15" weight="bold" aria-hidden="true" />{{ busyAction === 'finalize' ? '正在生成最终报告' : '生成最终报告' }}</Button>
           </section>
 
           <section>
             <div class="mb-3 flex items-end justify-between gap-4">
-              <div><p class="m-0 font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--agent-text-muted)]">执行计划</p><h2 class="m-0 mt-1 text-lg font-bold tracking-[-0.02em]">{{ activeTask?.status === 'awaiting_approval' ? '批准前编辑计划' : '可恢复步骤' }}</h2><p v-if="activeTask?.status === 'awaiting_approval'" class="m-0 mt-1 text-xs text-[var(--agent-text-muted)]">调整步骤目标、顺序和证据要求，保存后再批准执行。</p></div>
-              <span v-if="isViewingRunningTask" class="flex items-center gap-2 font-mono text-[10px] font-bold uppercase text-amber-700"><PhCircleNotch class="animate-spin" :size="14" /> 正在同步运行状态</span>
+              <div><p class="m-0 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">执行计划</p><h2 class="m-0 mt-1 text-lg font-semibold tracking-[-0.02em]">{{ activeTask?.status === 'awaiting_approval' ? '批准前编辑计划' : '可恢复步骤' }}</h2><p v-if="activeTask?.status === 'awaiting_approval'" class="m-0 mt-1 text-xs text-muted-foreground">调整步骤目标、顺序和证据要求，保存后再批准执行。</p></div>
+              <span v-if="isViewingRunningTask" class="flex items-center gap-2 font-mono text-[10px] font-semibold uppercase text-amber-700 dark:text-amber-300"><PhCircleNotch class="animate-spin" :size="14" aria-hidden="true" /> 正在同步运行状态</span>
             </div>
 
-            <div v-if="!detail.steps.length" class="rounded-md border border-dashed border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-5 py-10 text-center text-sm leading-6 text-[var(--agent-text-muted)]">计划尚未生成。Planner 会把目标拆成可验证、可恢复的执行步骤。</div>
+            <div v-if="!detail.steps.length" class="rounded-xl border border-dashed border-border bg-muted/30 px-5 py-10 text-center text-sm leading-6 text-muted-foreground">计划尚未生成。Planner 会把目标拆成可验证、可恢复的执行步骤。</div>
             <div v-else-if="activeTask?.status === 'awaiting_approval'" class="grid gap-3">
-              <article v-for="(draft, index) in planDrafts" :key="draft.key" class="grid gap-3 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] p-4">
+              <article v-for="(draft, index) in planDrafts" :key="draft.key" class="grid gap-3 rounded-xl border border-border bg-muted/30 p-4">
                 <div class="flex items-center gap-2">
-                  <span class="grid size-8 shrink-0 place-items-center rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] font-mono text-xs font-bold text-[var(--agent-text-muted)]">{{ String(index + 1).padStart(2, '0') }}</span>
-                  <input v-model="draft.objective" class="h-10 min-w-0 flex-1 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] px-3 text-sm font-bold text-[var(--agent-text)] outline-none focus:border-[var(--agent-selected-border)] focus:ring-4 focus:ring-[var(--agent-focus-ring)]" :placeholder="`步骤 ${index + 1} 的执行目标`" :disabled="Boolean(busyAction)" />
-                  <button type="button" class="grid size-8 place-items-center rounded-md text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface)] disabled:opacity-30" :disabled="Boolean(busyAction) || index === 0" title="上移步骤" @click="movePlanStep(index, -1)"><PhArrowUp :size="14" /></button>
-                  <button type="button" class="grid size-8 place-items-center rounded-md text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface)] disabled:opacity-30" :disabled="Boolean(busyAction) || index === planDrafts.length - 1" title="下移步骤" @click="movePlanStep(index, 1)"><PhArrowDown :size="14" /></button>
-                  <button type="button" class="grid size-8 place-items-center rounded-md text-[var(--agent-error-text)] hover:bg-[var(--agent-error-bg)] disabled:opacity-30" :disabled="Boolean(busyAction) || planDrafts.length <= 1" title="删除步骤" @click="removePlanStep(index)"><PhTrash :size="14" /></button>
+                  <span class="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-background font-mono text-xs font-semibold tabular-nums text-muted-foreground">{{ String(index + 1).padStart(2, '0') }}</span>
+                  <input v-model="draft.objective" class="h-10 min-w-0 flex-1 rounded-lg border border-input bg-background px-3 text-sm font-medium text-foreground outline-none transition-shadow focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50" :placeholder="`步骤 ${index + 1} 的执行目标`" :disabled="Boolean(busyAction)" />
+                  <Button type="button" variant="ghost" size="icon" :disabled="Boolean(busyAction) || index === 0" title="上移步骤" :aria-label="`上移步骤 ${index + 1}`" @click="movePlanStep(index, -1)"><PhArrowUp :size="14" aria-hidden="true" /></Button>
+                  <Button type="button" variant="ghost" size="icon" :disabled="Boolean(busyAction) || index === planDrafts.length - 1" title="下移步骤" :aria-label="`下移步骤 ${index + 1}`" @click="movePlanStep(index, 1)"><PhArrowDown :size="14" aria-hidden="true" /></Button>
+                  <Button type="button" variant="ghost" size="icon" class="text-destructive" :disabled="Boolean(busyAction) || planDrafts.length <= 1" title="删除步骤" :aria-label="`删除步骤 ${index + 1}`" @click="removePlanStep(index)"><PhTrash :size="14" aria-hidden="true" /></Button>
                 </div>
                 <div class="ml-10 grid gap-2">
-                  <span class="font-mono text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--agent-text-muted)]">预期证据</span>
+                  <span class="text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground">预期证据</span>
                   <div v-for="(_, evidenceIndex) in draft.expectedEvidence" :key="evidenceIndex" class="flex gap-2">
-                    <input v-model="draft.expectedEvidence[evidenceIndex]" class="h-9 min-w-0 flex-1 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] px-3 text-xs text-[var(--agent-text)] outline-none focus:border-[var(--agent-selected-border)]" placeholder="需要收集或验证的证据" :disabled="Boolean(busyAction)" />
-                    <button type="button" class="grid size-9 place-items-center rounded-md text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface)] disabled:opacity-30" :disabled="Boolean(busyAction) || draft.expectedEvidence.length <= 1" title="删除证据要求" @click="removePlanEvidence(index, evidenceIndex)"><PhTrash :size="13" /></button>
+                    <input v-model="draft.expectedEvidence[evidenceIndex]" class="h-9 min-w-0 flex-1 rounded-lg border border-input bg-background px-3 text-xs text-foreground outline-none transition-shadow focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50" placeholder="需要收集或验证的证据" :disabled="Boolean(busyAction)" />
+                    <Button type="button" variant="ghost" size="icon-lg" class="text-muted-foreground" :disabled="Boolean(busyAction) || draft.expectedEvidence.length <= 1" title="删除证据要求" aria-label="删除证据要求" @click="removePlanEvidence(index, evidenceIndex)"><PhTrash :size="13" aria-hidden="true" /></Button>
                   </div>
-                  <button type="button" class="inline-flex h-8 w-fit items-center gap-1.5 rounded-md px-2.5 text-xs font-bold text-[var(--agent-selected-text)] hover:bg-[var(--agent-selected-bg)] disabled:opacity-50" :disabled="Boolean(busyAction)" @click="addPlanEvidence(index)"><PhPlus :size="13" weight="bold" />增加证据要求</button>
+                  <Button type="button" variant="ghost" size="sm" class="w-fit" :disabled="Boolean(busyAction)" @click="addPlanEvidence(index)"><PhPlus :size="13" weight="bold" aria-hidden="true" />增加证据要求</Button>
                 </div>
               </article>
-              <button v-if="planDrafts.length < (activeTask?.maxSteps ?? 0)" type="button" class="flex h-10 items-center justify-center gap-2 rounded-md border border-dashed border-[var(--agent-border)] text-xs font-bold text-[var(--agent-text-muted)] hover:border-[var(--agent-selected-border)] hover:text-[var(--agent-selected-text)] disabled:opacity-50" :disabled="Boolean(busyAction)" @click="addPlanStep"><PhPlus :size="14" weight="bold" />增加计划步骤</button>
+              <Button v-if="planDrafts.length < (activeTask?.maxSteps ?? 0)" type="button" variant="outline" size="lg" class="border-dashed text-muted-foreground" :disabled="Boolean(busyAction)" @click="addPlanStep"><PhPlus :size="14" weight="bold" aria-hidden="true" />增加计划步骤</Button>
             </div>
             <div v-else class="grid gap-0">
               <article v-for="(step, index) in detail.steps" :key="step.id" class="group grid grid-cols-[44px_minmax(0,1fr)]">
                 <div class="grid grid-rows-[36px_minmax(0,1fr)] justify-items-center">
-                  <span class="grid size-9 place-items-center rounded-md border font-mono text-xs font-bold" :class="step.status === 'completed' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : step.status === 'running' ? 'border-amber-300 bg-amber-50 text-amber-800' : step.status === 'failed' ? 'border-red-200 bg-red-50 text-red-700' : 'border-[var(--agent-border)] bg-[var(--agent-surface-muted)] text-[var(--agent-text-muted)]'">{{ String(step.sequence).padStart(2, '0') }}</span>
-                  <span v-if="index < detail.steps.length - 1" class="h-full w-px bg-neutral-200" />
+                  <span class="grid size-9 place-items-center rounded-lg border font-mono text-xs font-semibold tabular-nums" :class="statusClass(step.status)">{{ String(step.sequence).padStart(2, '0') }}</span>
+                  <span v-if="index < detail.steps.length - 1" class="h-full w-px bg-border" />
                 </div>
                 <div class="mb-4 ml-3 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-4 transition-colors group-hover:bg-[var(--agent-surface-muted)]">
                   <div class="flex items-start justify-between gap-4">
-                    <div><div class="flex flex-wrap items-center gap-2"><h3 class="m-0 text-sm font-bold leading-5">{{ step.objective }}</h3><span v-if="isSupplementalStep(step.id)" class="inline-flex items-center gap-1 rounded-sm border border-amber-200 bg-amber-50 px-1.5 py-0.5 font-mono text-[9px] font-bold text-amber-800"><PhMagnifyingGlass :size="11" weight="bold" />补充检索</span></div><p class="m-0 mt-1 flex flex-wrap items-center gap-x-2 font-mono text-[9px] uppercase tracking-[0.08em] text-[var(--agent-text-muted)]"><span>第 {{ step.attempts }} 次尝试</span><span v-if="step.startedAt" class="normal-case tracking-normal">{{ step.status === 'running' ? '已运行' : '耗时' }} {{ stepDuration(step) }}</span><span>{{ shortId(step.id) }}</span></p></div>
-                    <span class="shrink-0 border px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase" :class="statusClass(step.status)">{{ stepStatusLabel(step.status) }}</span>
+                    <div><div class="flex flex-wrap items-center gap-2"><h3 class="m-0 text-sm font-bold leading-5">{{ step.objective }}</h3><span v-if="isSupplementalStep(step.id)" class="inline-flex items-center gap-1 rounded border border-amber-500/25 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-amber-700 dark:text-amber-300"><PhMagnifyingGlass :size="11" weight="bold" aria-hidden="true" />补充检索</span></div><p class="m-0 mt-1 flex flex-wrap items-center gap-x-2 font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground"><span>第 {{ step.attempts }} 次尝试</span><span v-if="step.startedAt" class="normal-case tracking-normal">{{ step.status === 'running' ? '已运行' : '耗时' }} {{ stepDuration(step) }}</span><span>{{ shortId(step.id) }}</span></p></div>
+                    <TaskStatusBadge :status="step.status" :label="stepStatusLabel(step.status)" />
                   </div>
-                  <ul class="mb-0 mt-3 grid gap-1 border-l border-neutral-200 pl-3 text-xs leading-5 text-[var(--agent-text-muted)]"><li v-for="evidence in step.expectedEvidence" :key="evidence">{{ evidence }}</li></ul>
-                  <p v-if="step.error" class="m-0 mt-3 bg-red-50 px-3 py-2 text-xs font-semibold leading-5 text-red-700">{{ step.error }}</p>
+                  <ul class="mb-0 mt-3 grid gap-1 border-l border-border pl-3 text-xs leading-5 text-muted-foreground"><li v-for="evidence in step.expectedEvidence" :key="evidence">{{ evidence }}</li></ul>
+                  <p v-if="step.error" class="m-0 mt-3 rounded-lg bg-destructive/10 px-3 py-2 text-xs font-medium leading-5 text-destructive">{{ step.error }}</p>
                   <details v-if="step.output !== undefined" class="mt-3 border-t border-[var(--agent-border)] pt-3"><summary class="cursor-pointer font-mono text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--agent-text-muted)]">步骤输出</summary><pre class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] p-3 font-mono text-[10px] leading-5 text-[var(--agent-text)]">{{ formatJson(step.output) }}</pre></details>
-                  <button v-if="step.status === 'failed' && activeTask?.status === 'failed'" type="button" class="mt-3 flex h-8 items-center gap-2 rounded-md border border-red-200 px-3 text-xs font-bold text-red-700 hover:bg-red-50 disabled:opacity-50" :disabled="Boolean(busyAction)" @click="retryStep(step)"><PhArrowClockwise :size="14" weight="bold" />从此步骤重试</button>
+                  <Button v-if="step.status === 'failed' && activeTask?.status === 'failed'" type="button" variant="destructive" size="sm" class="mt-3" :disabled="Boolean(busyAction)" @click="retryStep(step)"><PhArrowClockwise :size="14" weight="bold" aria-hidden="true" />从此步骤重试</Button>
                 </div>
               </article>
             </div>
@@ -1089,30 +1072,18 @@ function getErrorMessage(value: unknown) {
       </div>
     </main>
 
-    <aside v-if="inspectorCollapsed" class="grid min-h-0 min-w-0 content-start justify-items-center gap-3 border-l border-[var(--agent-border)] bg-[var(--agent-surface-muted)] p-2 max-lg:hidden">
-      <button type="button" class="grid h-8 w-8 place-items-center rounded-md text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface)] hover:text-[var(--agent-text)]" aria-label="展开运行检查器" title="展开运行检查器" @click="inspectorCollapsed = false">
-        <PhCaretDoubleLeft :size="17" />
-      </button>
-      <PhStack :size="16" weight="bold" class="text-[var(--agent-text-muted)]" />
-    </aside>
-
-    <aside v-else class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] border-l border-[var(--agent-border)] bg-[var(--agent-surface-muted)] max-lg:hidden">
-      <header class="border-b border-[var(--agent-border)] px-4 py-3">
-        <div class="flex items-center justify-between gap-2">
-          <p class="m-0 flex min-w-0 items-center gap-2 text-sm font-bold text-[var(--agent-text)]"><PhStack :size="16" weight="bold" class="shrink-0" /> <span class="truncate">运行检查器</span></p>
-          <button type="button" class="grid h-7 w-7 shrink-0 place-items-center rounded-md text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface)] hover:text-[var(--agent-text)]" aria-label="收起运行检查器" title="收起运行检查器" @click="inspectorCollapsed = true">
-            <PhCaretDoubleRight :size="16" />
-          </button>
-        </div>
-        <div class="mt-3 grid grid-cols-5 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-1">
-          <button v-for="tab in [{ key: 'events', label: '事件', count: events.length }, { key: 'reviews', label: '审查', count: detail?.reviews.length ?? 0 }, { key: 'evidence', label: '证据链', count: detail?.claims.length ?? 0 }, { key: 'tools', label: '工具', count: detail?.toolExecutions.length ?? 0 }, { key: 'checkpoint', label: '状态' }]" :key="tab.key" type="button" class="flex h-8 items-center justify-center gap-1 rounded-md px-0.5 text-[10px] font-bold" :class="inspectorTab === tab.key ? 'bg-[var(--agent-selected-bg)] text-[var(--agent-selected-text)]' : 'text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface-muted)] hover:text-[var(--agent-text)]'" @click="inspectorTab = tab.key as InspectorTab">
-            <span>{{ tab.label }}</span><span v-if="tab.count !== undefined" class="font-mono text-[10px] opacity-70">{{ tab.count }}</span>
-          </button>
-        </div>
-      </header>
-
-      <div class="app-scrollbar min-h-0 overflow-auto p-4">
-        <div v-if="inspectorTab === 'events'" class="grid gap-3">
+    <TaskInspector
+      v-model:active-tab="inspectorTab"
+      v-model:mobile-open="mobileInspectorOpen"
+      :collapsed="inspectorCollapsed"
+      :event-count="events.length"
+      :review-count="detail?.reviews.length ?? 0"
+      :claim-count="detail?.claims.length ?? 0"
+      :tool-count="detail?.toolExecutions.length ?? 0"
+      @toggle="inspectorCollapsed = !inspectorCollapsed"
+    >
+      <template #events>
+        <div class="grid gap-3">
           <article v-for="event in [...events].reverse()" :key="event.id" class="min-w-0 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5">
             <div class="flex items-start justify-between gap-3">
               <div class="flex min-w-0 items-center gap-2.5"><span class="size-2.5 shrink-0 rounded-full" :class="eventTone(event.type)" /><strong class="truncate text-[13px] leading-5 text-[var(--agent-text)]">{{ eventLabel(event.type) }}</strong></div>
@@ -1131,21 +1102,24 @@ function getErrorMessage(value: unknown) {
           <p v-if="!events.length" class="m-0 rounded-md border border-dashed border-[var(--agent-border)] bg-[var(--agent-surface)] px-4 py-10 text-center text-sm text-[var(--agent-text-muted)]">暂无运行事件。</p>
         </div>
 
-        <div v-else-if="inspectorTab === 'reviews'" class="grid gap-3">
+      </template>
+
+      <template #reviews>
+        <div class="grid gap-3">
           <div v-if="detail?.reviews.length" class="grid grid-cols-3 gap-2">
             <div class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3"><span class="text-[10px] font-bold text-[var(--agent-text-muted)]">已审查步骤</span><strong class="mt-1 block font-mono text-lg">{{ detail.reviews.length }}</strong></div>
             <div class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3"><span class="text-[10px] font-bold text-[var(--agent-text-muted)]">证据缺口</span><strong class="mt-1 block font-mono text-lg">{{ detail.evidenceGaps.length }}</strong></div>
-            <div class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3"><span class="text-[10px] font-bold text-[var(--agent-text-muted)]">仍未解决</span><strong class="mt-1 block font-mono text-lg text-red-700">{{ detail.evidenceGaps.filter((gap) => gap.status === 'unresolved').length }}</strong></div>
+            <div class="rounded-lg border border-border bg-card p-3"><span class="text-[10px] font-medium text-muted-foreground">仍未解决</span><strong class="mt-1 block font-mono text-lg text-destructive">{{ detail.evidenceGaps.filter((gap) => gap.status === 'unresolved').length }}</strong></div>
           </div>
           <article v-for="review in [...(detail?.reviews ?? [])].reverse()" :key="review.id" class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0"><strong class="block text-[13px] leading-5 text-[var(--agent-text)]">{{ reviewStepContext(review) }}</strong><span class="mt-1 block font-mono text-[10px] text-[var(--agent-text-muted)]">{{ formatTime(review.createdAt) }}</span></div>
-              <span class="shrink-0 border px-2 py-0.5 font-mono text-[10px] font-bold" :class="review.verdict === 'pass' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-800'">{{ reviewVerdictLabel(review.verdict) }}</span>
+              <span class="shrink-0 rounded border px-2 py-0.5 font-mono text-[10px] font-semibold" :class="review.verdict === 'pass' ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300'">{{ reviewVerdictLabel(review.verdict) }}</span>
             </div>
             <p class="m-0 mt-3 text-[13px] font-medium leading-5 text-[var(--agent-text)]">{{ review.summary }}</p>
 
-            <div v-if="review.supportedClaims.length" class="mt-3 border-l-2 border-emerald-300 pl-3"><span class="text-[10px] font-bold text-emerald-700">已有证据支持</span><ul class="mb-0 mt-1 grid gap-1 pl-4 text-xs leading-5 text-[var(--agent-text-muted)]"><li v-for="claim in review.supportedClaims" :key="claim">{{ claim }}</li></ul></div>
-            <div v-if="review.unsupportedClaims.length" class="mt-3 border-l-2 border-amber-300 pl-3"><span class="text-[10px] font-bold text-amber-800">尚未充分支持</span><ul class="mb-0 mt-1 grid gap-1 pl-4 text-xs leading-5 text-[var(--agent-text-muted)]"><li v-for="claim in review.unsupportedClaims" :key="claim">{{ claim }}</li></ul></div>
+            <div v-if="review.supportedClaims.length" class="mt-3 border-l-2 border-emerald-500/40 pl-3"><span class="text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">已有证据支持</span><ul class="mb-0 mt-1 grid gap-1 pl-4 text-xs leading-5 text-muted-foreground"><li v-for="claim in review.supportedClaims" :key="claim">{{ claim }}</li></ul></div>
+            <div v-if="review.unsupportedClaims.length" class="mt-3 border-l-2 border-amber-500/40 pl-3"><span class="text-[10px] font-semibold text-amber-700 dark:text-amber-300">尚未充分支持</span><ul class="mb-0 mt-1 grid gap-1 pl-4 text-xs leading-5 text-muted-foreground"><li v-for="claim in review.unsupportedClaims" :key="claim">{{ claim }}</li></ul></div>
 
             <div v-if="reviewGaps(review.id).length" class="mt-3 grid gap-2 border-t border-[var(--agent-border)] pt-3">
               <div v-for="gap in reviewGaps(review.id)" :key="gap.id" class="rounded-md bg-[var(--agent-surface-muted)] p-3">
@@ -1159,9 +1133,12 @@ function getErrorMessage(value: unknown) {
           <p v-if="!detail?.reviews.length" class="m-0 rounded-md border border-dashed border-[var(--agent-border)] bg-[var(--agent-surface)] px-4 py-10 text-center text-sm leading-6 text-[var(--agent-text-muted)]">步骤完成后，Reviewer 会在这里展示证据充分性、缺口和补检索状态。</p>
         </div>
 
-        <div v-else-if="inspectorTab === 'evidence'" class="grid gap-3">
+      </template>
+
+      <template #evidence>
+        <div class="grid gap-3">
           <div v-if="detail?.claims.length || detail?.evidence.length || detail?.sources.length" class="grid grid-cols-2 gap-2">
-            <div class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3"><span class="text-[10px] font-bold text-[var(--agent-text-muted)]">结构化结论</span><div class="mt-1 flex items-end justify-between gap-2"><strong class="font-mono text-lg">{{ detail.claims.length }}</strong><span class="text-[10px] font-semibold text-emerald-700">{{ supportedClaimCount }} 条已有支持</span></div></div>
+            <div class="rounded-lg border border-border bg-card p-3"><span class="text-[10px] font-medium text-muted-foreground">结构化结论</span><div class="mt-1 flex items-end justify-between gap-2"><strong class="font-mono text-lg">{{ detail.claims.length }}</strong><span class="text-[10px] font-medium text-emerald-700 dark:text-emerald-300">{{ supportedClaimCount }} 条已有支持</span></div></div>
             <div class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3"><span class="text-[10px] font-bold text-[var(--agent-text-muted)]">直接证据覆盖</span><div class="mt-1 flex items-end justify-between gap-2"><strong class="font-mono text-lg">{{ claimCoverage }}%</strong><span class="text-[10px] text-[var(--agent-text-muted)]">{{ detail.claimEvidence.length }} 条关联</span></div><div class="mt-2 h-1 overflow-hidden rounded-full bg-[var(--agent-primary-soft)]"><div class="h-full rounded-full bg-emerald-500" :style="{ width: `${claimCoverage}%` }" /></div></div>
             <div class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3"><span class="text-[10px] font-bold text-[var(--agent-text-muted)]">证据片段</span><strong class="mt-1 block font-mono text-lg">{{ detail.evidence.length }}</strong></div>
             <div class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3"><span class="text-[10px] font-bold text-[var(--agent-text-muted)]">原始来源</span><strong class="mt-1 block font-mono text-lg">{{ detail.sources.length }}</strong></div>
@@ -1184,23 +1161,26 @@ function getErrorMessage(value: unknown) {
                     <span class="shrink-0 border px-1.5 py-0.5 font-mono text-[9px] font-bold" :class="relationClass(item.link.relation)">{{ relationLabel(item.link.relation) }}</span>
                   </div>
                   <p v-if="item.evidence.context" class="m-0 mt-2 text-[10px] font-bold text-[var(--agent-text-muted)]">{{ item.evidence.context }}</p>
-                  <blockquote class="m-0 mt-2 border-l-2 border-neutral-300 pl-3 text-xs leading-5 text-[var(--agent-text)]">{{ item.evidence.content }}</blockquote>
+                  <blockquote class="m-0 mt-2 border-l-2 border-border pl-3 text-xs leading-5 text-foreground">{{ item.evidence.content }}</blockquote>
                   <div class="mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[9px] text-[var(--agent-text-muted)]"><span v-if="formatEvidenceLocator(item.evidence.locator)">{{ formatEvidenceLocator(item.evidence.locator) }}</span><span v-if="item.evidence.relevanceScore !== undefined">相关度 {{ formatConfidence(item.evidence.relevanceScore) }}</span><span>{{ shortId(item.evidence.id) }}</span></div>
                   <p v-if="item.link.rationale" class="m-0 mt-2 rounded-sm bg-[var(--agent-surface-muted)] px-2.5 py-2 text-[11px] leading-4 text-[var(--agent-text-muted)]"><strong class="text-[var(--agent-text)]">关联说明：</strong>{{ item.link.rationale }}</p>
                 </article>
-                <p v-if="!claimLinks(claim.id).length" class="m-0 rounded-md border border-dashed border-amber-300 bg-amber-50 px-3 py-3 text-xs leading-5 text-amber-800">该结论尚未关联 Evidence，不能作为已验证事实使用。</p>
+                <p v-if="!claimLinks(claim.id).length" class="m-0 rounded-lg border border-dashed border-amber-500/30 bg-amber-500/5 px-3 py-3 text-xs leading-5 text-amber-700 dark:text-amber-300">该结论尚未关联 Evidence，不能作为已验证事实使用。</p>
               </div>
             </details>
           </div>
 
-          <details v-if="unlinkedEvidence.length" class="rounded-md border border-amber-200 bg-amber-50/60 p-3.5"><summary class="cursor-pointer text-xs font-bold text-amber-800">未关联证据（{{ unlinkedEvidence.length }}）</summary><div class="mt-3 grid gap-2"><article v-for="item in unlinkedEvidence" :key="item.id" class="rounded-md border border-amber-200 bg-[var(--agent-surface)] p-3"><p class="m-0 line-clamp-4 text-xs leading-5 text-[var(--agent-text)]">{{ item.content }}</p><span class="mt-2 block font-mono text-[9px] text-[var(--agent-text-muted)]">{{ item.evidenceKey }}</span></article></div></details>
+          <details v-if="unlinkedEvidence.length" class="rounded-lg border border-amber-500/25 bg-amber-500/5 p-3.5"><summary class="cursor-pointer text-xs font-semibold text-amber-700 dark:text-amber-300">未关联证据（{{ unlinkedEvidence.length }}）</summary><div class="mt-3 grid gap-2"><article v-for="item in unlinkedEvidence" :key="item.id" class="rounded-lg border border-amber-500/20 bg-card p-3"><p class="m-0 line-clamp-4 text-xs leading-5 text-foreground">{{ item.content }}</p><span class="mt-2 block font-mono text-[9px] text-muted-foreground">{{ item.evidenceKey }}</span></article></div></details>
 
           <details v-if="detail?.sources.length" class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><summary class="cursor-pointer text-xs font-bold text-[var(--agent-text)]">来源目录（{{ detail.sources.length }}）</summary><div class="mt-3 grid gap-2"><article v-for="source in detail.sources" :key="source.id" class="rounded-md bg-[var(--agent-surface-muted)] p-3"><div class="flex items-start justify-between gap-2"><div class="min-w-0"><strong class="block text-xs leading-5 text-[var(--agent-text)]">{{ source.title }}</strong><span v-if="source.uri" class="mt-0.5 block truncate font-mono text-[9px] text-[var(--agent-text-muted)]">{{ source.uri }}</span></div><span class="shrink-0 rounded-sm border border-[var(--agent-border)] bg-[var(--agent-surface)] px-1.5 py-0.5 text-[9px] font-bold text-[var(--agent-text-muted)]">{{ sourceTypeLabel(source.type) }}</span></div><div class="mt-2 flex items-center justify-between font-mono text-[9px] text-[var(--agent-text-muted)]"><span>{{ sourceEvidenceCount(source.id) }} 条证据</span><span>{{ shortId(source.id) }}</span></div></article></div></details>
 
           <p v-if="!detail?.claims.length && !detail?.evidence.length && !detail?.sources.length" class="m-0 rounded-md border border-dashed border-[var(--agent-border)] bg-[var(--agent-surface)] px-4 py-10 text-center text-sm leading-6 text-[var(--agent-text-muted)]">步骤完成后，Executor 会把工具结果整理为 Source、Evidence、Claim 和引用关系。</p>
         </div>
 
-        <div v-else-if="inspectorTab === 'tools'" class="grid gap-3">
+      </template>
+
+      <template #tools>
+        <div class="grid gap-3">
           <article v-for="execution in [...(detail?.toolExecutions ?? [])].reverse()" :key="execution.id" class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0"><span class="flex items-center gap-2 text-sm font-bold text-[var(--agent-text)]"><PhWrench :size="15" class="shrink-0" />{{ toolDisplayName(execution.toolName) }}</span><span class="mt-1 block font-mono text-[10px] text-[var(--agent-text-muted)]">{{ execution.toolName }}</span></div>
@@ -1230,32 +1210,63 @@ function getErrorMessage(value: unknown) {
           <p v-if="!detail?.toolExecutions.length" class="m-0 rounded-md border border-dashed border-[var(--agent-border)] bg-[var(--agent-surface)] px-4 py-10 text-center text-sm text-[var(--agent-text-muted)]">工具执行后会显示在这里。</p>
         </div>
 
-        <div v-else class="grid gap-3">
+      </template>
+
+      <template #checkpoint>
+        <div class="grid gap-3">
           <div v-if="detail?.latestCheckpoint" class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-4"><div class="flex items-center justify-between gap-3"><span class="text-sm font-bold text-[var(--agent-text)]">当前检查点</span><strong class="font-mono text-xl">v{{ detail.latestCheckpoint.version }}</strong></div><p class="m-0 mt-2 text-xs text-[var(--agent-text-muted)]">保存于 {{ formatDateTime(detail.latestCheckpoint.createdAt) }}</p></div>
           <div class="grid grid-cols-2 gap-3"><div class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><span class="text-xs text-[var(--agent-text-muted)]">最大步骤数</span><strong class="mt-1 block font-mono text-xl">{{ activeTask?.maxSteps ?? '—' }}</strong></div><div class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><span class="text-xs text-[var(--agent-text-muted)]">Token 上限</span><strong class="mt-1 block font-mono text-xl">{{ activeTask?.maxTokens ?? '—' }}</strong></div></div>
           <div class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><p class="m-0 text-xs font-bold text-[var(--agent-text)]">允许使用的工具</p><div class="mt-2.5 flex flex-wrap gap-1.5"><span v-for="tool in activeTask?.allowedTools" :key="tool" class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-2 py-1 font-mono text-[11px] text-[var(--agent-text)]">{{ tool }}</span><span v-if="!activeTask?.allowedTools.length" class="text-xs leading-5 text-[var(--agent-text-muted)]">允许使用全部已注册工具</span></div></div>
           <details v-if="detail?.latestCheckpoint" class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><summary class="cursor-pointer text-xs font-bold text-[var(--agent-text-muted)] hover:text-[var(--agent-text)]">查看原始状态</summary><pre class="m-0 mt-3 max-h-[32rem] overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--agent-surface-muted)] p-3 font-mono text-[11px] leading-5 text-[var(--agent-text)]">{{ formatJson(detail.latestCheckpoint.state) }}</pre></details>
         </div>
-      </div>
-    </aside>
+      </template>
+    </TaskInspector>
 
-    <div v-if="deleteTarget" class="fixed inset-0 z-30 grid place-items-center bg-black/20 p-5" role="dialog" aria-modal="true" aria-label="删除任务确认">
-      <div class="grid w-full max-w-md gap-4 rounded-lg border border-[var(--agent-border)] bg-[var(--agent-surface)] p-5 shadow-lg">
-        <div class="flex items-start gap-3">
-          <span class="grid size-9 shrink-0 place-items-center rounded-md bg-[var(--agent-error-bg)] text-[var(--agent-error-text)]"><PhTrash :size="18" weight="bold" /></span>
-          <div class="min-w-0">
-            <h2 class="m-0 text-base font-bold text-[var(--agent-text)]">删除 Agent 任务</h2>
-            <p class="m-0 mt-1 break-words text-sm font-semibold leading-6 text-[var(--agent-text)]">“{{ deleteTargetSummary }}”</p>
-            <p class="m-0 mt-1 text-sm leading-6 text-[var(--agent-text-muted)]">该任务及其计划、审查、证据缺口、事件、工具记录和最终报告将被永久删除。</p>
+    <Dialog v-model:open="mobileTasksOpen">
+      <DialogContent :show-close-button="false" class="h-[min(88dvh,720px)] max-w-[calc(100%-1rem)] overflow-hidden p-0 sm:max-w-md md:hidden">
+        <DialogHeader class="sr-only">
+          <DialogTitle>Agent 任务列表</DialogTitle>
+          <DialogDescription>选择已有任务或创建新任务。</DialogDescription>
+        </DialogHeader>
+        <TaskHistorySidebar
+          mobile
+          :tasks="tasks"
+          :active-task-id="activeTaskId"
+          :running-task-id="runningTaskId"
+          :compact="false"
+          :actions-disabled="Boolean(busyAction)"
+          :selection-disabled="Boolean(busyAction && busyAction !== 'run')"
+          @create="mobileTasksOpen = false; openCreate()"
+          @select="mobileTasksOpen = false; selectTask($event)"
+          @delete="mobileTasksOpen = false; requestTaskDelete($event)"
+          @toggle="mobileTasksOpen = false"
+        />
+      </DialogContent>
+    </Dialog>
+
+    <Dialog :open="Boolean(deleteTarget)" @update:open="deleteTarget = $event ? deleteTarget : undefined">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <div class="mb-1 flex size-10 items-center justify-center rounded-lg bg-destructive/10 text-destructive">
+            <PhTrash :size="19" weight="bold" aria-hidden="true" />
           </div>
-        </div>
-        <p v-if="error" class="m-0 rounded-md bg-[var(--agent-error-bg)] px-3 py-2 text-sm font-semibold text-[var(--agent-error-text)]">{{ error }}</p>
-        <div class="flex justify-end gap-2">
-          <button type="button" class="inline-flex h-9 items-center rounded-md border border-[var(--agent-border)] px-3 text-sm font-semibold text-[var(--agent-text)] hover:bg-[var(--agent-surface-muted)] disabled:opacity-50" :disabled="busyAction === 'delete'" @click="deleteTarget = undefined">取消</button>
-          <button type="button" class="inline-flex h-9 items-center gap-2 rounded-md bg-[var(--agent-error-text)] px-3 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50" :disabled="busyAction === 'delete'" @click="confirmTaskDelete"><PhCircleNotch v-if="busyAction === 'delete'" class="animate-spin" :size="15" /><PhTrash v-else :size="15" weight="bold" />{{ busyAction === 'delete' ? '正在删除' : '确认删除' }}</button>
-        </div>
-      </div>
-    </div>
+          <DialogTitle>删除 Agent 任务</DialogTitle>
+          <DialogDescription class="space-y-2">
+            <span class="block break-words font-medium text-foreground">“{{ deleteTargetSummary }}”</span>
+            <span class="block">任务及其计划、审查、证据缺口、事件、工具记录和最终报告将被永久删除，此操作无法撤销。</span>
+          </DialogDescription>
+        </DialogHeader>
+        <p v-if="error" class="m-0 rounded-lg bg-destructive/10 px-3 py-2 text-sm font-medium text-destructive" role="alert">{{ error }}</p>
+        <DialogFooter>
+          <Button variant="outline" :disabled="busyAction === 'delete'" @click="deleteTarget = undefined">取消</Button>
+          <Button variant="destructive" :disabled="busyAction === 'delete'" @click="confirmTaskDelete">
+            <PhCircleNotch v-if="busyAction === 'delete'" class="animate-spin" :size="15" aria-hidden="true" />
+            <PhTrash v-else :size="15" weight="bold" aria-hidden="true" />
+            {{ busyAction === 'delete' ? '正在删除' : '确认删除' }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </section>
 </template>
 
