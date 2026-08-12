@@ -1,15 +1,32 @@
 <script setup lang="ts">
 import { ref } from 'vue';
+import { PhGlobeHemisphereWest, PhStack } from '@phosphor-icons/vue';
+
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import WebEvaluationView from './WebEvaluationView.vue';
 import RagEvaluationView from './RagEvaluationView.vue';
+
 const mode = ref<'web' | 'rag'>('web');
 </script>
+
 <template>
-  <div class="hub">
-    <div class="tabs"><button :class="{ active: mode === 'web' }" @click="mode = 'web'">联网检索评测</button><button :class="{ active: mode === 'rag' }" @click="mode = 'rag'">知识库 RAG 评测</button></div>
-    <WebEvaluationView v-if="mode === 'web'" /><RagEvaluationView v-else />
-  </div>
+  <Tabs v-model="mode" class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-0 bg-background">
+    <header class="flex min-h-12 items-center border-b border-border bg-card px-3 sm:px-4">
+      <TabsList class="h-9 w-full max-w-md sm:w-auto">
+        <TabsTrigger value="web" class="h-8 gap-1.5 px-3">
+          <PhGlobeHemisphereWest :size="15" aria-hidden="true" />
+          联网检索
+        </TabsTrigger>
+        <TabsTrigger value="rag" class="h-8 gap-1.5 px-3">
+          <PhStack :size="15" aria-hidden="true" />
+          知识库 RAG
+        </TabsTrigger>
+      </TabsList>
+    </header>
+
+    <div class="min-h-0">
+      <TabsContent value="web" class="m-0 h-full"><WebEvaluationView /></TabsContent>
+      <TabsContent value="rag" class="m-0 h-full"><RagEvaluationView /></TabsContent>
+    </div>
+  </Tabs>
 </template>
-<style scoped>
-.hub{height:100%;min-height:0}.tabs{display:flex;gap:4px;border-bottom:1px solid var(--agent-border,#ddd);background:var(--agent-surface,#fff);padding:9px 18px}.tabs button{border:1px solid transparent;border-radius:6px;background:transparent;color:var(--agent-text-muted,#666);font-size:13px;font-weight:750;padding:7px 11px;cursor:pointer}.tabs button.active{border-color:var(--agent-border,#ddd);background:var(--agent-surface-muted,#f2f2ee);color:var(--agent-text,#222)}
-</style>
