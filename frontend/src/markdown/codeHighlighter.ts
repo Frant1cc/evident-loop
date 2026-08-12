@@ -25,6 +25,8 @@ hljs.registerLanguage('typescript', typescript);
 hljs.registerLanguage('xml', xml);
 hljs.registerLanguage('yaml', yaml);
 
+export { HIGHLIGHT_MAX_CHARS } from './highlightLimits';
+
 export function highlightCode(code: string, language: string) {
   if (!code || language === 'plaintext') return undefined;
   if (language && hljs.getLanguage(language)) return hljs.highlight(code, { language }).value;

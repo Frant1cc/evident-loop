@@ -10,10 +10,12 @@ import {
   isEvidenceSufficient,
   normalizeQuery,
   scoreSearchResults,
-  selectDiverseSearchResults
+  selectDiverseSearchResults,
+  webQualityThresholds
 } from './quality.js';
 import { rewriteWebQuery, type RewriteWebQueryOptions } from './queryRewrite.js';
-import type { PageAttempt, QueryAttempt, WebRetrievalResult } from './types.js';
+import { assessClaimCoverage, extractWebClaims, type ClaimEvidence, type WebClaim } from './claims.js';
+import type { PageAttempt, QueryAttempt, RequiredEvidenceNeed, WebRetrievalResult } from './types.js';
 
 const inputSchema = z.object({
   question: z.string().trim().min(1).max(1_000),
@@ -21,7 +23,13 @@ const inputSchema = z.object({
   maxPages: z.number().int().min(1).max(10).optional(),
   timeRange: z.enum(['day', 'week', 'month', 'year']).optional(),
   includeDomains: z.array(z.string().trim().min(1).max(253)).max(20).optional(),
-  excludeDomains: z.array(z.string().trim().min(1).max(253)).max(20).optional()
+  excludeDomains: z.array(z.string().trim().min(1).max(253)).max(20).optional(),
+  requiredEvidence: z.array(z.object({
+    id: z.string().trim().min(1).max(80),
+    label: z.string().trim().min(1).max(240),
+    groups: z.array(z.array(z.string().trim().min(1).max(120)).min(1)).min(1).max(12)
+  })).max(12).optional(),
+  expectNoAnswer: z.boolean().optional()
 });
 
 type SearchFunction = (
@@ -52,6 +60,9 @@ export async function retrieveWebEvidence(
   const rewrite = options.dependencies?.rewrite ?? rewriteWebQuery;
   const now = options.dependencies?.now ?? Date.now;
   const startedAt = now();
+  const claims: WebClaim[] = input.requiredEvidence?.length
+    ? input.requiredEvidence.map(toRequiredClaim)
+    : extractWebClaims(input.question);
   const pendingQueries = [input.question];
   const seenQueries = new Set<string>();
   const fetchedUrls = new Set<string>();
@@ -60,6 +71,7 @@ export async function retrieveWebEvidence(
   const pageAttempts: PageAttempt[] = [];
   const sources: RagSource[] = [];
   const pageScores: number[] = [];
+  const evidence: ClaimEvidence[] = [];
   let budgetExhaustedBy: WebRetrievalResult['diagnostics']['budgetExhaustedBy'];
   let stopReason = 'No usable web evidence was found';
 
@@ -71,6 +83,7 @@ export async function retrieveWebEvidence(
         question: input.question,
         previousQueries: queryAttempts.map((attempt) => attempt.query),
         reason: getRewriteReason(queryAttempts, pageAttempts),
+        uncoveredClaims: assessClaimCoverage(claims, evidence).uncoveredClaims,
         signal: options.signal
       });
     }
@@ -110,11 +123,13 @@ export async function retrieveWebEvidence(
       throwIfAborted(options.signal);
       fetchedUrls.add(candidate.canonicalUrl);
       try {
+        const currentCoverage = assessClaimCoverage(claims, evidence);
+        const pageQuestion = [input.question, ...currentCoverage.uncoveredClaims].join('\n');
         const page = await fetch(
-          { url: candidate.canonicalUrl, query: input.question, maxChunks: 6 },
+          { url: candidate.canonicalUrl, query: pageQuestion, maxChunks: 6 },
           options.signal
         );
-        const quality = assessPageQuality(input.question, candidate, page);
+        const quality = assessPageQuality(pageQuestion, candidate, page);
         pageAttempts.push({
           url: candidate.canonicalUrl,
           title: page.title || candidate.title,
@@ -126,6 +141,7 @@ export async function retrieveWebEvidence(
 
         if (quality.verdict === 'irrelevant' || quality.verdict === 'unreadable') continue;
         pageScores.push(quality.score);
+        evidence.push({ url: candidate.canonicalUrl, content: quality.chunks.map((chunk) => chunk.content).join('\n\n') });
         evidenceDomains.add(candidate.domain);
         sources.push(toRagSource(candidate.canonicalUrl, page.title || candidate.title, candidate.domain, quality));
       } catch (error) {
@@ -141,14 +157,33 @@ export async function retrieveWebEvidence(
       }
     }
 
-    if (isEvidenceSufficient(pageScores, evidenceDomains)) {
+    const coverage = assessClaimCoverage(claims, evidence);
+    // Evaluation supplies explicit facts. Once every one is supported, do not
+    // spend the remaining generic confidence budget on redundant pages.
+    if (input.requiredEvidence?.length && coverage.supportedClaimRatio === 1) {
+      stopReason = 'All required evidence points were supported; stopped before budget exhaustion';
+      return buildResult('sufficient');
+    }
+    // A deliberately unanswerable, domain-constrained question should not burn
+    // the full four-query budget after two precise searches found no usable page.
+    if (input.expectNoAnswer && queryAttempts.length >= 2 && sources.length === 0) {
+      stopReason = 'Two precise searches found no usable official evidence for an expected-unanswerable question';
+      return buildResult('empty');
+    }
+    if (
+      isEvidenceSufficient(pageScores, evidenceDomains) &&
+      coverage.supportedClaimRatio >= webQualityThresholds.claimCoverageSufficient &&
+      coverage.coverageScore >= webQualityThresholds.claimSupportScore
+    ) {
       stopReason = evidenceDomains.size >= 2
         ? 'Relevant evidence was confirmed across independent domains'
         : 'A high-confidence relevant source was found';
       return buildResult('sufficient');
     }
     if (fetchedUrls.size >= pageBudget) {
-      stopReason = 'Page budget exhausted before evidence became sufficient';
+      stopReason = coverage.uncoveredClaims.length
+        ? 'Page budget exhausted before all question claims were supported'
+        : 'Page budget exhausted before evidence became sufficient';
       break;
     }
   }
@@ -173,6 +208,7 @@ export async function retrieveWebEvidence(
   return buildResult(sources.length ? (budgetExhausted ? 'exhausted' : 'weak') : 'empty');
 
   function buildResult(verdict: WebRetrievalResult['verdict']): WebRetrievalResult {
+    const coverage = assessClaimCoverage(claims, evidence);
     return {
       question: input.question,
       verdict,
@@ -181,6 +217,11 @@ export async function retrieveWebEvidence(
       queryAttempts,
       pageAttempts,
       sources,
+      claims: coverage.claims,
+      coverageScore: coverage.coverageScore,
+      coveredClaimCount: coverage.claims.filter((claim) => claim.supported).length,
+      totalClaimCount: coverage.claims.length,
+      uncoveredClaims: coverage.uncoveredClaims,
       diagnostics: {
         queriesUsed: queryAttempts.length,
         pagesFetched: fetchedUrls.size,
@@ -193,6 +234,10 @@ export async function retrieveWebEvidence(
       }
     };
   }
+}
+
+function toRequiredClaim(need: RequiredEvidenceNeed): WebClaim {
+  return { id: need.id, text: need.label, evidenceGroups: need.groups };
 }
 
 function toRagSource(

@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import DOMPurify from 'dompurify';
-import { nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, toRef, watch } from 'vue';
 
-import { renderMarkdown, splitStableMarkdown } from '../../markdown/renderer';
+import StreamingCodeBlock from '../markdown/StreamingCodeBlock.vue';
+import StreamingTableBlock from '../markdown/StreamingTableBlock.vue';
+import { useStreamingMarkdownDisplay } from '../../composables/useStreamingMarkdownDisplay';
+import { renderMarkdown } from '../../markdown/renderer';
 
 const props = withDefaults(defineProps<{
   content: string;
@@ -16,37 +19,27 @@ const emit = defineEmits<{
 }>();
 
 const root = ref<HTMLElement>();
-const committedSegments = shallowRef<string[]>([]);
-const tailHtml = ref('');
+const finalHtml = ref('');
 const copyTimers = new Set<number>();
-let previousContent = '';
-let tailMarkdown = '';
+
+const { segments } = useStreamingMarkdownDisplay(toRef(props, 'content'), toRef(props, 'streaming'));
+
+const renderedSegments = computed(() =>
+  segments.value.map((segment) =>
+    segment.kind === 'markdown'
+      ? { ...segment, html: renderMarkdown(segment.raw, true) }
+      : segment
+  )
+);
 
 watch(
   () => [props.content, props.streaming] as const,
   ([content, streaming]) => {
-    if (!streaming) {
-      resetStreamingState();
-      previousContent = content;
-      tailHtml.value = renderMarkdown(content);
-      void enhanceCodeBlocks();
+    if (streaming) {
+      finalHtml.value = '';
       return;
     }
-
-    if (!content.startsWith(previousContent)) {
-      committedSegments.value = [];
-      tailMarkdown = content;
-    } else {
-      tailMarkdown += content.slice(previousContent.length);
-    }
-    previousContent = content;
-
-    const { stable, tail } = splitStableMarkdown(tailMarkdown);
-    if (stable) {
-      committedSegments.value = [...committedSegments.value, renderMarkdown(stable)];
-      tailMarkdown = tail;
-    }
-    tailHtml.value = renderMarkdown(tailMarkdown, true);
+    finalHtml.value = renderMarkdown(content);
     void enhanceCodeBlocks();
   },
   { immediate: true }
@@ -115,22 +108,31 @@ async function copyCode(button: HTMLButtonElement) {
   }, 1_600);
   copyTimers.add(timer);
 }
-
-function resetStreamingState() {
-  committedSegments.value = [];
-  tailMarkdown = '';
-}
 </script>
 
 <template>
   <div ref="root" class="markdown-message" @click="handleClick">
-    <div
-      v-for="(segment, index) in committedSegments"
-      :key="index"
-      class="markdown-segment"
-      v-html="segment"
-    />
-    <div v-if="tailHtml" class="markdown-segment markdown-tail" v-html="tailHtml" />
+    <template v-if="streaming">
+      <template v-for="segment in renderedSegments" :key="segment.id">
+        <div v-if="segment.kind === 'markdown'" class="markdown-segment" v-html="segment.html" />
+        <StreamingCodeBlock
+          v-else-if="segment.kind === 'code'"
+          :language="segment.language"
+          :lines="segment.lines"
+          :current-line="segment.currentLine"
+          :status="segment.status"
+        />
+        <StreamingTableBlock
+          v-else
+          :header-cells="segment.headerCells"
+          :alignments="segment.alignments"
+          :completed-rows="segment.completedRows"
+          :current-row="segment.currentRow"
+          :status="segment.status"
+        />
+      </template>
+    </template>
+    <div v-else-if="finalHtml" class="markdown-segment markdown-tail" v-html="finalHtml" />
   </div>
 </template>
 

@@ -1,5 +1,6 @@
 import type { RagSource } from '../rag/types.js';
 import type { WebSearchResult } from '../tools/webSearchTool.js';
+import type { ClaimAssessment } from './claims.js';
 
 export type WebRetrievalVerdict = 'sufficient' | 'weak' | 'empty' | 'exhausted';
 export type SearchQualityVerdict = 'sufficient' | 'weak' | 'empty';
@@ -59,5 +60,17 @@ export type WebRetrievalResult = {
   queryAttempts: QueryAttempt[];
   pageAttempts: PageAttempt[];
   sources: RagSource[];
+  claims: ClaimAssessment[];
+  coverageScore: number;
+  coveredClaimCount: number;
+  totalClaimCount: number;
+  uncoveredClaims: string[];
   diagnostics: WebRetrievalDiagnostics;
+};
+
+/** Optional, caller-supplied facts that define what “enough evidence” means. */
+export type RequiredEvidenceNeed = {
+  id: string;
+  label: string;
+  groups: string[][];
 };

@@ -16,7 +16,7 @@ const tabs = [
   { key: 'chat', label: '对话', icon: PhChatCircleText },
   { key: 'research', label: '研究工作台', icon: PhFlask },
   { key: 'tasks', label: 'Agent 运行时', icon: PhFlowArrow },
-  { key: 'evaluations', label: 'RAG 评测', icon: PhGauge },
+  { key: 'evaluations', label: '质量评测', icon: PhGauge },
   { key: 'knowledge', label: '知识库', icon: PhBooks },
   { key: 'settings', label: '设置', icon: PhGear }
 ] satisfies Array<{ key: AppTabKey; label: string; icon: unknown }>;

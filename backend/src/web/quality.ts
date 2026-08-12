@@ -14,7 +14,9 @@ export const webQualityThresholds = {
   pageWeak: 0.42,
   minimumReadableChars: 160,
   highConfidenceSingleSource: 0.76,
-  multiSourceSufficient: 0.62
+  multiSourceSufficient: 0.62,
+  claimCoverageSufficient: 0.8,
+  claimSupportScore: 0.55
 } as const;
 
 const trackingParameters = new Set([
@@ -196,4 +198,3 @@ function extractTerms(query: string) {
 function clamp01(value: number) {
   return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
 }
-

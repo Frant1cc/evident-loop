@@ -8,7 +8,8 @@ import type {
   ResearchSource,
   ResearchStep
 } from '../types/research';
-import { consumeSse, parseSseJson } from './sse';
+import { consumeResumableSse } from './resumableSse';
+import type { StreamConnectionState } from '../types/streaming';
 
 type ApiResponse<T> = {
   code: 0 | 1;
@@ -97,24 +98,21 @@ export function cancelResearchRun(runId: string) {
 export async function streamResearchRun(
   runId: string,
   onEvent: (event: ResearchStreamEvent) => void,
-  signal: AbortSignal
+  signal: AbortSignal,
+  onStatus?: (state: StreamConnectionState) => void
 ) {
-  let reachedTerminalEvent = false;
-
-  await consumeSse({
+  await consumeResumableSse({
     url: `/api/research/runs/${encodeURIComponent(runId)}/events`,
+    streamId: runId,
     signal,
-    onMessage(message) {
-      const event = toResearchStreamEvent(message.event, parseSseJson<Record<string, unknown>>(message));
-      if (!event) return;
-      if (isTerminalEvent(event)) reachedTerminalEvent = true;
-      onEvent(event);
-    }
+    onEvent(envelope) {
+      const payload = envelope.payload as Record<string, unknown>;
+      const eventName = envelope.type === 'snapshot' ? 'snapshot' : String(payload.type ?? envelope.type);
+      const event = toResearchStreamEvent(eventName, payload);
+      if (event) onEvent(event);
+    },
+    ...(onStatus ? { onStatus } : {})
   });
-
-  if (!reachedTerminalEvent && !signal.aborted) {
-    throw new Error('研究流意外结束，未收到最终结果。');
-  }
 }
 
 function toResearchStreamEvent(eventName: string, parsed: Record<string, unknown>): ResearchStreamEvent | undefined {
@@ -150,12 +148,6 @@ function toResearchStreamEvent(eventName: string, parsed: Record<string, unknown
   }
   if (eventName === 'done') return { type: 'done', run: parsed.run as ResearchRun };
   return undefined;
-}
-
-function isTerminalEvent(event: ResearchStreamEvent) {
-  if (event.type === 'done' || event.type === 'error') return true;
-  return event.type === 'snapshot'
-    && (event.run.status === 'completed' || event.run.status === 'failed' || event.run.status === 'cancelled');
 }
 
 async function request<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {

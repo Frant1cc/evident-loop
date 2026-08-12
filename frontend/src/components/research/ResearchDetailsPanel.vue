@@ -61,6 +61,19 @@ function resultItems(value: unknown) {
   });
 }
 
+function claimCoverage(value: unknown) {
+  const record = toRecord(value);
+  if (!record || typeof record.totalClaimCount !== 'number') return undefined;
+  return {
+    covered: typeof record.coveredClaimCount === 'number' ? record.coveredClaimCount : 0,
+    total: record.totalClaimCount,
+    score: typeof record.coverageScore === 'number' ? record.coverageScore : 0,
+    uncovered: Array.isArray(record.uncoveredClaims)
+      ? record.uncoveredClaims.filter((item): item is string => typeof item === 'string')
+      : []
+  };
+}
+
 function toRecord(value: unknown) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
@@ -93,6 +106,7 @@ function toRecord(value: unknown) {
         <template v-else>
           <section class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><div class="flex items-start justify-between gap-3"><p class="m-0 text-sm font-bold leading-5 text-[var(--agent-text)]">{{ props.selectedStep.title }}</p><span class="shrink-0 rounded bg-[var(--agent-selected-bg)] px-2 py-0.5 text-[10px] font-bold text-[var(--agent-selected-text)]">{{ props.selectedStep.status === 'complete' ? '已完成' : props.selectedStep.status === 'running' ? '执行中' : '失败' }}</span></div><p class="m-0 mt-2 text-[11px] text-[var(--agent-text-muted)]">{{ formatTime(props.selectedStep.startedAt) }}</p></section>
           <section v-if="inputSummary(props.selectedStep.input)" class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><p class="m-0 text-xs font-bold text-[var(--agent-text-muted)]">调用内容</p><p class="m-0 mt-1.5 break-words text-[13px] font-semibold leading-6 text-[var(--agent-text)]">{{ inputSummary(props.selectedStep.input) }}</p></section>
+          <section v-if="claimCoverage(props.selectedStep.output)" class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><div class="flex items-center justify-between gap-3"><p class="m-0 text-xs font-bold text-[var(--agent-text)]">问题覆盖</p><span class="font-mono text-xs font-bold text-[var(--agent-text)]">{{ claimCoverage(props.selectedStep.output)?.covered }}/{{ claimCoverage(props.selectedStep.output)?.total }} · {{ (claimCoverage(props.selectedStep.output)?.score ?? 0).toFixed(2) }}</span></div><ul v-if="claimCoverage(props.selectedStep.output)?.uncovered.length" class="m-0 mt-2 list-disc pl-4 text-xs leading-5 text-[var(--agent-error-text)]"><li v-for="claim in claimCoverage(props.selectedStep.output)?.uncovered" :key="claim">未覆盖：{{ claim }}</li></ul></section>
           <section v-if="resultItems(props.selectedStep.output).length" class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><p class="m-0 mb-2.5 text-xs font-bold text-[var(--agent-text)]">命中来源 · {{ resultItems(props.selectedStep.output).length }}</p><ol class="m-0 grid list-none gap-2 p-0"><li v-for="(item, index) in resultItems(props.selectedStep.output)" :key="`${item.title}-${item.heading}-${index}`" class="rounded-md bg-[var(--agent-surface-muted)] px-3 py-2"><div class="flex items-start justify-between gap-2"><strong class="text-xs leading-5 text-[var(--agent-text)]">{{ item.title }}</strong><span v-if="item.score !== undefined" class="shrink-0 font-mono text-[10px] text-[var(--agent-text-muted)]">{{ item.score.toFixed(3) }}</span></div><p v-if="item.heading" class="m-0 mt-0.5 text-[11px] leading-4 text-[var(--agent-text-muted)]">{{ item.heading }}</p></li></ol></section>
           <section v-if="props.selectedStep.error" class="rounded-md bg-[var(--agent-error-bg)] p-3.5"><p class="m-0 text-xs font-bold text-[var(--agent-error-text)]">错误信息</p><p class="m-0 mt-1.5 whitespace-pre-wrap text-[13px] leading-6 text-[var(--agent-error-text)]">{{ props.selectedStep.error }}</p></section>
           <details class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><summary class="cursor-pointer text-xs font-bold text-[var(--agent-text-muted)] hover:text-[var(--agent-text)]">查看调用参数</summary><pre class="m-0 mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--agent-surface-muted)] p-3 font-mono text-[11px] leading-5 text-[var(--agent-text)]">{{ formatJson(props.selectedStep.input) }}</pre></details>

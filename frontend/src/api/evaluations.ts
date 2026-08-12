@@ -1,4 +1,4 @@
-import type { RagEvaluation, RagEvaluationStreamEvent } from '../types/evaluations';
+import type { RagEvaluation, RagEvaluationStreamEvent, WebEvaluation, WebEvaluationCase, WebEvaluationStreamEvent } from '../types/evaluations';
 import { consumeSse, parseSseJson } from './sse';
 
 type ApiResponse<T> = { code: 0 | 1; message: string; data: T | null };
@@ -50,6 +50,62 @@ export function subscribeToRagEvaluation(
     if ((error as Error).name !== 'AbortError' && !controller.signal.aborted) onError();
   });
 
+  return () => controller.abort();
+}
+
+export function listWebEvaluationCases() {
+  return request<{ cases: WebEvaluationCase[] }>('/api/web/evaluation-cases');
+}
+
+export function createWebEvaluationCase(input: {
+  title: string;
+  question: string;
+  answerable: boolean;
+  includeDomains?: string[];
+  expectedDomains?: string[];
+  evidenceNeeds?: string[];
+}) {
+  return request<{ case: WebEvaluationCase }>('/api/web/evaluation-cases', { method: 'POST', body: input });
+}
+
+export function deleteWebEvaluationCase(id: string) {
+  return request<{ id: string }>(`/api/web/evaluation-cases/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export function listWebEvaluations() {
+  return request<{ evaluations: WebEvaluation[] }>('/api/web/evaluations');
+}
+
+export function createWebEvaluation(input: { name?: string; caseIds: string[]; k?: number }) {
+  return request<{ evaluation: WebEvaluation }>('/api/web/evaluations', { method: 'POST', body: input });
+}
+
+export function deleteWebEvaluation(id: string) {
+  return request<{ id: string }>(`/api/web/evaluations/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export function subscribeToWebEvaluation(
+  id: string,
+  onEvent: (event: WebEvaluationStreamEvent) => void,
+  onError: () => void
+) {
+  const controller = new AbortController();
+  const eventNames = new Set<WebEvaluationStreamEvent['type']>(['snapshot', 'progress', 'completed', 'failed']);
+  let reachedTerminalEvent = false;
+  void consumeSse({
+    url: `/api/web/evaluations/${encodeURIComponent(id)}/events`, signal: controller.signal,
+    onMessage(message) {
+      if (!eventNames.has(message.event as WebEvaluationStreamEvent['type'])) return;
+      const parsed = parseSseJson<WebEvaluationStreamEvent>(message);
+      const event = { ...parsed, type: message.event } as WebEvaluationStreamEvent;
+      if (event.type === 'completed' || event.type === 'failed') reachedTerminalEvent = true;
+      onEvent(event);
+    }
+  }).then(() => {
+    if (!reachedTerminalEvent && !controller.signal.aborted) onError();
+  }).catch((error: unknown) => {
+    if ((error as Error).name !== 'AbortError' && !controller.signal.aborted) onError();
+  });
   return () => controller.abort();
 }
 

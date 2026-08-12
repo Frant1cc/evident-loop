@@ -1,5 +1,7 @@
 import { Router } from 'express';
 
+import { isTerminalEventType, SNAPSHOT_EVENT_TYPE, type StreamEventEnvelope } from '@evident-loop/stream-protocol';
+
 import { LlmNotConfiguredError } from '../llm/errors.js';
 import type { ResearchApplication, ResearchRunStatus } from '../modules/research/index.js';
 import { failure, success } from '../response.js';
@@ -106,14 +108,51 @@ export function createResearchRouter(research: ResearchApplication) {
       res.status(404).json(failure('Research task not found'));
       return;
     }
+
+    const runId = initial.run.id;
+    const cursor = parseCursor(req.headers['last-event-id']);
     const stream = createSseStream(res);
-    const unsubscribe = research.subscribeToRun(initial.run.id, (event) => {
-      stream.send(event.type, event);
-      if (event.type === 'done' || event.type === 'error') stream.close();
+
+    // Buffer live events until replay has caught up, so events produced during
+    // the replay query are neither lost nor delivered out of order.
+    let replayed = false;
+    let lastSent = cursor;
+    const liveBuffer: StreamEventEnvelope[] = [];
+
+    const forward = (envelope: StreamEventEnvelope) => {
+      if (envelope.sequence <= lastSent) return;
+      lastSent = envelope.sequence;
+      stream.send(envelope.type, envelope, String(envelope.sequence));
+      if (isTerminalEventType(envelope.type)) stream.close();
+    };
+
+    const unsubscribe = research.subscribeToRun(runId, (envelope) => {
+      if (!replayed) {
+        liveBuffer.push(envelope);
+        return;
+      }
+      forward(envelope);
     });
     stream.onClose(unsubscribe);
-    stream.send('snapshot', initial);
-    if (isTerminal(initial.run.status)) stream.close();
+
+    const maxSequence = research.getStreamMaxSequence(runId);
+    // First connection, or the requested cursor is beyond what remains after
+    // cleanup: fall back to a full snapshot instead of replaying a partial log.
+    if (cursor === 0 || cursor > maxSequence) {
+      stream.send(SNAPSHOT_EVENT_TYPE, { ...initial, lastSequence: maxSequence });
+      lastSent = maxSequence;
+    } else {
+      for (const envelope of research.getStreamEventsAfter(runId, cursor)) forward(envelope);
+    }
+
+    // Compensation pass: drain any events that landed between the replay query
+    // and now, then switch to live tailing. Dedupe by sequence via `forward`.
+    replayed = true;
+    for (const envelope of research.getStreamEventsAfter(runId, lastSent)) forward(envelope);
+    const buffered = liveBuffer.splice(0).sort((a, b) => a.sequence - b.sequence);
+    for (const envelope of buffered) forward(envelope);
+
+    if (isTerminal(initial.run.status) && lastSent >= maxSequence) stream.close();
   });
 
   router.post('/research/runs/:runId/cancel', (req, res) => {
@@ -131,6 +170,12 @@ export function createResearchRouter(research: ResearchApplication) {
 
 function isTerminal(status: ResearchRunStatus) {
   return status === 'completed' || status === 'failed' || status === 'cancelled';
+}
+
+function parseCursor(header: string | string[] | undefined): number {
+  const raw = Array.isArray(header) ? header[0] : header;
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : 0;
 }
 
 function getErrorMessage(error: unknown) {

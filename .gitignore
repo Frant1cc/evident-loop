@@ -26,6 +26,7 @@ reports/
 .DS_Store
 *.log
 npm-debug.log*
+.npm-cache/
 
 # Local CI scratch data
 .ci/

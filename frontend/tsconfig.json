@@ -11,7 +11,9 @@
     "moduleDetection": "force",
     "noEmit": true,
     "jsx": "preserve",
-    "strict": true
+    "strict": true,
+    "types": []
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue"],
+  "exclude": ["src/**/*.test.ts"]
 }

@@ -7,6 +7,7 @@ export type RewriteWebQueryOptions = {
   question: string;
   previousQueries: string[];
   reason: string;
+  uncoveredClaims?: string[];
   signal?: AbortSignal;
   llm?: LlmProvider;
 };
@@ -32,7 +33,8 @@ export async function rewriteWebQuery(options: RewriteWebQueryOptions): Promise<
           content: JSON.stringify({
             question: options.question,
             previousQueries: options.previousQueries,
-            failureReason: options.reason
+            failureReason: options.reason,
+            uncoveredClaims: options.uncoveredClaims ?? []
           })
         }
       ]

@@ -30,6 +30,35 @@ export const ragEvaluations = sqliteTable('rag_evaluations', {
   updatedAt: text('updated_at').notNull()
 });
 
+export const webEvaluations = sqliteTable('web_evaluations', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  status: text('status', { enum: ['queued', 'running', 'completed', 'failed'] }).notNull(),
+  completedCases: integer('completed_cases').notNull(),
+  totalCases: integer('total_cases').notNull(),
+  currentCaseId: text('current_case_id'),
+  configJson: text('config_json').notNull(),
+  reportJson: text('report_json'),
+  error: text('error'),
+  createdAt: text('created_at').notNull(),
+  startedAt: text('started_at'),
+  completedAt: text('completed_at'),
+  updatedAt: text('updated_at').notNull()
+});
+
+export const webEvaluationCases = sqliteTable('web_evaluation_cases', {
+  id: text('id').primaryKey(),
+  title: text('title').notNull(),
+  question: text('question').notNull(),
+  category: text('category').notNull(),
+  answerable: integer('answerable', { mode: 'boolean' }).notNull(),
+  includeDomainsJson: text('include_domains_json'),
+  expectedDomainsJson: text('expected_domains_json').notNull(),
+  expectedEvidenceJson: text('expected_evidence_json').notNull(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull()
+});
+
 export const chatConversations = sqliteTable('chat_conversations', {
   id: text('id').primaryKey(),
   title: text('title').notNull(),

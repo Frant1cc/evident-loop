@@ -1,8 +1,10 @@
-import { EventEmitter } from 'node:events';
+import type { StreamEventEnvelope } from '@evident-loop/stream-protocol';
 
 import { DEFAULT_MAX_TOOL_ROUNDS } from '../agent/config.js';
 import { runAgentLoop, type AgentLoopEvent, type RunAgentLoopOptions } from '../agent/agentLoop.js';
 import type { LlmProvider } from '../llm/contracts.js';
+import { appendStreamEvent } from '../streaming/eventStore.js';
+import { publishStreamEvent, subscribeToStream } from '../streaming/eventHub.js';
 import { isExplicitWordDocumentRequest } from '../tools/wordDocumentTool.js';
 import { buildResearchContext, createConversationTitle } from './context.js';
 import {
@@ -36,7 +38,6 @@ import type {
 const DEFAULT_MODEL = 'deepseek-v4-flash';
 const STOPPED_MESSAGE = '研究任务已停止，未能生成最终回答。';
 const RESTARTED_MESSAGE = '研究服务已重启，先前的后台任务未能继续。请重新发起研究。';
-const events = new EventEmitter();
 const activeControllers = new Map<string, AbortController>();
 
 const AGENT_SYSTEM_PROMPT = `You are EvidentLoop, an evidence-first durable research agent.
@@ -148,10 +149,11 @@ export function createAndStartResearchRun(options: {
   return { run, userMessage, assistantMessage, promptPreview };
 }
 
-export function subscribeToResearchRun(id: string, listener: (event: ResearchRunEvent) => void) {
-  const eventName = `research-run:${id}`;
-  events.on(eventName, listener);
-  return () => events.off(eventName, listener);
+export function subscribeToResearchRun(
+  id: string,
+  listener: (envelope: StreamEventEnvelope<string, ResearchRunEvent>) => void
+) {
+  return subscribeToStream(id, listener as (envelope: StreamEventEnvelope) => void);
 }
 
 export function getResearchRunSnapshot(id: string): {
@@ -377,7 +379,8 @@ function failRunningSteps(run: ResearchRun, message: string) {
 }
 
 function emit(id: string, event: ResearchRunEvent) {
-  events.emit(`research-run:${id}`, event);
+  const envelope = appendStreamEvent(id, event.type, event);
+  publishStreamEvent(envelope);
 }
 
 function isTerminal(status: ResearchRun['status']) {
