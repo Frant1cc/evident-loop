@@ -4,12 +4,14 @@ import {
   PhArrowCounterClockwise,
   PhBooks,
   PhChatCircleText,
-  PhCheck,
   PhFlask,
   PhFlowArrow,
   PhGauge,
   PhSlidersHorizontal
 } from '@phosphor-icons/vue';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 
 import {
   defaultTabVisibility,
@@ -46,8 +48,8 @@ const tabOptions = [
   },
   {
     key: 'evaluations',
-    label: 'RAG 评测',
-    description: '运行检索评测并检查召回与排序质量。',
+    label: '质量评测',
+    description: '运行联网检索与 RAG 评测，检查证据和召回质量。',
     icon: PhGauge
   },
   {
@@ -84,83 +86,48 @@ function restoreDefaults() {
 </script>
 
 <template>
-  <div class="min-h-0 overflow-auto bg-[var(--agent-surface-muted)]">
-    <div class="mx-auto grid w-full max-w-5xl gap-8 px-5 py-8 md:px-8 md:py-10">
-      <header class="flex flex-col justify-between gap-5 border-b border-[var(--agent-border)] pb-7 sm:flex-row sm:items-end">
+  <section class="h-full min-h-0 overflow-auto bg-background" aria-label="工作区设置">
+    <div class="mx-auto grid w-full max-w-6xl gap-7 px-5 py-7 md:px-8 md:py-9">
+      <header class="flex flex-col justify-between gap-5 border-b border-border pb-6 sm:flex-row sm:items-end">
         <div class="max-w-2xl">
-          <div class="mb-3 inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[0.14em] text-[var(--agent-text-muted)]">
-            <PhSlidersHorizontal :size="15" weight="bold" aria-hidden="true" />
-            工作区偏好
-          </div>
-          <h1 class="m-0 text-2xl font-bold tracking-[-0.02em] text-[var(--agent-text)] md:text-[28px]">设置</h1>
-          <p class="m-0 mt-2 text-sm leading-6 text-[var(--agent-text-muted)]">选择顶部导航中显示的功能。更改会自动保存到当前浏览器。</p>
+          <p class="m-0 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Workspace preferences</p>
+          <h1 class="m-0 mt-1.5 text-2xl font-semibold tracking-[-0.035em] text-foreground">设置</h1>
+          <p class="m-0 mt-1.5 text-sm leading-6 text-muted-foreground">让顶栏只保留当前工作需要的功能。所有更改都会自动保存到此浏览器。</p>
         </div>
-
-        <button
-          type="button"
-          class="inline-flex h-9 shrink-0 cursor-pointer items-center justify-center gap-2 self-start rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] px-3 text-sm font-semibold text-[var(--agent-text)] transition-colors hover:bg-[var(--agent-primary-soft)] disabled:cursor-default disabled:opacity-40 sm:self-auto"
-          :disabled="isDefault"
-          @click="restoreDefaults"
-        >
-          <PhArrowCounterClockwise :size="16" weight="bold" aria-hidden="true" />
-          恢复默认
-        </button>
+        <Button variant="outline" class="self-start sm:self-auto" :disabled="isDefault" @click="restoreDefaults"><PhArrowCounterClockwise aria-hidden="true" />恢复默认</Button>
       </header>
 
-      <section aria-labelledby="tab-visibility-title">
-        <div class="mb-4 flex items-end justify-between gap-4">
-          <div>
-            <h2 id="tab-visibility-title" class="m-0 text-base font-bold text-[var(--agent-text)]">功能 Tab</h2>
-            <p class="m-0 mt-1 text-sm text-[var(--agent-text-muted)]">设置始终显示，确保你可以随时恢复隐藏的功能。</p>
+      <section class="grid items-start gap-6 lg:grid-cols-[250px_minmax(0,1fr)]" aria-labelledby="tab-visibility-title">
+        <aside class="grid gap-4 lg:sticky lg:top-7">
+          <div class="rounded-xl border border-border bg-card p-5">
+            <div class="flex items-center justify-between gap-3"><span class="grid size-9 place-items-center rounded-lg bg-muted text-muted-foreground"><PhSlidersHorizontal :size="18" weight="bold" aria-hidden="true" /></span><Badge variant="secondary" class="font-mono tabular-nums">{{ visibleCount }}/{{ tabOptions.length }}</Badge></div>
+            <h2 id="tab-visibility-title" class="m-0 mt-5 text-base font-semibold">顶部导航</h2>
+            <p class="m-0 mt-2 text-sm leading-6 text-muted-foreground">隐藏暂时不用的工作区，不会删除其中的数据或运行记录。</p>
           </div>
-          <span class="shrink-0 rounded-full border border-[var(--agent-border)] bg-[var(--agent-surface)] px-2.5 py-1 text-xs font-bold tabular-nums text-[var(--agent-text-muted)]">
-            已显示 {{ visibleCount }}/{{ tabOptions.length }}
-          </span>
-        </div>
+          <div class="rounded-xl border border-dashed border-border px-4 py-3 text-xs leading-5 text-muted-foreground">
+            “设置”会始终显示，因此可以随时回来恢复其他页面。
+          </div>
+        </aside>
 
-        <div class="overflow-hidden rounded-xl border border-[var(--agent-border)] bg-[var(--agent-surface)]">
-          <label
-            v-for="(tab, index) in tabOptions"
-            :key="tab.key"
-            class="group flex cursor-pointer items-center gap-4 px-4 py-4 transition-colors hover:bg-[var(--agent-surface-muted)] md:px-5"
-            :class="{ 'border-t border-[var(--agent-border)]': index > 0 }"
-          >
-            <span
-              class="grid size-10 shrink-0 place-items-center rounded-lg border transition-colors"
-              :class="tabVisibility[tab.key] ? 'border-[var(--agent-selected-border)] bg-[var(--agent-selected-bg)] text-[var(--agent-selected-text)]' : 'border-[var(--agent-border)] bg-[var(--agent-surface-muted)] text-[var(--agent-text-muted)]'"
-            >
-              <component :is="tab.icon" :size="19" weight="bold" aria-hidden="true" />
-            </span>
+        <div class="overflow-hidden rounded-xl border border-border bg-card">
+          <div class="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
+            <div><h3 class="m-0 text-sm font-semibold">功能页面</h3><p class="m-0 mt-1 text-xs text-muted-foreground">开关生效后，顶栏会立即更新。</p></div>
+            <span class="text-xs text-muted-foreground">自动保存</span>
+          </div>
 
-            <span class="min-w-0 flex-1">
-              <span class="block text-sm font-bold text-[var(--agent-text)]">{{ tab.label }}</span>
-              <span class="mt-0.5 block text-sm leading-5 text-[var(--agent-text-muted)]">{{ tab.description }}</span>
-            </span>
-
-            <input
-              class="peer sr-only"
-              type="checkbox"
-              :checked="tabVisibility[tab.key]"
-              :aria-label="`在导航中显示${tab.label}`"
-              @change="toggleTab(tab.key)"
-            />
-            <span
-              class="relative h-6 w-11 shrink-0 rounded-full border transition-colors peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[var(--agent-text)]"
-              :class="tabVisibility[tab.key] ? 'border-[var(--agent-text)] bg-[var(--agent-text)]' : 'border-[var(--agent-selected-border)] bg-[var(--agent-surface-muted)]'"
-              aria-hidden="true"
-            >
-              <span
-                class="absolute top-0.5 grid size-[18px] place-items-center rounded-full bg-white text-[var(--agent-text)] transition-transform"
-                :class="tabVisibility[tab.key] ? 'translate-x-[20px]' : 'translate-x-0.5'"
-              >
-                <PhCheck v-if="tabVisibility[tab.key]" :size="11" weight="bold" />
+          <div class="divide-y divide-border">
+            <div v-for="tab in tabOptions" :key="tab.key" class="group flex items-center gap-4 px-4 py-4 transition-colors hover:bg-muted/35 md:px-5">
+              <span class="grid size-10 shrink-0 place-items-center rounded-lg border transition-colors" :class="tabVisibility[tab.key] ? 'border-primary/20 bg-primary/10 text-primary' : 'border-border bg-muted text-muted-foreground'">
+                <component :is="tab.icon" :size="19" weight="bold" aria-hidden="true" />
               </span>
-            </span>
-          </label>
-        </div>
+              <span class="min-w-0 flex-1"><span class="block text-sm font-semibold text-foreground">{{ tab.label }}</span><span class="mt-1 block text-sm leading-5 text-muted-foreground">{{ tab.description }}</span></span>
+              <div class="flex shrink-0 items-center gap-3"><span class="hidden text-xs font-medium text-muted-foreground sm:inline">{{ tabVisibility[tab.key] ? '已显示' : '已隐藏' }}</span><Switch :model-value="tabVisibility[tab.key]" :aria-label="`在导航中显示${tab.label}`" @update:model-value="toggleTab(tab.key)" /></div>
+            </div>
+          </div>
 
-        <p class="m-0 mt-4 text-xs leading-5 text-[var(--agent-text-muted)]">导航顺序固定为：对话、研究工作台、Agent 运行时、RAG 评测、知识库、设置。</p>
+          <p class="m-0 border-t border-border bg-muted/30 px-5 py-3 text-xs leading-5 text-muted-foreground">固定顺序：对话、研究工作台、Agent 运行时、质量评测、知识库、设置。</p>
+        </div>
       </section>
     </div>
-  </div>
+  </section>
 </template>
