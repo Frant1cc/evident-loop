@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="280" viewBox="0 0 1200 280" role="img" aria-labelledby="title desc">
+  <title id="title">EvidentLoop 8-bit banner</title>
+  <desc id="desc">Pixel-art banner spelling Evident Loop.</desc>
+
+  <defs>
+    <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M24 0H0V24" fill="none" stroke="#16303a" stroke-width="1" opacity=".45"/>
+    </pattern>
+
+    <g id="glyph-e"><path d="M0 0h58v10H0zM0 12h10v22H0zM0 36h46v10H0zM0 48h10v22H0zM0 72h58v10H0z"/></g>
+    <g id="glyph-v"><path d="M0 0h10v58H0zM48 0h10v58H48zM12 48h10v22H12zM36 48h10v22H36zM24 72h10v10H24z"/></g>
+    <g id="glyph-i"><path d="M0 0h58v10H0zM24 12h10v58H24zM0 72h58v10H0z"/></g>
+    <g id="glyph-d"><path d="M0 0h46v10H0zM0 12h10v58H0zM48 12h10v58H48zM0 72h46v10H0z"/></g>
+    <g id="glyph-n"><path d="M0 0h10v82H0zM48 0h10v82H48zM12 12h10v22H12zM24 24h10v34H24zM36 48h10v22H36z"/></g>
+    <g id="glyph-t"><path d="M0 0h58v10H0zM24 12h10v70H24z"/></g>
+    <g id="glyph-l"><path d="M0 0h10v82H0zM12 72h46v10H12z"/></g>
+    <g id="glyph-o"><path d="M12 0h34v10H12zM0 12h10v58H0zM48 12h10v58H48zM12 72h34v10H12z"/></g>
+    <g id="glyph-p"><path d="M0 0h46v10H0zM0 12h10v70H0zM48 12h10v22H48zM12 36h34v10H12z"/></g>
+  </defs>
+
+  <rect width="1200" height="280" fill="#071118"/>
+  <rect x="12" y="12" width="1176" height="256" fill="url(#grid)" stroke="#284752" stroke-width="4"/>
+
+  <!-- Pixel-cut frame corners -->
+  <g fill="#63f4df">
+    <path d="M12 12h72v6H18v66h-6zM1188 12v72h-6V18h-66v-6zM12 268v-72h6v66h66v6zM1188 268h-72v-6h66v-66h6z"/>
+  </g>
+  <g fill="#ffbf47">
+    <rect x="30" y="30" width="8" height="8"/><rect x="42" y="30" width="8" height="8"/>
+    <rect x="1150" y="242" width="8" height="8"/><rect x="1162" y="242" width="8" height="8"/>
+  </g>
+
+  <!-- Header mark and label -->
+  <g transform="translate(72 52)" shape-rendering="crispEdges">
+    <path d="M0 8h8V0h32v8h8v24h-8v8H8v-8H0zm8 0v24h32V8z" fill="#63f4df"/>
+    <path d="M16 16h8v8h-8zM28 16h8v8h-8z" fill="#ffbf47"/>
+    <path d="M48 16h16v8H48zM64 8h8v24h-8zM72 8h16V0h8v8h8v24h-8v8H80v-8h16V16H80v8h-8z" fill="#63f4df"/>
+  </g>
+  <text x="190" y="80" fill="#92aab2" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17" font-weight="700" letter-spacing="3">EVIDENCE-FIRST RESEARCH AGENT</text>
+  <text x="1128" y="80" fill="#ffbf47" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="700">READY_</text>
+
+  <!-- Main pixel title shadow -->
+  <g transform="translate(198 126)" fill="#113a45" shape-rendering="crispEdges">
+    <g transform="translate(6 6)">
+      <use href="#glyph-e" x="0"/><use href="#glyph-v" x="70"/><use href="#glyph-i" x="140"/>
+      <use href="#glyph-d" x="210"/><use href="#glyph-e" x="280"/><use href="#glyph-n" x="350"/>
+      <use href="#glyph-t" x="420"/><use href="#glyph-l" x="518"/><use href="#glyph-o" x="588"/>
+      <use href="#glyph-o" x="658"/><use href="#glyph-p" x="728"/>
+    </g>
+  </g>
+
+  <!-- Main pixel title -->
+  <g transform="translate(198 126)" shape-rendering="crispEdges">
+    <g fill="#63f4df">
+      <use href="#glyph-e" x="0"/><use href="#glyph-v" x="70"/><use href="#glyph-i" x="140"/>
+      <use href="#glyph-d" x="210"/><use href="#glyph-e" x="280"/><use href="#glyph-n" x="350"/>
+      <use href="#glyph-t" x="420"/>
+    </g>
+    <g fill="#ffbf47">
+      <use href="#glyph-l" x="518"/><use href="#glyph-o" x="588"/>
+      <use href="#glyph-o" x="658"/><use href="#glyph-p" x="728"/>
+    </g>
+  </g>
+
+</svg>
