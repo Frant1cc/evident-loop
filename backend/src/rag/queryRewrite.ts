@@ -1,6 +1,7 @@
 import type { LlmProvider } from '../llm/contracts.js';
 import { createConfiguredLlm } from '../llm/config.js';
 import { resolveLlmProvider } from '../llm/provider.js';
+import { isPdfPageHeading } from '../knowledge/locator.js';
 import type { RagSource } from './types.js';
 
 const defaultRewriteModel = 'deepseek-v4-flash';
@@ -118,6 +119,7 @@ function candidateLabels(candidates: RagSource[]) {
   const labels = candidates.slice(0, 8).map((candidate) => [
     candidate.title,
     ...(candidate.contextHeadings ?? candidate.headingPath ?? (candidate.heading ? [candidate.heading] : []))
+      .filter((value) => !isPdfPageHeading(value))
   ].filter(Boolean).join(' > '));
   return [...new Set(labels)].filter(Boolean);
 }

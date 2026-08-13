@@ -246,26 +246,29 @@ function toggleChatSidebar() {
       <AppTopNavigation :active-tab="activeTab" :tab-visibility="tabVisibility" @change="changeTab" />
     </template>
 
-      <TaskConsoleView v-if="activeTab === 'tasks'" />
-      <WorkspaceSidebarLayout
-        v-else-if="activeTab === 'chat'"
-        v-model:width="chatSidebarWidth"
-        :collapsed="sidebarCollapsed"
-        :collapsed-width="60"
-        :min-width="chatSidebarBounds.min"
-        :max-width="chatSidebarBounds.max"
-        :default-width="chatSidebarBounds.defaultWidth"
-        resize-label="调整会话栏宽度"
-      >
-        <template #sidebar>
-          <ChatSidebar :sessions="conversations" :active-session-id="activeConversationId" :collapsed="chatSidebarCompact" :busy="loading || deleting" @create="createConversation" @select="selectConversation" @delete="deleteTarget = $event" @toggle-collapse="toggleChatSidebar" />
-        </template>
-        <ChatPanel v-model="input" :conversation-id="activeConversationId" :conversation-title="activeConversation?.title" :messages="messages" :loading="loading" :error="error" @send="sendMessage" />
-      </WorkspaceSidebarLayout>
-      <ResearchWorkbench v-else-if="activeTab === 'research'" />
-      <EvaluationHubView v-else-if="activeTab === 'evaluations'" />
-      <KnowledgeBasePanel v-else-if="activeTab === 'knowledge'" />
-      <SettingsView v-else :tab-visibility="tabVisibility" @update:tab-visibility="updateTabVisibility" />
+      <KeepAlive>
+        <TaskConsoleView v-if="activeTab === 'tasks'" key="tasks" />
+        <WorkspaceSidebarLayout
+          v-else-if="activeTab === 'chat'"
+          key="chat"
+          v-model:width="chatSidebarWidth"
+          :collapsed="sidebarCollapsed"
+          :collapsed-width="60"
+          :min-width="chatSidebarBounds.min"
+          :max-width="chatSidebarBounds.max"
+          :default-width="chatSidebarBounds.defaultWidth"
+          resize-label="调整会话栏宽度"
+        >
+          <template #sidebar>
+            <ChatSidebar :sessions="conversations" :active-session-id="activeConversationId" :collapsed="chatSidebarCompact" :busy="loading || deleting" @create="createConversation" @select="selectConversation" @delete="deleteTarget = $event" @toggle-collapse="toggleChatSidebar" />
+          </template>
+          <ChatPanel v-model="input" :conversation-id="activeConversationId" :conversation-title="activeConversation?.title" :messages="messages" :loading="loading" :error="error" @send="sendMessage" />
+        </WorkspaceSidebarLayout>
+        <ResearchWorkbench v-else-if="activeTab === 'research'" key="research" />
+        <EvaluationHubView v-else-if="activeTab === 'evaluations'" key="evaluations" />
+        <KnowledgeBasePanel v-else-if="activeTab === 'knowledge'" key="knowledge" />
+        <SettingsView v-else-if="activeTab === 'settings'" key="settings" :tab-visibility="tabVisibility" @update:tab-visibility="updateTabVisibility" />
+      </KeepAlive>
     <Dialog :open="Boolean(deleteTarget)" @update:open="deleteTarget = $event ? deleteTarget : undefined">
       <DialogContent class="sm:max-w-md">
         <DialogHeader>

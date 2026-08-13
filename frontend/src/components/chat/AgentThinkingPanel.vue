@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue';
+import { formatSourceLocator } from '../../lib/sourceLocator';
 import type { AgentTraceStep, RagSource, ToolCallTrace } from '../../types/chat';
 
 const activeInspectorTab = ref<'trace' | 'sources'>('trace');
@@ -23,6 +24,10 @@ function getStatusLabel(step: AgentTraceStep) {
 
 function isWebSource(source: RagSource) {
   return source.file.startsWith('http://') || source.file.startsWith('https://');
+}
+
+function sourceLocation(source: RagSource) {
+  return formatSourceLocator(source.locator, { startLine: source.startLine, endLine: source.endLine });
 }
 </script>
 
@@ -158,7 +163,7 @@ function isWebSource(source: RagSource) {
 
             <p class="m-0 mt-2 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--agent-text-muted)]">
               <template v-if="isWebSource(source)">Web page</template>
-              <template v-else>Lines {{ source.startLine }}-{{ source.endLine }}</template>
+              <template v-else>{{ sourceLocation(source) }}</template>
             </p>
 
             <p class="m-0 mt-2 max-h-44 overflow-auto whitespace-pre-wrap break-words text-xs leading-6 text-[var(--agent-text-muted)]">

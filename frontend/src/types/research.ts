@@ -43,6 +43,8 @@ export type ResearchSource = {
   endLine: number;
   score: number;
   createdAt: string;
+  format?: import('../lib/sourceLocator').KnowledgeFormat;
+  locator?: import('../lib/sourceLocator').SourceLocator;
 };
 
 export type ResearchNote = {

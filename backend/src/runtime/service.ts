@@ -111,6 +111,30 @@ export function getAgentTaskDetail(id: string): AgentTaskDetail | undefined {
   return buildTaskDetail(task, getLatestCheckpoint(id));
 }
 
+const inProcessTaskIds = new Set<string>();
+const ORPHAN_INTERRUPTED = '任务在进程退出后中断';
+
+export function markAgentTaskInProcess(id: string) {
+  if (inProcessTaskIds.has(id)) throw new Error('Agent task is already executing in this process');
+  inProcessTaskIds.add(id);
+}
+
+export function unmarkAgentTaskInProcess(id: string) {
+  inProcessTaskIds.delete(id);
+}
+
+export function isAgentTaskInProcess(id: string) {
+  return inProcessTaskIds.has(id);
+}
+
+export function failOrphanedAgentTasks() {
+  for (const task of listTasks()) {
+    if (task.status !== 'planning' && task.status !== 'running') continue;
+    if (inProcessTaskIds.has(task.id)) continue;
+    transitionAgentTask(task.id, 'failed', ORPHAN_INTERRUPTED);
+  }
+}
+
 export function listAgentTasks() {
   return listTasks();
 }
@@ -119,7 +143,7 @@ export function deleteAgentTask(id: string) {
   return runInTransaction(() => {
     const task = getTask(id);
     if (!task) return undefined;
-    if (task.status === 'planning' || task.status === 'running') {
+    if ((task.status === 'planning' || task.status === 'running') && inProcessTaskIds.has(id)) {
       throw new Error('正在规划或执行的任务不能删除');
     }
     if (!deleteTask(id)) throw new Error('Agent task disappeared while deleting');
@@ -532,18 +556,23 @@ export async function planAgentTask(options: {
   if (!initial) return undefined;
   if (initial.status !== 'created') throw new Error('Only created tasks can be planned');
 
-  const planning = transitionAgentTask(options.id, 'planning');
-  if (!planning) return undefined;
-
+  markAgentTaskInProcess(options.id);
   try {
-    const drafts = await generatePlanWithModel({ task: planning.task, ...options });
-    return saveAgentTaskPlan(options.id, drafts);
-  } catch (error) {
-    const current = getTask(options.id);
-    if (current?.status === 'planning') {
-      transitionAgentTask(options.id, 'failed', error instanceof Error ? error.message : 'Planner failed');
+    const planning = transitionAgentTask(options.id, 'planning');
+    if (!planning) return undefined;
+
+    try {
+      const drafts = await generatePlanWithModel({ task: planning.task, ...options });
+      return saveAgentTaskPlan(options.id, drafts);
+    } catch (error) {
+      const current = getTask(options.id);
+      if (current?.status === 'planning') {
+        transitionAgentTask(options.id, 'failed', error instanceof Error ? error.message : 'Planner failed');
+      }
+      throw error;
     }
-    throw error;
+  } finally {
+    unmarkAgentTaskInProcess(options.id);
   }
 }
 

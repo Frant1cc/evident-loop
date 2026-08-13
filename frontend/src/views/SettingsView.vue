@@ -19,6 +19,8 @@ import {
   type TabVisibility
 } from '../types/navigation';
 
+defineOptions({ name: 'SettingsView' });
+
 const props = defineProps<{
   tabVisibility: TabVisibility;
 }>();

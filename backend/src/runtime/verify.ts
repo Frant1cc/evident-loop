@@ -7,6 +7,8 @@ const {
   createAgentTask,
   deleteAgentTask,
   getAgentTaskDetail,
+  markAgentTaskInProcess,
+  unmarkAgentTaskInProcess,
   listAgentTaskEvents,
   saveAgentTaskPlan,
   saveAgentEvidenceChain,
@@ -365,7 +367,9 @@ const undeletableTask = createAgentTask({ goal: '验证执行中任务不可删�
 transitionAgentTask(undeletableTask.task.id, 'planning');
 transitionAgentTask(undeletableTask.task.id, 'awaiting_approval');
 transitionAgentTask(undeletableTask.task.id, 'running');
+markAgentTaskInProcess(undeletableTask.task.id);
 assert.throws(() => deleteAgentTask(undeletableTask.task.id), /不能删除/);
+unmarkAgentTaskInProcess(undeletableTask.task.id);
 assert.ok(getAgentTaskDetail(undeletableTask.task.id));
 
 const deletedTask = deleteAgentTask(interruptedTask.task.id);

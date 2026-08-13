@@ -3,6 +3,8 @@ import { computed } from 'vue';
 
 import PanelResizeHandle from '../common/PanelResizeHandle.vue';
 
+defineOptions({ name: 'WorkspaceSidebarLayout' });
+
 const props = withDefaults(defineProps<{
   width: number;
   collapsed?: boolean;

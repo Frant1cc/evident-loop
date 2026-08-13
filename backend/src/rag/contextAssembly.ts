@@ -1,5 +1,6 @@
 import { estimateTokens } from './chunker.js';
 import type { ChunkContentType, RagSource } from './types.js';
+import { mergeLocators } from '../knowledge/locator.js';
 
 /**
  * Combines retrieval hits whose source line ranges overlap or touch.
@@ -126,7 +127,9 @@ function assembleComponent(rankedMembers: RagSource[]): RagSource {
       ...(member.heading ? [member.heading] : [])
     ])),
     previousChunkId: members[0]?.previousChunkId,
-    nextChunkId: members[members.length - 1]?.nextChunkId
+    nextChunkId: members[members.length - 1]?.nextChunkId,
+    locator: mergeLocators(members.map((member) => member.locator)),
+    format: primary.format
   };
 }
 

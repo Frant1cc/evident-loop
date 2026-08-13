@@ -10,7 +10,6 @@ import {
   PhFileText,
   PhListChecks,
   PhMagnifyingGlass,
-  PhPlay,
   PhPlus,
   PhShieldCheck,
   PhTrash,
@@ -59,6 +58,8 @@ import {
   DialogTitle
 } from '@/components/ui/dialog';
 import { useCollapsiblePanel, useResizablePanel, type PanelWidthBounds } from '../composables/useResizablePanel';
+
+defineOptions({ name: 'TaskConsoleView' });
 
 const sidebarBounds: PanelWidthBounds = { defaultWidth: 252, min: 60, max: 440 };
 const inspectorBounds: PanelWidthBounds = { defaultWidth: 400, min: 300, max: 680 };
@@ -121,7 +122,9 @@ async function loadAvailableTools() {
 }
 
 const activeTask = computed(() => detail.value?.task);
-const isViewingRunningTask = computed(() => activeTaskId.value === runningTaskId.value);
+const isViewingRunningTask = computed(() =>
+  activeTask.value?.status === 'running' || activeTaskId.value === runningTaskId.value
+);
 const completedStepCount = computed(() => detail.value?.steps.filter((step) => step.status === 'completed').length ?? 0);
 const progress = computed(() => {
   const total = detail.value?.steps.length ?? 0;
@@ -192,6 +195,16 @@ onBeforeUnmount(() => {
 async function loadTasks() {
   const data = await listAgentTasks();
   tasks.value = data.tasks;
+  adoptServerRunningTask();
+}
+
+function adoptServerRunningTask() {
+  const running = tasks.value.find((task) => task.status === 'running');
+  if (!running) return;
+  if (runningTaskId.value === running.id && pollTimer) return;
+  runningTaskId.value = running.id;
+  if (busyAction.value !== 'run') busyAction.value = 'run';
+  startPolling(running.id, runSequence);
 }
 
 async function selectTask(id: string) {
@@ -238,7 +251,7 @@ function toggleTaskSidebar() {
 }
 
 function requestTaskDelete(task: AgentTask) {
-  if (busyAction.value || task.status === 'planning' || task.status === 'running') return;
+  if (busyAction.value || (task.status === 'running' && runningTaskId.value === task.id)) return;
   deleteTarget.value = task;
 }
 
@@ -458,6 +471,11 @@ function startPolling(taskId: string, sequence: number) {
         applyVisibleDetail(taskId, taskDetail);
         applyVisibleEvents(taskId, taskEvents.events);
       }
+      if (taskDetail.task.status !== 'running' && !runController && runningTaskId.value === taskId) {
+        stopPolling();
+        runningTaskId.value = undefined;
+        busyAction.value = undefined;
+      }
     } catch {
       // The blocking run request remains authoritative; a later poll can recover.
     }
@@ -640,8 +658,18 @@ function formatEvidenceLocator(locator: unknown) {
   if (!value) return '';
   const parts: string[] = [];
   if (typeof value.heading === 'string' && value.heading) parts.push(value.heading);
+  if (typeof value.pageStart === 'number') {
+    parts.push(typeof value.pageEnd === 'number' && value.pageEnd !== value.pageStart
+      ? `第 ${value.pageStart}–${value.pageEnd} 页`
+      : `第 ${value.pageStart} 页`);
+  }
+  if (typeof value.originalLineStart === 'number') {
+    parts.push(typeof value.originalLineEnd === 'number'
+      ? `原文第 ${value.originalLineStart}–${value.originalLineEnd} 行`
+      : `原文第 ${value.originalLineStart} 行`);
+  }
   if (typeof value.line === 'number') parts.push(`第 ${value.line} 行`);
-  if (typeof value.startLine === 'number') {
+  if (typeof value.startLine === 'number' && typeof value.pageStart !== 'number' && typeof value.originalLineStart !== 'number') {
     parts.push(typeof value.endLine === 'number' ? `第 ${value.startLine}–${value.endLine} 行` : `第 ${value.startLine} 行`);
   }
   if (value.truncated === true) parts.push('内容已截断');
@@ -998,7 +1026,7 @@ function getErrorMessage(value: unknown) {
                 <Button variant="outline" size="lg" :disabled="Boolean(busyAction) || !planValid || !planDirty" @click="savePlanEdits"><PhCircleNotch v-if="busyAction === 'save-plan'" class="animate-spin" :size="16" aria-hidden="true" /><PhCheck v-else :size="16" weight="bold" aria-hidden="true" />{{ busyAction === 'save-plan' ? '保存中' : '保存计划' }}</Button>
                 <Button size="lg" :disabled="Boolean(busyAction) || planDirty || !planValid" @click="approveAndRun"><PhShieldCheck :size="17" weight="bold" aria-hidden="true" />批准并执行</Button>
               </template>
-              <Button v-else-if="activeTask?.status === 'running'" size="lg" :disabled="Boolean(busyAction) || isViewingRunningTask" @click="executeTask()"><PhCircleNotch v-if="isViewingRunningTask" class="animate-spin" :size="16" aria-hidden="true" /><PhPlay v-else :size="16" weight="fill" aria-hidden="true" />{{ isViewingRunningTask ? '正在执行' : '继续执行' }}</Button>
+              <Button v-else-if="activeTask?.status === 'running'" size="lg" disabled><PhCircleNotch class="animate-spin" :size="16" aria-hidden="true" />正在执行</Button>
               <TaskStatusBadge v-else-if="activeTask" :status="activeTask.status" :label="statusLabel(activeTask.status)" />
             </div>
           </section>

@@ -15,10 +15,12 @@ import {
   completeAgentPlanStep,
   failAgentPlanStep,
   getAgentTaskDetail,
+  markAgentTaskInProcess,
   saveAgentEvidenceChain,
   saveAgentStepReview,
   startAgentPlanStep,
-  transitionAgentTask
+  transitionAgentTask,
+  unmarkAgentTaskInProcess
 } from './service.js';
 import type { AgentPlanStep, AgentTask, AgentTaskDetail, ToolExecution } from './types.js';
 import { createModelStepReviewer, type AgentStepReviewer } from './reviewer.js';
@@ -36,8 +38,6 @@ export type AgentStepRunner = (context: {
   signal?: AbortSignal;
 }) => Promise<unknown>;
 
-const activeTaskRuns = new Set<string>();
-
 export async function executeAgentTask(options: {
   id: string;
   apiKey?: string;
@@ -49,12 +49,11 @@ export async function executeAgentTask(options: {
   reviewStep?: AgentStepReviewer;
   writeArtifact?: AgentArtifactWriter;
 }): Promise<AgentTaskDetail | undefined> {
-  if (activeTaskRuns.has(options.id)) throw new Error('Agent task is already executing in this process');
-  activeTaskRuns.add(options.id);
+  markAgentTaskInProcess(options.id);
   try {
     return await executeAgentTaskInternal(options);
   } finally {
-    activeTaskRuns.delete(options.id);
+    unmarkAgentTaskInProcess(options.id);
   }
 }
 

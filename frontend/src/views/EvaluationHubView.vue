@@ -6,6 +6,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import WebEvaluationView from './WebEvaluationView.vue';
 import RagEvaluationView from './RagEvaluationView.vue';
 
+defineOptions({ name: 'EvaluationHubView' });
+
 const mode = ref<'web' | 'rag'>('web');
 </script>
 

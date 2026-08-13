@@ -114,6 +114,7 @@ export function buildEvidenceFromToolExecutions(
         });
         const rawId = textValue(result.id) ?? fingerprint(`${file}:${content}`);
         const evidenceKey = `knowledge:${rawId}`;
+        const locator = recordValue(result.locator);
         evidence.set(evidenceKey, {
           evidenceKey,
           sourceKey,
@@ -123,7 +124,12 @@ export function buildEvidenceFromToolExecutions(
             chunkId: textValue(result.id),
             heading: textValue(result.heading),
             startLine: numberValue(result.startLine),
-            endLine: numberValue(result.endLine)
+            endLine: numberValue(result.endLine),
+            ...(numberValue(locator?.pageStart) === undefined ? {} : { pageStart: numberValue(locator?.pageStart) }),
+            ...(numberValue(locator?.pageEnd) === undefined ? {} : { pageEnd: numberValue(locator?.pageEnd) }),
+            ...(numberValue(locator?.originalLineStart) === undefined ? {} : { originalLineStart: numberValue(locator?.originalLineStart) }),
+            ...(numberValue(locator?.originalLineEnd) === undefined ? {} : { originalLineEnd: numberValue(locator?.originalLineEnd) }),
+            ...(textValue(result.format) ? { format: textValue(result.format) } : {})
           },
           ...(normalizedScore(result.score) === undefined ? {} : { relevanceScore: normalizedScore(result.score) })
         });

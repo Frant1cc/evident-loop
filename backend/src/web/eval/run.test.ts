@@ -50,7 +50,7 @@ test('runWebEvaluation aggregates accuracy, false-sufficient, and cost metrics',
 });
 
 function source(url: string, content: string): RagSource {
-  return { id: url, file: url, title: 'Official docs', content, lineCount: 1, startLine: 1, endLine: 1, score: 0.9 };
+  return { id: url, file: url, title: 'Official docs', content, startLine: 1, endLine: 1, score: 0.9 };
 }
 
 function retrieval(verdict: WebRetrievalResult['verdict'], sources: RagSource[]): WebRetrievalResult {

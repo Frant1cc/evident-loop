@@ -46,7 +46,7 @@ function formatUpdatedAt(value: string) {
 }
 
 function canDelete(task: AgentTask) {
-  return !props.actionsDisabled && task.status !== 'planning' && task.status !== 'running';
+  return !props.actionsDisabled && (task.status !== 'running' || task.id !== props.runningTaskId);
 }
 </script>
 
@@ -132,7 +132,7 @@ function canDelete(task: AgentTask) {
               <PhTrash :size="14" weight="bold" aria-hidden="true" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="right">{{ task.status === 'planning' || task.status === 'running' ? '任务运行期间不能删除' : '删除任务' }}</TooltipContent>
+          <TooltipContent side="right">{{ task.id === runningTaskId ? '任务运行期间不能删除' : '删除任务' }}</TooltipContent>
         </Tooltip>
       </div>
 

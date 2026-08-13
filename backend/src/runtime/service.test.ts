@@ -5,6 +5,8 @@ import { initDb } from '../db.js';
 import {
   createAgentTask,
   deleteAgentTask,
+  failOrphanedAgentTasks,
+  getAgentTaskDetail,
   listAgentTaskEvents,
   saveAgentTaskPlan,
   transitionAgentTask,
@@ -63,5 +65,20 @@ test('rejects plan edits after approval', () => {
   } finally {
     transitionAgentTask(created.task.id, 'cancelled');
     deleteAgentTask(created.task.id);
+  }
+});
+
+test('orphaned planning tasks can be failed and deleted', () => {
+  const created = createAgentTask({ goal: '卡住的规划任务', maxSteps: 2 });
+
+  try {
+    transitionAgentTask(created.task.id, 'planning');
+    failOrphanedAgentTasks();
+    const failed = deleteAgentTask(created.task.id);
+    assert.equal(failed?.id, created.task.id);
+    assert.equal(getAgentTaskDetail(created.task.id), undefined);
+  } catch (error) {
+    deleteAgentTask(created.task.id);
+    throw error;
   }
 });

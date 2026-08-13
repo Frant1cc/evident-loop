@@ -4,6 +4,7 @@ import {
   PhCheckCircle,
   PhCircleNotch,
   PhDatabase,
+  PhDownloadSimple,
   PhEye,
   PhFilePlus,
   PhFileText,
@@ -32,20 +33,26 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { formatSourceLocator } from '../../lib/sourceLocator';
 import {
   createKnowledgeDocument,
   deleteKnowledgeDocument,
+  downloadKnowledgeOriginal,
   listKnowledgeDocuments,
   previewKnowledgeChunks,
   readKnowledgeDocument,
+  reparseKnowledgeDocument,
   syncKnowledgeBase,
   updateKnowledgeDocument,
+  uploadKnowledgeDocument,
   vectorizeKnowledgeDocument,
   type KnowledgeChunk,
   type KnowledgeDocumentDetail,
   type KnowledgeDocumentSummary,
   type KnowledgeIndexResult
 } from '../../api/knowledge';
+
+defineOptions({ name: 'KnowledgeBasePanel' });
 
 type EditorMode = 'create' | 'edit' | 'view';
 
@@ -73,7 +80,10 @@ const notice = ref('');
 const lastSync = ref('');
 const indexResult = ref<KnowledgeIndexResult>();
 const fileInput = ref<HTMLInputElement>();
-const maxUploadBytes = 1_000_000;
+const maxUploadBytes = 20_000_000;
+const uploading = ref(false);
+const reparsing = ref(false);
+const downloading = ref(false);
 
 const filteredDocuments = computed(() => {
   const query = searchQuery.value.trim().toLocaleLowerCase();
@@ -160,49 +170,48 @@ function openFilePicker() {
   fileInput.value?.click();
 }
 
-async function uploadMarkdownFile(event: Event) {
+async function uploadKnowledgeFile(event: Event) {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
   input.value = '';
 
   if (!file) return;
 
-  if (!file.name.toLowerCase().endsWith('.md')) {
-    error.value = '只能上传 .md 文件。';
+  if (!/\.(md|txt|docx|pdf)$/i.test(file.name)) {
+    error.value = '支持上传 Markdown、TXT、DOCX 和文本型 PDF。';
     return;
   }
 
   if (file.size > maxUploadBytes) {
-    error.value = 'Markdown 文件不能超过 1 MB。';
+    error.value = '文件不能超过 20 MB。';
     return;
   }
 
+  uploading.value = true;
+  error.value = '';
+  notice.value = '';
+
   try {
-    const content = await file.text();
-
-    if (!content.trim()) {
-      error.value = 'Markdown 文件内容不能为空。';
-      return;
-    }
-
-    selectedPath.value = undefined;
-    selectedDocument.value = undefined;
-    draftPath.value = file.name;
-    draftContent.value = content;
-    autoIndex.value = true;
-    chunks.value = [];
-    chunkPath.value = undefined;
-    indexResult.value = undefined;
-    editorMode.value = 'create';
-    error.value = '';
-    notice.value = '文件内容已载入，请确认后保存。';
+    const result = await uploadKnowledgeDocument({ file, autoIndex: autoIndex.value });
+    selectedPath.value = result.document.path;
+    selectedDocument.value = result.document;
+    draftPath.value = result.document.path;
+    draftContent.value = result.document.content;
+    indexResult.value = result.indexResult;
+    editorMode.value = 'view';
+    notice.value = result.indexStatus === 'pending' || result.indexError
+      ? '文件已导入，但索引暂未完成，可稍后手动向量化。'
+      : '文件已导入并完成索引处理。';
+    await loadDocuments();
   } catch (err) {
     error.value = getErrorMessage(err);
+  } finally {
+    uploading.value = false;
   }
 }
 
 function startEditing() {
-  if (!selectedDocument.value) return;
+  if (!selectedDocument.value || selectedDocument.value.editable === false) return;
 
   draftPath.value = selectedDocument.value.path;
   draftContent.value = selectedDocument.value.content;
@@ -368,6 +377,57 @@ function formatDate(value?: string) {
   }).format(new Date(value));
 }
 
+async function reparseDocument(path = selectedPath.value) {
+  if (!path || reparsing.value) return;
+
+  reparsing.value = true;
+  error.value = '';
+  notice.value = '';
+
+  try {
+    const result = await reparseKnowledgeDocument(path, autoIndex.value);
+    selectedDocument.value = result.document;
+    indexResult.value = result.indexResult;
+    notice.value = result.indexStatus === 'pending' || result.indexError
+      ? '已重新解析，但索引暂未完成，可稍后手动向量化。'
+      : '已从原文件重新解析并刷新索引。';
+    await loadDocuments();
+  } catch (err) {
+    error.value = getErrorMessage(err);
+  } finally {
+    reparsing.value = false;
+  }
+}
+
+async function downloadOriginal(path = selectedPath.value) {
+  if (!path || downloading.value) return;
+  downloading.value = true;
+  error.value = '';
+  try {
+    await downloadKnowledgeOriginal(path);
+    notice.value = '原文件已开始下载。';
+  } catch (err) {
+    error.value = getErrorMessage(err);
+  } finally {
+    downloading.value = false;
+  }
+}
+
+function formatBytes(value?: number) {
+  if (!value) return '';
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatBadge(format?: string) {
+  return (format ?? 'md').toUpperCase();
+}
+
+function chunkLocation(chunk: KnowledgeChunk) {
+  return formatSourceLocator(chunk.locator, { startLine: chunk.startLine, endLine: chunk.endLine });
+}
+
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : '请求失败，请稍后重试。';
 }
@@ -380,7 +440,7 @@ function getErrorMessage(error: unknown) {
         <div class="min-w-0">
           <p class="m-0 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Knowledge base</p>
           <h1 class="m-0 mt-1.5 text-2xl font-semibold tracking-[-0.035em] text-foreground">知识库</h1>
-          <p class="m-0 mt-1.5 text-sm leading-6 text-muted-foreground">维护 Agent 可检索的 Markdown 来源，并掌握每篇文档的切片与索引状态。</p>
+          <p class="m-0 mt-1.5 text-sm leading-6 text-muted-foreground">维护 Agent 可检索的知识来源，支持 Markdown、TXT、DOCX 和文本型 PDF。</p>
         </div>
 
         <div class="flex flex-wrap items-center gap-2">
@@ -389,9 +449,13 @@ function getErrorMessage(error: unknown) {
             <PhArrowClockwise v-else aria-hidden="true" />
             {{ syncing ? '同步中' : '同步索引' }}
           </Button>
-          <Button variant="outline" @click="openFilePicker"><PhUploadSimple aria-hidden="true" />上传 Markdown</Button>
+          <Button variant="outline" :disabled="uploading" @click="openFilePicker">
+            <PhCircleNotch v-if="uploading" class="animate-spin" aria-hidden="true" />
+            <PhUploadSimple v-else aria-hidden="true" />
+            {{ uploading ? '上传中' : '上传文件' }}
+          </Button>
           <Button @click="startCreating"><PhPlus aria-hidden="true" />添加文档</Button>
-          <input ref="fileInput" class="sr-only" type="file" accept=".md,text/markdown,text/plain" @change="uploadMarkdownFile" />
+          <input ref="fileInput" class="sr-only" type="file" accept=".md,.txt,.docx,.pdf,text/markdown,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" @change="uploadKnowledgeFile" />
         </div>
       </header>
 
@@ -448,13 +512,19 @@ function getErrorMessage(error: unknown) {
                     <span class="mt-0.5 grid size-9 shrink-0 place-items-center rounded-lg border border-border bg-background text-muted-foreground"><PhFileText :size="18" weight="bold" aria-hidden="true" /></span>
                     <span class="min-w-0 flex-1">
                       <span class="flex min-w-0 items-center justify-between gap-2"><strong class="truncate text-sm font-semibold">{{ document.title }}</strong><Badge variant="outline" class="shrink-0 text-[10px]" :class="statusClass(document.indexStatus)">{{ statusLabel[document.indexStatus] }}</Badge></span>
-                      <span class="mt-1 block truncate font-mono text-[10px] text-muted-foreground">{{ document.path }}</span>
-                      <span class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"><span>{{ document.lineCount }} 行</span><span>{{ document.indexedChunkCount }}/{{ document.chunkCount }} 切片</span><span>{{ formatDate(document.updatedAt) }}</span></span>
+                      <span class="mt-1 flex min-w-0 items-center gap-2"><Badge variant="secondary" class="font-mono text-[10px]">{{ formatBadge(document.format) }}</Badge><span class="truncate font-mono text-[10px] text-muted-foreground">{{ document.path }}</span></span>
+                      <span class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                        <span>{{ document.pageCount ? `${document.pageCount} 页` : `${document.lineCount} 行` }}</span>
+                        <span>{{ document.indexedChunkCount }}/{{ document.chunkCount }} 切片</span>
+                        <span v-if="document.originalSize">{{ formatBytes(document.originalSize) }}</span>
+                        <span>{{ formatDate(document.updatedAt) }}</span>
+                        <span v-if="document.parseWarnings?.length" class="text-amber-700 dark:text-amber-300">有解析提示</span>
+                      </span>
                     </span>
                   </span>
                 </button>
               </li>
-              <li v-if="!filteredDocuments.length" class="grid min-h-56 place-items-center px-6 py-10 text-center"><div><PhDatabase class="mx-auto text-muted-foreground" :size="25" /><p class="m-0 mt-3 text-sm font-medium">{{ documents.length ? '没有匹配的文档' : '知识库中还没有文档' }}</p><p class="m-0 mt-1 text-xs text-muted-foreground">{{ documents.length ? '尝试调整搜索关键词。' : '上传 Markdown 或创建第一篇文档。' }}</p></div></li>
+              <li v-if="!filteredDocuments.length" class="grid min-h-56 place-items-center px-6 py-10 text-center"><div><PhDatabase class="mx-auto text-muted-foreground" :size="25" /><p class="m-0 mt-3 text-sm font-medium">{{ documents.length ? '没有匹配的文档' : '知识库中还没有文档' }}</p><p class="m-0 mt-1 text-xs text-muted-foreground">{{ documents.length ? '尝试调整搜索关键词。' : '上传文件或创建第一篇 Markdown 文档。' }}</p></div></li>
             </ul>
           </ScrollArea>
         </div>
@@ -480,20 +550,38 @@ function getErrorMessage(error: unknown) {
           <div v-else-if="selectedDocument" class="flex min-h-full flex-col">
             <div class="flex flex-wrap items-start justify-between gap-3 border-b border-border px-5 py-4">
               <div class="min-w-0 flex-1">
-                <div class="flex flex-wrap items-center gap-2"><Badge v-if="selectedSummary" variant="outline" :class="statusClass(selectedSummary.indexStatus)">{{ statusLabel[selectedSummary.indexStatus] }}</Badge><span class="font-mono text-[10px] text-muted-foreground">{{ selectedDocument.path }}</span></div>
+                <div class="flex flex-wrap items-center gap-2">
+                  <Badge v-if="selectedSummary" variant="outline" :class="statusClass(selectedSummary.indexStatus)">{{ statusLabel[selectedSummary.indexStatus] }}</Badge>
+                  <Badge variant="secondary" class="font-mono text-[10px]">{{ formatBadge(selectedDocument.format) }}</Badge>
+                  <span class="font-mono text-[10px] text-muted-foreground">{{ selectedDocument.path }}</span>
+                </div>
                 <h2 class="m-0 mt-2 truncate text-lg font-semibold tracking-[-0.02em]">{{ selectedDocument.title }}</h2>
-                <p class="m-0 mt-1 text-xs text-muted-foreground">{{ selectedDocument.lineCount }} 行 · 更新于 {{ formatDate(selectedDocument.updatedAt) }}</p>
+                <p class="m-0 mt-1 text-xs text-muted-foreground">
+                  {{ selectedDocument.pageCount ? `${selectedDocument.pageCount} 页` : `${selectedDocument.lineCount} 行` }}
+                  <template v-if="selectedDocument.originalSize"> · {{ formatBytes(selectedDocument.originalSize) }}</template>
+                  · 更新于 {{ formatDate(selectedDocument.updatedAt) }}
+                </p>
+                <p v-if="selectedDocument.editable === false" class="m-0 mt-2 text-xs text-amber-700 dark:text-amber-300">导入文件 · 提取内容只读</p>
               </div>
               <div class="flex items-center gap-1">
                 <Tooltip><TooltipTrigger as-child><Button variant="ghost" size="icon" :disabled="loadingChunks" aria-label="预览切片" @click="showChunks()"><PhCircleNotch v-if="loadingChunks" class="animate-spin" aria-hidden="true" /><PhEye v-else aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>预览切片</TooltipContent></Tooltip>
+                <Tooltip v-if="selectedDocument.sourceType === 'imported'"><TooltipTrigger as-child><Button variant="ghost" size="icon" :disabled="downloading" aria-label="下载原文件" @click="downloadOriginal()"><PhCircleNotch v-if="downloading" class="animate-spin" aria-hidden="true" /><PhDownloadSimple v-else aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>下载原文件</TooltipContent></Tooltip>
+                <Tooltip v-if="selectedDocument.sourceType === 'imported'"><TooltipTrigger as-child><Button variant="ghost" size="icon" :disabled="reparsing" aria-label="重新解析" @click="reparseDocument()"><PhCircleNotch v-if="reparsing" class="animate-spin" aria-hidden="true" /><PhArrowClockwise v-else aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>重新解析</TooltipContent></Tooltip>
                 <Tooltip><TooltipTrigger as-child><Button variant="ghost" size="icon" :disabled="Boolean(vectorizingPath)" aria-label="向量化文档" @click="vectorizeDocument()"><PhCircleNotch v-if="vectorizingPath === selectedPath" class="animate-spin" aria-hidden="true" /><PhStack v-else aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>向量化文档</TooltipContent></Tooltip>
-                <Tooltip><TooltipTrigger as-child><Button variant="ghost" size="icon" aria-label="编辑文档" @click="startEditing"><PhFileText aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>编辑文档</TooltipContent></Tooltip>
+                <Tooltip v-if="selectedDocument.editable !== false"><TooltipTrigger as-child><Button variant="ghost" size="icon" aria-label="编辑文档" @click="startEditing"><PhFileText aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>编辑文档</TooltipContent></Tooltip>
                 <Tooltip><TooltipTrigger as-child><Button variant="ghost" size="icon" class="text-destructive hover:bg-destructive/10 hover:text-destructive" aria-label="删除文档" @click="deleteTarget = documents.find((document) => document.path === selectedPath)"><PhTrash aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>删除文档</TooltipContent></Tooltip>
               </div>
             </div>
 
             <div class="grid min-h-0 flex-1 content-start gap-4 p-5">
               <pre class="m-0 max-h-[430px] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-muted/45 p-4 font-mono text-xs leading-6 text-foreground">{{ selectedDocument.content }}</pre>
+
+              <section v-if="selectedDocument.parseWarnings?.length" class="rounded-lg border border-amber-500/25 bg-amber-500/10 p-4">
+                <p class="m-0 text-sm font-semibold text-amber-800 dark:text-amber-300">解析提示</p>
+                <ul class="m-0 mt-2 list-disc space-y-1 pl-5 text-xs leading-5 text-muted-foreground">
+                  <li v-for="warning in selectedDocument.parseWarnings" :key="warning">{{ warning }}</li>
+                </ul>
+              </section>
 
               <section v-if="indexResult" class="rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-4">
                 <p class="m-0 text-sm font-semibold text-emerald-700 dark:text-emerald-300">最近一次向量化</p>
@@ -506,7 +594,7 @@ function getErrorMessage(error: unknown) {
                 <div v-else class="grid max-h-[420px] gap-2 overflow-auto pr-1">
                   <article v-for="(chunk, index) in chunks" :key="chunk.id" class="rounded-lg border border-border bg-card p-4">
                     <div class="flex items-start justify-between gap-3"><p class="m-0 text-xs font-semibold">{{ chunk.headingPath?.join(' › ') || chunk.heading || '文档内容' }}</p><span class="font-mono text-[10px] text-muted-foreground">#{{ index + 1 }}</span></div>
-                    <p class="m-0 mt-1 font-mono text-[10px] text-muted-foreground">第 {{ chunk.startLine }}–{{ chunk.endLine }} 行 · {{ chunk.tokenCount ?? '—' }} tokens · {{ chunk.contentType ?? 'text' }}</p>
+                    <p class="m-0 mt-1 font-mono text-[10px] text-muted-foreground">{{ chunkLocation(chunk) }} · {{ chunk.tokenCount ?? '—' }} tokens · {{ chunk.contentType ?? 'text' }}</p>
                     <pre class="m-0 mt-3 whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-muted-foreground">{{ chunk.content }}</pre>
                   </article>
                 </div>

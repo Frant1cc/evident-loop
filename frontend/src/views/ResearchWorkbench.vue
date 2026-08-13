@@ -40,6 +40,8 @@ import type {
 } from '../types/research';
 import type { StreamConnectionState } from '../types/streaming';
 
+defineOptions({ name: 'ResearchWorkbench' });
+
 const conversations = ref<ResearchConversation[]>([]);
 const activeConversationId = ref<string>();
 const messages = ref<ResearchMessage[]>([]);

@@ -1,6 +1,8 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
 
 import type { ChunkContentType, DocumentChunk, RagSource } from './types.js';
+import type { KnowledgeFormat, SourceLocator } from '../knowledge/types.js';
+import { parseLocator } from '../knowledge/locator.js';
 
 const defaultQdrantUrl = 'http://localhost:6333';
 const defaultCollectionName = 'knowledge_chunks';
@@ -21,6 +23,10 @@ export type VectorPayload = {
   nextChunkId?: string;
   tokenCount?: number;
   contentType?: ChunkContentType;
+  format?: KnowledgeFormat;
+  sourceType?: string;
+  locator?: SourceLocator;
+  parserVersion?: string;
   chunkKey: string;
   contentHash: string;
   documentHash: string;
@@ -178,6 +184,9 @@ export async function searchChunks(vector: number[], limit: number, collectionNa
       nextChunkId: payload.nextChunkId,
       tokenCount: payload.tokenCount,
       contentType: payload.contentType,
+      format: payload.format,
+      locator: payload.locator,
+      parserVersion: payload.parserVersion,
       score: point.score,
       semanticScore: point.score
     }];
@@ -205,6 +214,9 @@ export function toVectorPayload(
     nextChunkId: chunk.nextChunkId,
     tokenCount: chunk.tokenCount,
     contentType: chunk.contentType,
+    format: chunk.format,
+    locator: chunk.locator,
+    parserVersion: chunk.parserVersion,
     chunkKey: chunk.id,
     contentHash,
     documentHash,
@@ -253,6 +265,9 @@ function parsePayload(value: unknown): VectorPayload | undefined {
     nextChunkId: typeof payload.nextChunkId === 'string' ? payload.nextChunkId : undefined,
     tokenCount: typeof payload.tokenCount === 'number' ? payload.tokenCount : undefined,
     contentType: isChunkContentType(payload.contentType) ? payload.contentType : undefined,
+    format: isKnowledgeFormat(payload.format) ? payload.format : undefined,
+    locator: parseLocator(payload.locator),
+    parserVersion: typeof payload.parserVersion === 'string' ? payload.parserVersion : undefined,
     chunkKey: payload.chunkKey,
     contentHash: payload.contentHash,
     documentHash: payload.documentHash,
@@ -263,4 +278,8 @@ function parsePayload(value: unknown): VectorPayload | undefined {
 
 function isChunkContentType(value: unknown): value is ChunkContentType {
   return value === 'text' || value === 'table' || value === 'code' || value === 'mixed';
+}
+
+function isKnowledgeFormat(value: unknown): value is KnowledgeFormat {
+  return value === 'md' || value === 'txt' || value === 'docx' || value === 'pdf';
 }

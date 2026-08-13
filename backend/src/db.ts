@@ -4,6 +4,8 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { migrateKnowledgeSchema } from './knowledge/migrate.js';
+
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const evidentLoopDbPath = resolve(currentDir, '../data/evident-loop.sqlite');
 const legacyDbPath = resolve(currentDir, '../data/agent-demo.sqlite');
@@ -12,9 +14,12 @@ const defaultDbPath =
     ? evidentLoopDbPath
     : legacyDbPath;
 
-export const dbPath = process.env.SQLITE_DB_PATH ?? defaultDbPath;
+export const dbPath = process.env.SQLITE_DB_PATH
+  ?? (process.env.NODE_TEST_CONTEXT ? ':memory:' : defaultDbPath);
 
-mkdirSync(dirname(dbPath), { recursive: true });
+if (dbPath !== ':memory:') {
+  mkdirSync(dirname(dbPath), { recursive: true });
+}
 
 export const sqlite = new Database(dbPath);
 sqlite.pragma('journal_mode = WAL');
@@ -34,7 +39,19 @@ export const initDb = () => {
       path TEXT PRIMARY KEY,
       content TEXT NOT NULL,
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      source_type TEXT NOT NULL DEFAULT 'manual',
+      format TEXT NOT NULL DEFAULT 'md',
+      mime_type TEXT,
+      original_name TEXT,
+      original_size INTEGER,
+      storage_key TEXT,
+      parser_name TEXT NOT NULL DEFAULT 'markdown',
+      parser_version TEXT NOT NULL DEFAULT '1',
+      parse_warnings_json TEXT NOT NULL DEFAULT '[]',
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      content_hash TEXT,
+      original_hash TEXT
     );
 
     CREATE INDEX IF NOT EXISTS knowledge_documents_updated_at_idx
@@ -194,6 +211,7 @@ export const initDb = () => {
       start_line INTEGER NOT NULL,
       end_line INTEGER NOT NULL,
       score REAL NOT NULL,
+      locator_json TEXT,
       created_at TEXT NOT NULL,
       FOREIGN KEY (message_id) REFERENCES research_messages(id) ON DELETE CASCADE,
       UNIQUE (message_id, source_id),
@@ -426,4 +444,6 @@ export const initDb = () => {
     CREATE INDEX IF NOT EXISTS agent_artifacts_task_updated_at_idx
     ON agent_artifacts(task_id, updated_at DESC);
   `);
+
+  migrateKnowledgeSchema(sqlite);
 };

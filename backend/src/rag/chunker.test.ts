@@ -111,3 +111,96 @@ run();
   assert.equal(chunks[0]?.contentType, 'mixed');
   assert.ok((chunks[0]?.tokenCount ?? 0) > 0);
 });
+
+test('structured chunks inherit locator and merge PDF page ranges', async () => {
+  const { chunkKnowledgeDocument } = await import('./chunker.js');
+  const document = {
+    file: 'risk.pdf',
+    title: '风险报告',
+    content: '# 风险报告\n\n## 第 1 页\n\n第一段。\n\n## 第 2 页\n\n第二段。',
+    lineCount: 8,
+    format: 'pdf' as const,
+    parserName: 'pdfjs',
+    parserVersion: '1',
+    sourceType: 'imported' as const,
+    sizeBytes: 10,
+    updatedAt: new Date().toISOString(),
+    parseWarnings: [],
+    metadata: { pageCount: 2 },
+    blocks: [
+      {
+        id: 'p1',
+        order: 1,
+        type: 'paragraph' as const,
+        text: '久期上升会提高敏感度。',
+        headingPath: [],
+        locator: { normalizedLineStart: 4, normalizedLineEnd: 4, pageStart: 1, pageEnd: 1 },
+        metadata: {}
+      },
+      {
+        id: 'p2',
+        order: 2,
+        type: 'paragraph' as const,
+        text: '并放大价格波动。',
+        headingPath: [],
+        locator: { normalizedLineStart: 7, normalizedLineEnd: 7, pageStart: 2, pageEnd: 2 },
+        metadata: {}
+      }
+    ],
+    editable: false
+  };
+
+  const chunks = chunkKnowledgeDocument(document);
+  assert.ok(chunks.length >= 1);
+  assert.equal(chunks[0]?.locator?.pageStart, 1);
+  assert.equal(chunks[chunks.length - 1]?.locator?.pageEnd, 2);
+});
+
+test('table chunks repeat headers when split, and parserVersion changes fingerprint', async () => {
+  const { chunkKnowledgeDocument } = await import('./chunker.js');
+  const { getIndexFingerprint } = await import('./sync.js');
+  const headers = '| 名称 | 评级 | 久期 | DV01 |';
+  const divider = '| --- | --- | --- | --- |';
+  const rows = Array.from({ length: 40 }, (_, index) => `| 债券 ${index} | AA | ${5 + index / 10} | ${18000 + index} |`);
+  const document = {
+    file: 'holdings.docx',
+    title: '债券持仓',
+    content: `# 债券持仓\n\n${[headers, divider, ...rows].join('\n')}`,
+    lineCount: 50,
+    format: 'docx' as const,
+    parserName: 'mammoth-cheerio',
+    parserVersion: '1',
+    sourceType: 'imported' as const,
+    sizeBytes: 20,
+    updatedAt: new Date().toISOString(),
+    parseWarnings: [],
+    metadata: {},
+    blocks: [{
+      id: 't1',
+      order: 1,
+      type: 'table' as const,
+      text: [headers, divider, ...rows].join('\n'),
+      headingPath: ['组合风险', '持仓明细'],
+      locator: { normalizedLineStart: 3, normalizedLineEnd: 45 },
+      metadata: { tableHeaders: ['名称', '评级', '久期', 'DV01'] }
+    }],
+    editable: false
+  };
+
+  const chunks = chunkKnowledgeDocument(document);
+  assert.ok(chunks.length >= 1);
+  assert.ok(chunks.every((chunk) => chunk.content.includes('名称') && chunk.headingPath?.[0] === '组合风险'));
+  const firstId = chunks[0]?.id;
+  const shifted = chunkKnowledgeDocument({
+    ...document,
+    blocks: document.blocks.map((block) => ({
+      ...block,
+      locator: { ...block.locator, normalizedLineStart: block.locator.normalizedLineStart + 3 }
+    }))
+  });
+  assert.equal(shifted[0]?.id, firstId);
+
+  const originalHash = getIndexFingerprint(document);
+  const versionChanged = getIndexFingerprint({ ...document, parserVersion: '2' });
+  assert.notEqual(originalHash, versionChanged);
+});

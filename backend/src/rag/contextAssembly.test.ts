@@ -81,3 +81,16 @@ test('候选先相邻合并时受 chunk 数量限制，并按原检索排名选�
   assert.deepEqual(merged[0]?.mergedChunkIds, ['b', 'c', 'd']);
   assert.deepEqual(merged[1]?.mergedChunkIds, ['a']);
 });
+
+test('合并相邻块时同时合并页码与原始行号范围', () => {
+  const first = source('a', 'doc.pdf', 10, 20, '第一段');
+  const second = source('b', 'doc.pdf', 21, 30, '第二段');
+  first.locator = { normalizedLineStart: 10, normalizedLineEnd: 20, pageStart: 12, pageEnd: 12 };
+  second.locator = { normalizedLineStart: 21, normalizedLineEnd: 30, pageStart: 13, pageEnd: 13 };
+  first.format = 'pdf';
+  second.format = 'pdf';
+  const merged = mergeAdjacentChunks([first, second]);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0]?.locator?.pageStart, 12);
+  assert.equal(merged[0]?.locator?.pageEnd, 13);
+});

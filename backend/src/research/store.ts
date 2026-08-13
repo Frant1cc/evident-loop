@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 
 import { sqlite } from '../db.js';
 import type { RagSource } from '../rag/types.js';
+import { parseLocator } from '../knowledge/locator.js';
+import type { KnowledgeFormat } from '../knowledge/types.js';
 import type {
   ResearchConversation,
   ResearchConversationDetail,
@@ -63,6 +65,7 @@ type SourceRow = {
   start_line: number;
   end_line: number;
   score: number;
+  locator_json: string | null;
   created_at: string;
 };
 
@@ -294,8 +297,8 @@ export function addResearchSource(messageId: string, source: RagSource, citation
   };
   sqlite
     .prepare(`INSERT INTO research_sources
-      (id, message_id, source_id, citation_key, file, title, heading, content, start_line, end_line, score, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      (id, message_id, source_id, citation_key, file, title, heading, content, start_line, end_line, score, locator_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(
       researchSource.id,
       researchSource.messageId,
@@ -308,6 +311,7 @@ export function addResearchSource(messageId: string, source: RagSource, citation
       researchSource.startLine,
       researchSource.endLine,
       researchSource.score,
+      source.locator ? JSON.stringify(source.locator) : null,
       researchSource.createdAt
     );
   return researchSource;
@@ -441,8 +445,18 @@ function toSource(row: SourceRow): ResearchSource {
     startLine: row.start_line,
     endLine: row.end_line,
     score: row.score,
-    createdAt: row.created_at
+    createdAt: row.created_at,
+    ...(formatFromFile(row.file) ? { format: formatFromFile(row.file) } : {}),
+    ...(parseLocator(parseJson(row.locator_json))
+      ? { locator: parseLocator(parseJson(row.locator_json)) }
+      : {})
   };
+}
+
+function formatFromFile(file: string): KnowledgeFormat | undefined {
+  const extension = file.split('.').pop()?.toLowerCase();
+  if (extension === 'md' || extension === 'txt' || extension === 'docx' || extension === 'pdf') return extension;
+  return undefined;
 }
 
 function toNote(row: NoteRow): ResearchNote {
