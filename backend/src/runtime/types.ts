@@ -25,7 +25,7 @@ export type AgentTask = {
   currentStepId?: string;
   maxSteps: number;
   maxTokens: number;
-  allowedTools: string[];
+  toolPolicy: ToolPolicy;
   checkpointVersion: number;
   createdAt: string;
   updatedAt: string;
@@ -234,3 +234,4 @@ export type AgentTaskDetail = {
   artifacts: AgentArtifact[];
   latestCheckpoint?: AgentCheckpoint;
 };
+import type { ToolPolicy } from '../tools/contracts.js';

@@ -1,7 +1,6 @@
 import { getRagSourcesFromToolTraces } from '../rag/index.js';
 import type { LlmProvider } from '../llm/contracts.js';
-import { executeToolCall as executeRegisteredToolCall } from '../tools/index.js';
-import type { ToolDefinition } from '../tools/contracts.js';
+import type { ToolDefinition, ToolRuntime } from '../tools/contracts.js';
 import type { RagSource } from '../rag/types.js';
 import type {
   AgentTraceStep,
@@ -35,6 +34,7 @@ type ExecuteToolRoundOptions = {
   signal?: AbortSignal;
   onEvent?: (event: AgentLoopEvent) => void | Promise<void>;
   executeTool?: AgentToolExecutor;
+  toolRuntime: ToolRuntime;
   searchToolCalls: Set<string>;
   requiredSingleToolName?: string;
 };
@@ -64,6 +64,7 @@ export async function executeToolRound({
   signal,
   onEvent,
   executeTool,
+  toolRuntime,
   searchToolCalls,
   requiredSingleToolName
 }: ExecuteToolRoundOptions): Promise<ToolRoundResult> {
@@ -125,7 +126,7 @@ export async function executeToolRound({
     });
     const toolTrace = isRepeatedSearch(toolCall, searchToolCalls)
       ? createRepeatedSearchTrace(toolCall)
-      : await executeParsedToolCall(toolCall, signal, executeTool);
+      : await executeParsedToolCall(toolCall, toolRuntime, signal, executeTool);
     toolTraces.push(toolTrace);
     await onEvent?.({ type: 'tool_completed', toolCall: toolTrace });
 
@@ -153,6 +154,7 @@ export async function executeToolRound({
 
 async function executeParsedToolCall(
   toolCall: ParsedToolCall,
+  toolRuntime: ToolRuntime,
   signal?: AbortSignal,
   executeTool?: AgentToolExecutor
 ): Promise<ToolTrace> {
@@ -173,7 +175,7 @@ async function executeParsedToolCall(
           { id: toolCall.id, name: toolCall.name, arguments: toolCall.arguments },
           { signal }
         )
-      : await executeRegisteredToolCall(toolCall.name, toolCall.arguments, { signal });
+      : await toolRuntime.execute(toolCall.name, toolCall.arguments, { signal });
     throwIfAborted(signal);
     return {
       id: toolCall.id,

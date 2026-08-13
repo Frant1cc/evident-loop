@@ -20,14 +20,14 @@ import {
   listResearchMessages,
   updateResearchNote
 } from '../../research/store.js';
-import { getToolDefinitions } from '../../tools/definitions.js';
-import type { ToolCatalog } from '../../tools/contracts.js';
+import type { ToolPolicy, ToolRuntime } from '../../tools/contracts.js';
+import { normalizeToolPolicy, restrictToolPolicyToRegistered } from '../../tools/policy.js';
 import { getMaxSequence, listStreamEventsAfter } from '../../streaming/eventStore.js';
 
 export type ResearchApplicationDependencies = {
   llm?: LlmProvider;
   model: string;
-  tools: ToolCatalog;
+  toolRuntime: ToolRuntime;
 };
 
 /** Use-case boundary for research conversations and durable background runs. */
@@ -38,17 +38,20 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
   };
 
   return {
-    listTools: () => [...dependencies.tools.values()]
+    listTools: () => dependencies.toolRuntime.listModules()
       .filter((tool) => tool.exposedToModel !== false)
       .map((tool) => ({
         name: tool.definition.function.name,
         label: tool.label,
         description: tool.definition.function.description
       })),
-    normalizeAllowedTools: (value: unknown) => {
-      if (!Array.isArray(value)) return undefined;
-      const registered = new Set(getToolDefinitions(dependencies.tools).map((tool) => tool.function.name));
-      return value.filter((name): name is string => typeof name === 'string' && registered.has(name));
+    normalizeToolPolicy: (value: unknown): ToolPolicy => {
+      const registered = new Set(
+        dependencies.toolRuntime.getDefinitions().map((tool) => tool.function.name)
+      );
+      const policy = restrictToolPolicyToRegistered(normalizeToolPolicy(value), registered);
+      if (policy.mode === 'selected' && !policy.names.length) return { mode: 'none' };
+      return policy;
     },
     listConversations: listResearchConversations,
     createConversation: createResearchConversation,
@@ -68,11 +71,12 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
     },
     updateNote: updateResearchNote,
     deleteNote: deleteResearchNote,
-    startMessage: (conversationId: string, content: string, allowedTools?: string[]) =>
+    startMessage: (conversationId: string, content: string, toolPolicy: ToolPolicy) =>
       createAndStartResearchRun({
         conversationId,
         content,
-        allowedToolNames: allowedTools,
+        toolPolicy,
+        toolRuntime: dependencies.toolRuntime,
         llm: requireLlm(),
         model: dependencies.model
       }),

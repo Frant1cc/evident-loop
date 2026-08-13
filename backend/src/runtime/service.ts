@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
+import type { ToolPolicy } from '../tools/contracts.js';
+import { normalizeToolPolicy } from '../tools/policy.js';
 import type { LlmProvider } from '../llm/contracts.js';
 import { assertTaskTransition } from './stateMachine.js';
 import {
@@ -67,6 +69,8 @@ export type CreateAgentTaskInput = {
   goal: string;
   maxSteps?: number;
   maxTokens?: number;
+  toolPolicy?: ToolPolicy;
+  /** @deprecated Compatibility with the previous task API. */
   allowedTools?: string[];
 };
 
@@ -81,7 +85,7 @@ export function createAgentTask(input: CreateAgentTaskInput): AgentTaskDetail {
     status: 'created',
     maxSteps: parsePositiveInteger(input.maxSteps, defaultMaxSteps, 'maxSteps'),
     maxTokens: parsePositiveInteger(input.maxTokens, defaultMaxTokens, 'maxTokens'),
-    allowedTools: normalizeAllowedTools(input.allowedTools),
+    toolPolicy: normalizeToolPolicy(input.toolPolicy ?? input.allowedTools),
     checkpointVersion: 1,
     createdAt: now,
     updatedAt: now
@@ -349,7 +353,7 @@ export function saveAgentStepReview(taskId: string, stepId: string, draft: Agent
     } else if (gaps.length) {
       const steps = listPlanSteps(taskId);
       const expansionUsed = existingGaps.some((gap) => Boolean(gap.supplementalStepId));
-      const canSchedule = !expansionUsed && steps.length < current.maxSteps && hasRetrievalTool(current.allowedTools);
+      const canSchedule = !expansionUsed && steps.length < current.maxSteps && hasRetrievalTool(current.toolPolicy);
       if (canSchedule) {
         const supplemental = insertSupplementalPlanStep({
           taskId,
@@ -577,21 +581,13 @@ export async function planAgentTask(options: {
 }
 
 function getConstraints(task: AgentTask) {
-  return { maxSteps: task.maxSteps, maxTokens: task.maxTokens, allowedTools: task.allowedTools };
+  return { maxSteps: task.maxSteps, maxTokens: task.maxTokens, toolPolicy: task.toolPolicy };
 }
 
 function parsePositiveInteger(value: number | undefined, fallback: number, field: string) {
   const parsed = value ?? fallback;
   if (!Number.isInteger(parsed) || parsed <= 0) throw new Error(`${field} must be a positive integer`);
   return parsed;
-}
-
-function normalizeAllowedTools(value: string[] | undefined) {
-  if (!value) return [];
-  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
-    throw new Error('allowedTools must be an array of strings');
-  }
-  return [...new Set(value.map((item) => item.trim()).filter(Boolean))];
 }
 
 function buildCheckpointState(task: AgentTask, steps = listPlanSteps(task.id)) {
@@ -647,9 +643,10 @@ function normalizePlanDrafts(drafts: PlanStepDraft[], maxSteps: number, goal: st
   return normalized;
 }
 
-function hasRetrievalTool(allowedTools: string[]) {
-  if (!allowedTools.length) return true;
-  return allowedTools.some((tool) =>
+function hasRetrievalTool(policy: ToolPolicy) {
+  if (policy.mode === 'all') return true;
+  if (policy.mode === 'none') return false;
+  return policy.names.some((tool) =>
     ['search_knowledge', 'search_docs', 'read_document', 'retrieve_web_evidence', 'web_search', 'fetch_page'].includes(tool)
   );
 }

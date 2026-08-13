@@ -90,7 +90,7 @@ export function createResearchRouter(research: ResearchApplication) {
       const started = research.startMessage(
         req.params.conversationId,
         content,
-        research.normalizeAllowedTools(req.body?.allowedTools)
+        research.normalizeToolPolicy(req.body?.toolPolicy ?? req.body?.allowedTools)
       );
       res.status(202).json(success(started, 'Research task queued'));
     } catch (error) {

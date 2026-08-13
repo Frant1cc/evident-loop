@@ -133,6 +133,7 @@ export function createTasksRouter(tasks: TaskApplication) {
         goal: String(req.body?.goal ?? ''),
         maxSteps: req.body?.maxSteps,
         maxTokens: req.body?.maxTokens,
+        toolPolicy: req.body?.toolPolicy,
         allowedTools: req.body?.allowedTools
       });
       res.status(201).json(success(detail, 'Agent task created'));

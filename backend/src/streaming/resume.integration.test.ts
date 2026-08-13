@@ -9,16 +9,18 @@ import { createResearchApplication } from '../modules/research/index.js';
 import { createResearchRouter } from '../routes/research.js';
 import { createResearchConversation, createResearchMessage, createResearchRun, deleteResearchConversation } from '../research/store.js';
 import { toolCatalog } from '../tools/registry.js';
+import { createToolRuntime } from '../tools/runtime.js';
 import { appendStreamEvent } from './eventStore.js';
 import { publishStreamEvent } from './eventHub.js';
 
 initDb();
+const toolRuntime = createToolRuntime(toolCatalog);
 
 type Frame = { event: string; id?: string; data: string };
 
 async function startServer(): Promise<{ server: Server; port: number }> {
   const app = express();
-  app.use('/api', createResearchRouter(createResearchApplication({ model: 'test-model', tools: toolCatalog })));
+  app.use('/api', createResearchRouter(createResearchApplication({ model: 'test-model', toolRuntime })));
   const server = createServer(app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
@@ -34,7 +36,12 @@ function createRunFixture() {
     conversationId: conversation.id,
     userMessageId: userMessage.id,
     assistantMessageId: assistantMessage.id,
-    runInput: { content: 'q', contextMessages: [], promptPreview: { historyMessageCount: 0, currentMessage: 'q' } }
+    runInput: {
+      content: 'q',
+      contextMessages: [],
+      promptPreview: { historyMessageCount: 0, currentMessage: 'q' },
+      toolPolicy: { mode: 'all' }
+    }
   });
   return { conversation, run };
 }

@@ -10,6 +10,7 @@ import type {
 } from '../types/research';
 import { consumeResumableSse } from './resumableSse';
 import type { StreamConnectionState } from '../types/streaming';
+import type { ToolPolicy } from '../types/tasks';
 
 type ApiResponse<T> = {
   code: 0 | 1;
@@ -76,7 +77,7 @@ export function deleteResearchNote(noteId: string) {
 export function startResearchMessage(
   conversationId: string,
   content: string,
-  allowedTools?: string[]
+  toolPolicy: ToolPolicy
 ) {
   return request<{
     run: ResearchRun;
@@ -85,7 +86,7 @@ export function startResearchMessage(
     promptPreview: ResearchPromptPreview;
   }>(`/api/research/conversations/${encodeURIComponent(conversationId)}/messages`, {
     method: 'POST',
-    body: { content, ...(allowedTools ? { allowedTools } : {}) }
+    body: { content, toolPolicy }
   });
 }
 

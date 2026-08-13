@@ -3,7 +3,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { runAgentLoop } from '../agent/agentLoop.js';
 import type { LlmProvider } from '../llm/contracts.js';
 import { resolveLlmProvider } from '../llm/provider.js';
-import { executeToolCall } from '../tools/index.js';
+import type { ToolRuntime } from '../tools/contracts.js';
+import { builtInToolRuntime } from '../tools/runtime.js';
 import {
   completeToolExecution,
   failToolExecution,
@@ -48,6 +49,7 @@ export async function executeAgentTask(options: {
   buildEvidenceChain?: AgentEvidenceChainBuilder;
   reviewStep?: AgentStepReviewer;
   writeArtifact?: AgentArtifactWriter;
+  toolRuntime?: ToolRuntime;
 }): Promise<AgentTaskDetail | undefined> {
   markAgentTaskInProcess(options.id);
   try {
@@ -65,6 +67,7 @@ export async function finalizeAgentTask(options: {
   signal?: AbortSignal;
   reviewStep?: AgentStepReviewer;
   writeArtifact?: AgentArtifactWriter;
+  toolRuntime?: ToolRuntime;
 }) {
   let detail = getAgentTaskDetail(options.id);
   if (!detail) return undefined;
@@ -107,6 +110,7 @@ async function executeAgentTaskInternal(options: {
   buildEvidenceChain?: AgentEvidenceChainBuilder;
   reviewStep?: AgentStepReviewer;
   writeArtifact?: AgentArtifactWriter;
+  toolRuntime?: ToolRuntime;
 }): Promise<AgentTaskDetail | undefined> {
   let detail = getAgentTaskDetail(options.id);
   if (!detail) return undefined;
@@ -188,7 +192,11 @@ async function executeAgentTaskInternal(options: {
 
     let phase: 'step_execution' | 'evidence_chain' = 'step_execution';
     try {
-      const runStep = options.runStep ?? createDefaultStepRunner(resolveLlmProvider(options), options.model);
+      const runStep = options.runStep ?? createDefaultStepRunner(
+        resolveLlmProvider(options),
+        options.model,
+        options.toolRuntime ?? builtInToolRuntime
+      );
       const output = await runStep({
         task: detail.task,
         step: activeStep,
@@ -229,17 +237,20 @@ async function executeAgentTaskInternal(options: {
   return detail;
 }
 
-function createDefaultStepRunner(llm: LlmProvider, model: string): AgentStepRunner {
+function createDefaultStepRunner(llm: LlmProvider, model: string, toolRuntime: ToolRuntime): AgentStepRunner {
   return async ({ task, step, completedSteps, signal }) => {
     const result = await runAgentLoop({
       llm,
       model,
       systemPrompt: executorSystemPrompt,
       message: buildStepMessage(task, step, completedSteps),
-      // Stored [] means "no restriction" (see task console UI); the loop treats an explicit [] as "no tools".
-      allowedToolNames: task.allowedTools.length ? task.allowedTools : undefined,
+      toolPolicy: task.toolPolicy,
+      toolRuntime,
       signal,
-      executeTool: (toolCall) => executeAuditedTool({ task, step, toolCall })
+      executeTool: (toolCall, context) => executeAuditedTool(
+        { task, step, toolCall },
+        (name, args) => toolRuntime.execute(name, args, context)
+      )
     });
     return {
       reply: result.reply,
@@ -253,7 +264,7 @@ export async function executeAuditedTool(input: {
   task: AgentTask;
   step: AgentPlanStep;
   toolCall: { id: string; name: string; arguments: unknown };
-}, execute: (name: string, args: unknown) => Promise<unknown> = executeToolCall) {
+}, execute: (name: string, args: unknown) => Promise<unknown> = (name, args) => builtInToolRuntime.execute(name, args)) {
   const executionKey = createExecutionKey(input.task.id, input.step, input.toolCall.name, input.toolCall.arguments);
   const existing = getToolExecutionByKey(executionKey);
 

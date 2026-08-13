@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { initDb } from '../db.js';
+import { initDb, sqlite } from '../db.js';
 import {
   createAgentTask,
   deleteAgentTask,
@@ -15,11 +15,30 @@ import {
 
 initDb();
 
+test('persists explicit tool policies and reads legacy arrays without ambiguity', () => {
+  const noTools = createAgentTask({ goal: '禁用所有工具', toolPolicy: { mode: 'none' } });
+  const allTools = createAgentTask({ goal: '允许所有工具', toolPolicy: { mode: 'all' } });
+  const legacy = createAgentTask({ goal: '读取旧版工具策略', allowedTools: ['search_knowledge'] });
+
+  try {
+    assert.deepEqual(getAgentTaskDetail(noTools.task.id)?.task.toolPolicy, { mode: 'none' });
+    assert.deepEqual(getAgentTaskDetail(allTools.task.id)?.task.toolPolicy, { mode: 'all' });
+    assert.deepEqual(legacy.task.toolPolicy, { mode: 'selected', names: ['search_knowledge'] });
+
+    sqlite.prepare('UPDATE agent_tasks SET allowed_tools_json = ? WHERE id = ?').run('[]', legacy.task.id);
+    assert.deepEqual(getAgentTaskDetail(legacy.task.id)?.task.toolPolicy, { mode: 'all' });
+  } finally {
+    deleteAgentTask(noTools.task.id);
+    deleteAgentTask(allTools.task.id);
+    deleteAgentTask(legacy.task.id);
+  }
+});
+
 test('edits a generated plan while awaiting approval and rebuilds linear dependencies', () => {
   const created = createAgentTask({
     goal: '验证运行前计划编辑',
     maxSteps: 4,
-    allowedTools: ['search_knowledge']
+    toolPolicy: { mode: 'selected', names: ['search_knowledge'] }
   });
 
   try {

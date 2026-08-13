@@ -42,12 +42,18 @@ const created = createAgentTask({
   goal: '验证 Durable Task Runtime 状态转换',
   maxSteps: 4,
   maxTokens: 8_000,
-  allowedTools: ['search_knowledge', 'calculator', 'search_knowledge']
+  toolPolicy: {
+    mode: 'selected',
+    names: ['search_knowledge', 'calculator', 'search_knowledge']
+  }
 });
 
 assert.equal(created.task.status, 'created');
 assert.equal(created.task.checkpointVersion, 1);
-assert.deepEqual(created.task.allowedTools, ['search_knowledge', 'calculator']);
+assert.deepEqual(created.task.toolPolicy, {
+  mode: 'selected',
+  names: ['search_knowledge', 'calculator']
+});
 assert.equal(created.latestCheckpoint?.version, 1);
 assert.equal(listAgentTaskEvents(created.task.id)?.length, 1);
 
@@ -326,7 +332,7 @@ assert.equal(finalized?.artifacts.length, 1);
 const evidenceGapTask = createAgentTask({
   goal: '验证 Evidence Gap 最多触发一次补充检索',
   maxSteps: 3,
-  allowedTools: ['search_knowledge']
+  toolPolicy: { mode: 'selected', names: ['search_knowledge'] }
 });
 transitionAgentTask(evidenceGapTask.task.id, 'planning');
 saveAgentTaskPlan(evidenceGapTask.task.id, [

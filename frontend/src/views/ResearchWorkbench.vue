@@ -180,12 +180,12 @@ async function send() {
   activeRailTab.value = 'timeline';
 
   try {
-    // Send the restriction only when the user turned something off; undefined = all tools.
-    const allowedTools =
-      availableTools.value.length && enabledToolNames.value.length < availableTools.value.length
-        ? enabledToolNames.value
-        : undefined;
-    const started = await startResearchMessage(conversationId, content, allowedTools);
+    const toolPolicy = enabledToolNames.value.length === availableTools.value.length
+      ? { mode: 'all' as const }
+      : enabledToolNames.value.length
+        ? { mode: 'selected' as const, names: enabledToolNames.value }
+        : { mode: 'none' as const };
+    const started = await startResearchMessage(conversationId, content, toolPolicy);
     messageRenderer.upsert(started.userMessage);
     messageRenderer.upsert(started.assistantMessage);
     promptPreview.value = started.promptPreview;

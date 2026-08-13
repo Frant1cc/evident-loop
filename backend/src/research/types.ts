@@ -1,5 +1,6 @@
 import type { RagSource } from '../rag/types.js';
 import type { ChatMessage } from '../agent/types.js';
+import type { ToolPolicy } from '../tools/contracts.js';
 
 export type ResearchMessageStatus = 'streaming' | 'complete' | 'error';
 export type ResearchStepStatus = 'running' | 'complete' | 'error';
@@ -64,7 +65,7 @@ export type ResearchRunInput = {
   content: string;
   contextMessages: ChatMessage[];
   promptPreview: ResearchPromptPreview;
-  allowedToolNames?: string[];
+  toolPolicy: ToolPolicy;
 };
 
 export type ResearchRun = {

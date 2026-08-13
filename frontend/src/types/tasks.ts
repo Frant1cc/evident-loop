@@ -14,6 +14,10 @@ export type EvidenceGapStatus = 'open' | 'scheduled' | 'resolved' | 'unresolved'
 export type AgentSourceType = 'knowledge_document' | 'document' | 'web' | 'tool_result' | 'other';
 export type AgentClaimStatus = 'proposed' | 'supported' | 'unsupported' | 'conflicted';
 export type ClaimEvidenceRelation = 'supports' | 'contradicts' | 'context';
+export type ToolPolicy =
+  | { mode: 'all' }
+  | { mode: 'selected'; names: string[] }
+  | { mode: 'none' };
 
 export type AgentTask = {
   id: string;
@@ -22,7 +26,7 @@ export type AgentTask = {
   currentStepId?: string;
   maxSteps: number;
   maxTokens: number;
-  allowedTools: string[];
+  toolPolicy: ToolPolicy;
   checkpointVersion: number;
   createdAt: string;
   updatedAt: string;

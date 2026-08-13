@@ -1,17 +1,11 @@
 import type { ToolCatalog, ToolContext } from './contracts.js';
-import { toolCatalog } from './registry.js';
+import { builtInToolRuntime, createToolRuntime } from './runtime.js';
 
 export async function executeToolCall(
   name: string,
   args: unknown,
   context?: ToolContext,
-  catalog: ToolCatalog = toolCatalog
+  catalog?: ToolCatalog
 ) {
-  const tool = catalog.get(name);
-
-  if (!tool) {
-    throw new Error(`Unknown tool: ${name}`);
-  }
-
-  return tool.execute(args, context);
+  return (catalog ? createToolRuntime(catalog) : builtInToolRuntime).execute(name, args, context);
 }

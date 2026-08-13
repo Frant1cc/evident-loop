@@ -1,7 +1,8 @@
 import { getRagSourcesFromToolTraces } from '../rag/index.js';
 import type { LlmProvider } from '../llm/contracts.js';
 import { resolveLlmProvider } from '../llm/provider.js';
-import { getToolDefinitions } from '../tools/definitions.js';
+import type { ToolPolicy, ToolRuntime } from '../tools/contracts.js';
+import { builtInToolRuntime } from '../tools/runtime.js';
 import { DEFAULT_MAX_TOOL_ROUNDS } from './config.js';
 import {
   executeToolRound,
@@ -38,10 +39,13 @@ export type RunAgentLoopOptions = {
   temperature?: number;
   signal?: AbortSignal;
   onEvent?: (event: AgentLoopEvent) => void | Promise<void>;
+  toolPolicy?: ToolPolicy;
+  /** @deprecated Use toolPolicy. */
   allowedToolNames?: string[];
   /** Retry once with an explicit instruction when a required tool was not called. */
   requiredToolName?: string;
   executeTool?: AgentToolExecutor;
+  toolRuntime?: ToolRuntime;
 };
 
 export async function runAgentLoop({
@@ -56,9 +60,11 @@ export async function runAgentLoop({
   temperature = defaultTemperature,
   signal,
   onEvent,
+  toolPolicy,
   allowedToolNames,
   requiredToolName,
-  executeTool
+  executeTool,
+  toolRuntime = builtInToolRuntime
 }: RunAgentLoopOptions): Promise<AgentLoopResult> {
   const llm = resolveLlmProvider({ llm: providedLlm, apiKey });
   const messages: ChatMessage[] = [
@@ -66,9 +72,10 @@ export async function runAgentLoop({
     ...contextMessages,
     { role: 'user', content: message }
   ];
-  // undefined = all registered tools; an explicit array (even empty) restricts to exactly those tools.
-  const allowedToolSet = allowedToolNames ? normalizeAllowedToolNames(allowedToolNames) : undefined;
-  const tools = getToolDefinitions().filter((tool) => !allowedToolSet || allowedToolSet.has(tool.function.name));
+  const effectivePolicy = normalizeLegacyToolAliases(
+    toolPolicy ?? legacyAllowedNamesToPolicy(allowedToolNames)
+  );
+  const tools = toolRuntime.getDefinitions(effectivePolicy);
   const toolNames = tools.map((tool) => tool.function.name);
   const trace: AgentTraceStep[] = [
     {
@@ -105,6 +112,7 @@ export async function runAgentLoop({
       signal,
       onEvent,
       executeTool,
+      toolRuntime,
       searchToolCalls
     });
     const { assistantMessage, parsedToolCalls, reply } = roundResult;
@@ -235,6 +243,7 @@ export async function runAgentLoop({
       signal,
       onEvent,
       executeTool,
+      toolRuntime,
       searchToolCalls,
       requiredSingleToolName: requiredToolName
     });
@@ -296,11 +305,19 @@ function describeEmptyCompletion(completion: DeepSeekChatResponse): string {
   return `DeepSeek returned an empty response (choices: ${choiceCount}): ${raw}`;
 }
 
-function normalizeAllowedToolNames(allowedToolNames: string[]) {
-  const names = new Set(allowedToolNames);
+function legacyAllowedNamesToPolicy(allowedToolNames?: string[]): ToolPolicy {
+  if (allowedToolNames === undefined) return { mode: 'all' };
+  return allowedToolNames.length
+    ? { mode: 'selected', names: allowedToolNames }
+    : { mode: 'none' };
+}
+
+function normalizeLegacyToolAliases(policy: ToolPolicy): ToolPolicy {
+  if (policy.mode !== 'selected') return policy;
+  const names = new Set(policy.names);
   // Persisted tasks created before the controlled web tool may still store the two legacy names.
   if (names.has('web_search') || names.has('fetch_page')) names.add('retrieve_web_evidence');
-  return names;
+  return { mode: 'selected', names: [...names] };
 }
 
 /** Detects the model's native tool-call markup leaking into plain content (e.g. DeepSeek DSML tags). */

@@ -294,7 +294,11 @@ async function submitTask() {
       goal: normalizedGoal,
       maxSteps: maxSteps.value,
       maxTokens: maxTokens.value,
-      allowedTools: selectedTools.value
+      toolPolicy: selectedTools.value.length === availableTools.value.length
+        ? { mode: 'all' }
+        : selectedTools.value.length
+          ? { mode: 'selected', names: selectedTools.value }
+          : { mode: 'none' }
     });
     const sequence = ++viewSequence;
     activeTaskId.value = created.task.id;
@@ -1244,7 +1248,7 @@ function getErrorMessage(value: unknown) {
         <div class="grid gap-3">
           <div v-if="detail?.latestCheckpoint" class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-4"><div class="flex items-center justify-between gap-3"><span class="text-sm font-bold text-[var(--agent-text)]">当前检查点</span><strong class="font-mono text-xl">v{{ detail.latestCheckpoint.version }}</strong></div><p class="m-0 mt-2 text-xs text-[var(--agent-text-muted)]">保存于 {{ formatDateTime(detail.latestCheckpoint.createdAt) }}</p></div>
           <div class="grid grid-cols-2 gap-3"><div class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><span class="text-xs text-[var(--agent-text-muted)]">最大步骤数</span><strong class="mt-1 block font-mono text-xl">{{ activeTask?.maxSteps ?? '—' }}</strong></div><div class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><span class="text-xs text-[var(--agent-text-muted)]">Token 上限</span><strong class="mt-1 block font-mono text-xl">{{ activeTask?.maxTokens ?? '—' }}</strong></div></div>
-          <div class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><p class="m-0 text-xs font-bold text-[var(--agent-text)]">允许使用的工具</p><div class="mt-2.5 flex flex-wrap gap-1.5"><span v-for="tool in activeTask?.allowedTools" :key="tool" class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-2 py-1 font-mono text-[11px] text-[var(--agent-text)]">{{ tool }}</span><span v-if="!activeTask?.allowedTools.length" class="text-xs leading-5 text-[var(--agent-text-muted)]">允许使用全部已注册工具</span></div></div>
+          <div class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><p class="m-0 text-xs font-bold text-[var(--agent-text)]">允许使用的工具</p><div class="mt-2.5 flex flex-wrap gap-1.5"><span v-for="tool in activeTask?.toolPolicy.mode === 'selected' ? activeTask.toolPolicy.names : []" :key="tool" class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-2 py-1 font-mono text-[11px] text-[var(--agent-text)]">{{ tool }}</span><span v-if="activeTask?.toolPolicy.mode === 'all'" class="text-xs leading-5 text-[var(--agent-text-muted)]">允许使用全部已注册工具</span><span v-if="activeTask?.toolPolicy.mode === 'none'" class="text-xs leading-5 text-[var(--agent-text-muted)]">不允许使用工具</span></div></div>
           <details v-if="detail?.latestCheckpoint" class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5"><summary class="cursor-pointer text-xs font-bold text-[var(--agent-text-muted)] hover:text-[var(--agent-text)]">查看原始状态</summary><pre class="m-0 mt-3 max-h-[32rem] overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--agent-surface-muted)] p-3 font-mono text-[11px] leading-5 text-[var(--agent-text)]">{{ formatJson(detail.latestCheckpoint.state) }}</pre></details>
         </div>
       </template>

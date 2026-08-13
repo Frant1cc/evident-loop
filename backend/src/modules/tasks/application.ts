@@ -1,5 +1,7 @@
 import type { LlmProvider } from '../../llm/contracts.js';
 import { LlmNotConfiguredError } from '../../llm/errors.js';
+import type { ToolRuntime } from '../../tools/contracts.js';
+import { normalizeToolPolicy } from '../../tools/policy.js';
 import { executeAgentTask, finalizeAgentTask } from '../../runtime/executor.js';
 import {
   createAgentTask,
@@ -22,6 +24,7 @@ import type {
 export type TaskApplicationDependencies = {
   llm?: LlmProvider;
   model: string;
+  toolRuntime: ToolRuntime;
 };
 
 /** Use-case boundary for the durable task module. HTTP and provider configuration stay outside it. */
@@ -30,12 +33,23 @@ export function createTaskApplication(dependencies: TaskApplicationDependencies)
     if (!dependencies.llm) throw new LlmNotConfiguredError();
     return dependencies.llm;
   };
+  const create = (input: Parameters<typeof createAgentTask>[0]) => {
+    const toolPolicy = normalizeToolPolicy(input.toolPolicy ?? input.allowedTools);
+    if (toolPolicy.mode === 'selected') {
+      const registered = new Set(
+        dependencies.toolRuntime.getDefinitions().map((tool) => tool.function.name)
+      );
+      const unknown = toolPolicy.names.filter((name) => !registered.has(name));
+      if (unknown.length) throw new Error(`Unknown tools in toolPolicy: ${unknown.join(', ')}`);
+    }
+    return createAgentTask({ ...input, toolPolicy, allowedTools: undefined });
+  };
 
   return {
     list: listAgentTasks,
     get: getAgentTaskDetail,
     events: listAgentTaskEvents,
-    create: createAgentTask,
+    create,
     delete: deleteAgentTask,
     updatePlan: (id: string, steps: PlanStepDraft[]) => updateAgentTaskPlan(id, steps),
     approve: (id: string) => transitionAgentTask(id, 'running', 'plan approved'),
@@ -53,12 +67,14 @@ export function createTaskApplication(dependencies: TaskApplicationDependencies)
       id,
       llm: requireLlm(),
       model: dependencies.model,
+      toolRuntime: dependencies.toolRuntime,
       signal
     }),
     finalize: (id: string, signal?: AbortSignal) => finalizeAgentTask({
       id,
       llm: requireLlm(),
       model: dependencies.model,
+      toolRuntime: dependencies.toolRuntime,
       signal
     })
   };

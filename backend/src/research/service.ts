@@ -3,6 +3,8 @@ import type { StreamEventEnvelope } from '@evident-loop/stream-protocol';
 import { DEFAULT_MAX_TOOL_ROUNDS } from '../agent/config.js';
 import { runAgentLoop, type AgentLoopEvent, type RunAgentLoopOptions } from '../agent/agentLoop.js';
 import type { LlmProvider } from '../llm/contracts.js';
+import type { ToolPolicy, ToolRuntime } from '../tools/contracts.js';
+import { normalizeToolPolicy } from '../tools/policy.js';
 import { appendStreamEvent } from '../streaming/eventStore.js';
 import { publishStreamEvent, subscribeToStream } from '../streaming/eventHub.js';
 import { isExplicitWordDocumentRequest } from '../tools/wordDocumentTool.js';
@@ -86,7 +88,8 @@ type ResearchAgentRunner = (options: RunAgentLoopOptions) => ReturnType<typeof r
 export function createAndStartResearchRun(options: {
   conversationId: string;
   content: string;
-  allowedToolNames?: string[];
+  toolPolicy: ToolPolicy;
+  toolRuntime: ToolRuntime;
   apiKey?: string;
   llm?: LlmProvider;
   model?: string;
@@ -131,7 +134,7 @@ export function createAndStartResearchRun(options: {
       content: options.content,
       contextMessages,
       promptPreview,
-      allowedToolNames: options.allowedToolNames
+      toolPolicy: options.toolPolicy
     }
   });
 
@@ -142,7 +145,8 @@ export function createAndStartResearchRun(options: {
       apiKey: options.apiKey,
       llm: options.llm,
       model: options.model ?? DEFAULT_MODEL,
-      runAgent: options.runAgent ?? runAgentLoop
+      runAgent: options.runAgent ?? runAgentLoop,
+      toolRuntime: options.toolRuntime
     });
   });
 
@@ -212,10 +216,13 @@ async function executePersistedResearchRun(options: {
   llm?: LlmProvider;
   model: string;
   runAgent: ResearchAgentRunner;
+  toolRuntime: ToolRuntime;
 }) {
   let run = getResearchRun(options.runId);
   const runInput = getResearchRunInput(options.runId);
   if (!run || !runInput || run.status !== 'queued') return;
+  const storedInput = runInput as typeof runInput & { allowedToolNames?: string[] };
+  const toolPolicy = normalizeToolPolicy(storedInput.toolPolicy ?? storedInput.allowedToolNames);
 
   const abortController = new AbortController();
   activeControllers.set(run.id, abortController);
@@ -241,7 +248,8 @@ async function executePersistedResearchRun(options: {
       model: options.model,
       systemPrompt: AGENT_SYSTEM_PROMPT,
       maxToolRounds: DEFAULT_MAX_TOOL_ROUNDS,
-      allowedToolNames: runInput.allowedToolNames,
+      toolPolicy,
+      toolRuntime: options.toolRuntime,
       requiredToolName: isExplicitWordDocumentRequest(runInput.content)
         ? 'generate_word_document'
         : undefined,

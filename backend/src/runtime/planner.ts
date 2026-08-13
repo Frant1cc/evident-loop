@@ -1,5 +1,6 @@
 import type { LlmProvider } from '../llm/contracts.js';
 import { resolveLlmProvider } from '../llm/provider.js';
+import { describeToolPolicy } from '../tools/policy.js';
 import type { AgentTask, PlanStepDraft } from './types.js';
 
 const plannerSystemPrompt = `You are the Planner in a durable research agent.
@@ -31,7 +32,7 @@ export async function generatePlanWithModel(options: {
       { role: 'system', content: plannerSystemPrompt },
       {
         role: 'user',
-        content: `Research goal:\n${options.task.goal}\n\nOutput language: ${outputLanguage.instruction}\n${outputLanguage.requirement}\n\nMaximum steps: ${options.task.maxSteps}\nAllowed tools: ${options.task.allowedTools.join(', ') || 'not restricted'}`
+        content: `Research goal:\n${options.task.goal}\n\nOutput language: ${outputLanguage.instruction}\n${outputLanguage.requirement}\n\nMaximum steps: ${options.task.maxSteps}\nAllowed tools: ${describeToolPolicy(options.task.toolPolicy)}`
       }
     ],
     signal: options.signal
