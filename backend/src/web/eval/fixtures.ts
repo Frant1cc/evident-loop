@@ -1,97 +1,78 @@
-export type WebEvalCategory = 'official_api' | 'freshness' | 'multi_claim' | 'unanswerable';
+export type WebEvalCategory = 'official_api' | 'freshness' | 'multi_claim' | 'unanswerable' | 'url_direct';
+export type WebEvalDifficulty = 'easy' | 'medium' | 'hard';
+export type WebEvalSuite = 'smoke' | 'regression';
 
-export type WebEvalEvidenceNeed = {
-  id: string;
-  label: string;
-  /** Every group must match; values inside a group are alternatives. */
-  groups: string[][];
-};
-
+export type WebEvalEvidenceNeed = { id: string; label: string; groups: string[][] };
 export type WebEvalCase = {
-  id: string;
-  title: string;
-  question: string;
-  category: WebEvalCategory;
-  answerable: boolean;
-  includeDomains?: string[];
-  timeRange?: 'day' | 'week' | 'month' | 'year';
-  expectedDomains: string[];
-  expectedEvidence: WebEvalEvidenceNeed[];
+  id: string; title: string; question: string; category: WebEvalCategory; answerable: boolean;
+  includeDomains?: string[]; timeRange?: 'day' | 'week' | 'month' | 'year'; expectedDomains: string[];
+  expectedEvidence: WebEvalEvidenceNeed[]; tags: string[]; difficulty: WebEvalDifficulty; suites: WebEvalSuite[];
+  canonicalUrls?: string[];
 };
+
+const official = (input: Omit<WebEvalCase, 'answerable' | 'category' | 'suites'> & { category?: WebEvalCategory; suites?: WebEvalSuite[] }): WebEvalCase => ({
+  ...input, answerable: true, category: input.category ?? (input.expectedEvidence.length > 1 ? 'multi_claim' : 'official_api'), suites: input.suites ?? ['regression']
+});
+const need = (id: string, label: string, ...groups: string[][]): WebEvalEvidenceNeed => ({ id, label, groups });
 
 /**
- * Versioned, deliberately small smoke suite. Running it consumes real web-search
- * credits, so cases favour stable official documentation and explicit claims.
+ * Web benchmark v2: 36 version-controlled cases. Smoke is deliberately 10
+ * representative cases; regression is the complete suite. Keep fixture edits
+ * deliberate: report configs retain a snapshot so historical runs stay comparable.
  */
 export const webEvalCases: WebEvalCase[] = [
-  {
-    id: 'tavily-search-depth',
-    title: 'Tavily 搜索深度',
-    question: 'Tavily Search API 的 search_depth 有哪些可选值？basic 和 advanced 的作用与 API credits 成本有什么区别？请只引用 Tavily 官方文档。',
-    category: 'multi_claim',
-    answerable: true,
-    includeDomains: ['docs.tavily.com'],
-    expectedDomains: ['docs.tavily.com'],
-    expectedEvidence: [
-      { id: 'values', label: '可选值 basic / advanced', groups: [['search_depth'], ['basic'], ['advanced']] },
-      { id: 'role', label: '两种模式的检索定位', groups: [['basic'], ['advanced'], ['snippet', 'content', 'relevant', '片段', '相关']] },
-      { id: 'cost', label: 'advanced 每次请求 2 credits', groups: [['advanced'], ['2 credits', '2 api credits', '2 个', '2个']] }
-    ]
-  },
-  {
-    id: 'tavily-domain-filter',
-    title: 'Tavily 域名过滤',
-    question: 'Tavily Search API 如何通过 include_domains 和 exclude_domains 限定检索域名？请给出官方参数名和用途。',
-    category: 'official_api',
-    answerable: true,
-    includeDomains: ['docs.tavily.com'],
-    expectedDomains: ['docs.tavily.com'],
-    expectedEvidence: [
-      { id: 'include', label: 'include_domains 白名单', groups: [['include_domains'], ['include', 'only', '白名单', '包含']] },
-      { id: 'exclude', label: 'exclude_domains 排除列表', groups: [['exclude_domains'], ['exclude', '排除']] }
-    ]
-  },
-  {
-    id: 'tavily-time-range',
-    title: 'Tavily 时间范围',
-    question: 'Tavily Search API 的 time_range 参数支持哪些时间范围值？请只查询 Tavily 官方文档。',
-    category: 'official_api',
-    answerable: true,
-    includeDomains: ['docs.tavily.com'],
-    expectedDomains: ['docs.tavily.com'],
-    expectedEvidence: [
-      { id: 'parameter', label: 'time_range 参数', groups: [['time_range']] },
-      { id: 'values', label: 'day / week / month / year', groups: [['day'], ['week'], ['month'], ['year']] }
-    ]
-  },
-  {
-    id: 'node-release',
-    title: 'Node.js 当前 LTS',
-    question: '截至 2026 年 8 月，Node.js 官方列出的 Active LTS 发布线是什么？说明其版本和代号，并引用 nodejs.org。',
-    category: 'freshness',
-    answerable: true,
-    includeDomains: ['nodejs.org'],
-    expectedDomains: ['nodejs.org'],
-    expectedEvidence: [
-      { id: 'lts', label: 'Active LTS 发布信息', groups: [['active lts', 'active'], ['v24', '24.x', 'version 24'], ['krypton']] }
-    ]
-  },
-  {
-    id: 'unanswerable-product',
-    title: '不存在的官方参数',
-    question: 'Tavily Search API 的 quantum_oracle_depth 参数有哪些可选值？请只引用 Tavily 官方文档。',
-    category: 'unanswerable',
-    answerable: false,
-    includeDomains: ['docs.tavily.com'],
-    expectedDomains: ['docs.tavily.com'],
-    expectedEvidence: []
-  }
+  // Tavily API: parameter / multi-claim / constrained-authority coverage (10)
+  official({ id:'tavily-search-depth', title:'Tavily 搜索深度', question:'Tavily Search API 的 search_depth 有哪些可选值？basic 和 advanced 的作用与 API credits 成本有什么区别？请只引用 Tavily 官方文档。', includeDomains:['docs.tavily.com'], expectedDomains:['docs.tavily.com'], tags:['api','parameter','multi-claim','official'], difficulty:'medium', suites:['smoke','regression'], expectedEvidence:[need('values','可选值 basic / advanced',['search_depth'],['basic'],['advanced']),need('role','两种模式的检索定位',['basic'],['advanced'],['snippet','content','relevant','片段','相关']),need('cost','advanced 每次请求 2 credits',['advanced'],['2 credits','2 api credits','2 个 api credits'])] }),
+  official({ id:'tavily-domain-filter', title:'Tavily 域名过滤', question:'Tavily Search API 如何通过 include_domains 和 exclude_domains 限定检索域名？请给出官方参数名和用途。', includeDomains:['docs.tavily.com'], expectedDomains:['docs.tavily.com'], tags:['api','parameter','domain','official'], difficulty:'medium', suites:['smoke','regression'], expectedEvidence:[need('include','include_domains 白名单',['include_domains'],['include','only','白名单','包含']),need('exclude','exclude_domains 排除列表',['exclude_domains'],['exclude','排除'])] }),
+  official({ id:'tavily-time-range', title:'Tavily 时间范围', question:'Tavily Search API 的 time_range 参数支持哪些时间范围值？请只查询 Tavily 官方文档。', includeDomains:['docs.tavily.com'], expectedDomains:['docs.tavily.com'], tags:['api','parameter','official'], difficulty:'easy', suites:['smoke','regression'], expectedEvidence:[need('parameter','time_range 参数',['time_range']),need('values','day / week / month / year',['day'],['week'],['month'],['year'])] }),
+  official({ id:'tavily-max-results', title:'Tavily 返回数量', question:'Tavily Search API 的 max_results 参数用途和允许范围是什么？请只引用官方文档。', includeDomains:['docs.tavily.com'], expectedDomains:['docs.tavily.com'], tags:['api','parameter','official'], difficulty:'easy', expectedEvidence:[need('max-results','max_results 范围',['max_results'],['1'],['20'])] }),
+  official({ id:'tavily-topic', title:'Tavily 搜索主题', question:'Tavily Search API 的 topic 参数有哪些可选值，各自适合什么搜索场景？请只引用官方文档。', includeDomains:['docs.tavily.com'], expectedDomains:['docs.tavily.com'], tags:['api','parameter','multi-claim','official'], difficulty:'medium', suites:['smoke','regression'], expectedEvidence:[need('topic','topic 参数',['topic']),need('general','general 主题',['general']),need('news','news 主题',['news'])] }),
+  official({ id:'tavily-include-answer', title:'Tavily 生成答案', question:'Tavily Search API 的 include_answer 参数有什么作用，支持哪些设置？请只引用官方文档。', includeDomains:['docs.tavily.com'], expectedDomains:['docs.tavily.com'], tags:['api','parameter','official'], difficulty:'medium', expectedEvidence:[need('include-answer','include_answer 参数',['include_answer'],['answer'])] }),
+  official({ id:'tavily-include-raw-content', title:'Tavily 原始内容', question:'Tavily Search API 的 include_raw_content 参数有什么作用？请只引用官方文档。', includeDomains:['docs.tavily.com'], expectedDomains:['docs.tavily.com'], tags:['api','parameter','official'], difficulty:'medium', expectedEvidence:[need('raw-content','include_raw_content 参数',['include_raw_content'],['raw content','content'])] }),
+  official({ id:'tavily-chunks-per-source', title:'Tavily 每来源片段数', question:'Tavily Search API 的 chunks_per_source 参数在哪种搜索深度下有效，允许范围是什么？请只引用官方文档。', includeDomains:['docs.tavily.com'], expectedDomains:['docs.tavily.com'], tags:['api','parameter','multi-claim','official'], difficulty:'hard', expectedEvidence:[need('chunks','chunks_per_source 参数',['chunks_per_source']),need('advanced','advanced 搜索深度',['advanced'])] }),
+  official({ id:'tavily-auto-parameters', title:'Tavily 自动参数', question:'Tavily Search API 的 auto_parameters 有什么作用，如何影响 search_depth？请只引用官方文档。', includeDomains:['docs.tavily.com'], expectedDomains:['docs.tavily.com'], tags:['api','parameter','multi-claim','official'], difficulty:'hard', expectedEvidence:[need('auto','auto_parameters 参数',['auto_parameters']),need('depth','影响 search_depth',['search_depth'],['advanced','basic'])] }),
+  official({ id:'tavily-extract', title:'Tavily Extract API', question:'Tavily Extract API 的输入 URL 参数和输出内容字段分别是什么？请只引用官方文档。', includeDomains:['docs.tavily.com'], expectedDomains:['docs.tavily.com'], tags:['api','multi-claim','official'], difficulty:'medium', expectedEvidence:[need('urls','URL 输入',['urls','url']),need('results','结果内容',['results','content'])] }),
+
+  // MDN: Chinese question / English authority / direct-document navigation (8)
+  official({ id:'mdn-fetch-signal', title:'Fetch AbortSignal', question:'Fetch API 中如何通过 AbortSignal 取消请求？请仅依据 MDN Web Docs。', includeDomains:['developer.mozilla.org'], expectedDomains:['developer.mozilla.org'], tags:['web-api','mdn','chinese-query','official'], difficulty:'medium', suites:['smoke','regression'], expectedEvidence:[need('signal','signal 选项',['signal'],['abortsignal','abort'])] }),
+  official({ id:'mdn-url-api', title:'URL API', question:'浏览器 URL API 如何读取查询参数和修改查询参数？请仅依据 MDN Web Docs。', includeDomains:['developer.mozilla.org'], expectedDomains:['developer.mozilla.org'], tags:['web-api','mdn','multi-claim','official'], difficulty:'medium', expectedEvidence:[need('read','读取查询参数',['searchparams']),need('modify','修改查询参数',['set','append'])] }),
+  official({ id:'mdn-cache-control', title:'Cache-Control', question:'HTTP Cache-Control 中 no-store 和 no-cache 的区别是什么？请仅依据 MDN Web Docs。', includeDomains:['developer.mozilla.org'], expectedDomains:['developer.mozilla.org'], tags:['http','mdn','comparison','official'], difficulty:'hard', suites:['smoke','regression'], expectedEvidence:[need('no-store','no-store 语义',['no-store']),need('no-cache','no-cache 语义',['no-cache'])] }),
+  official({ id:'mdn-cors', title:'CORS 预检', question:'什么情况下浏览器会发送 CORS 预检请求，预检请求使用什么 HTTP 方法？请仅依据 MDN Web Docs。', includeDomains:['developer.mozilla.org'], expectedDomains:['developer.mozilla.org'], tags:['http','mdn','multi-claim','official'], difficulty:'hard', expectedEvidence:[need('preflight','预检请求',['preflight']),need('options','OPTIONS 方法',['options'])] }),
+  official({ id:'mdn-web-storage', title:'Web Storage', question:'localStorage 与 sessionStorage 在生命周期和作用域上的区别是什么？请仅依据 MDN Web Docs。', includeDomains:['developer.mozilla.org'], expectedDomains:['developer.mozilla.org'], tags:['web-api','mdn','comparison','official'], difficulty:'medium', expectedEvidence:[need('local','localStorage',['localstorage']),need('session','sessionStorage',['sessionstorage'])] }),
+  official({ id:'mdn-content-security-policy', title:'CSP', question:'Content-Security-Policy 响应头的用途是什么，default-src 指令控制什么？请仅依据 MDN Web Docs。', includeDomains:['developer.mozilla.org'], expectedDomains:['developer.mozilla.org'], tags:['security','http','mdn','official'], difficulty:'medium', expectedEvidence:[need('csp','CSP 用途',['content-security-policy']),need('default-src','default-src 指令',['default-src'])] }),
+  official({ id:'mdn-websocket', title:'WebSocket 状态', question:'WebSocket readyState 的 OPEN 和 CLOSED 分别表示什么？请仅依据 MDN Web Docs。', includeDomains:['developer.mozilla.org'], expectedDomains:['developer.mozilla.org'], tags:['web-api','mdn','parameter','official'], difficulty:'easy', expectedEvidence:[need('open','OPEN 状态',['open']),need('closed','CLOSED 状态',['closed'])] }),
+  official({ id:'mdn-redirect', title:'Fetch 重定向', question:'Fetch API 的 redirect 选项有哪些值，error 的行为是什么？请仅依据 MDN Web Docs。', includeDomains:['developer.mozilla.org'], expectedDomains:['developer.mozilla.org'], tags:['web-api','mdn','parameter','official'], difficulty:'medium', expectedEvidence:[need('redirect','redirect 参数',['redirect']),need('error','error 行为',['error'])] }),
+
+  // GitHub docs: product-documentation and official URL constraints (6)
+  official({ id:'github-actions-concurrency', title:'GitHub Actions 并发', question:'GitHub Actions 的 concurrency 用来解决什么问题，cancel-in-progress 有什么作用？请仅依据 GitHub Docs。', includeDomains:['docs.github.com'], expectedDomains:['docs.github.com'], tags:['github','ci','multi-claim','official'], difficulty:'medium', suites:['smoke','regression'], expectedEvidence:[need('concurrency','concurrency 作用',['concurrency']),need('cancel','cancel-in-progress',['cancel-in-progress'])] }),
+  official({ id:'github-actions-permissions', title:'GitHub Actions 权限', question:'GitHub Actions workflow 的 permissions 键有什么作用，如何设置最小权限？请仅依据 GitHub Docs。', includeDomains:['docs.github.com'], expectedDomains:['docs.github.com'], tags:['github','security','ci','official'], difficulty:'medium', expectedEvidence:[need('permissions','permissions 键',['permissions']),need('least','最小权限',['least','minimum','read'])] }),
+  official({ id:'github-branch-protection', title:'GitHub 分支保护', question:'GitHub 分支保护规则如何要求拉取请求评审和状态检查？请仅依据 GitHub Docs。', includeDomains:['docs.github.com'], expectedDomains:['docs.github.com'], tags:['github','governance','multi-claim','official'], difficulty:'medium', expectedEvidence:[need('reviews','评审要求',['pull request','review']),need('checks','状态检查',['status checks','checks'])] }),
+  official({ id:'github-codeowners', title:'CODEOWNERS', question:'GitHub CODEOWNERS 文件有什么作用，文件应放在哪些位置？请仅依据 GitHub Docs。', includeDomains:['docs.github.com'], expectedDomains:['docs.github.com'], tags:['github','governance','official'], difficulty:'medium', expectedEvidence:[need('owners','代码所有者',['codeowners']),need('location','文件位置',['.github','docs','root'])] }),
+  official({ id:'github-dependabot', title:'Dependabot 更新', question:'Dependabot version updates 如何通过配置文件定义包生态和更新计划？请仅依据 GitHub Docs。', includeDomains:['docs.github.com'], expectedDomains:['docs.github.com'], tags:['github','dependency','official'], difficulty:'medium', expectedEvidence:[need('ecosystem','package-ecosystem',['package-ecosystem']),need('schedule','schedule',['schedule'])] }),
+  official({ id:'github-secret-scanning', title:'GitHub 密钥扫描', question:'GitHub secret scanning 如何处理推送保护（push protection）触发的提交？请仅依据 GitHub Docs。', includeDomains:['docs.github.com'], expectedDomains:['docs.github.com'], tags:['github','security','freshness','official'], difficulty:'hard', expectedEvidence:[need('push','push protection',['push protection']),need('block','阻止或绕过',['block','bypass'])] }),
+
+  // Node.js: current and historic official-release evidence (6)
+  official({ id:'node-release-schedule', title:'Node.js 发布计划', question:'Node.js 发布计划中 Current、Active LTS、Maintenance LTS 分别代表什么阶段？请只引用 nodejs.org。', includeDomains:['nodejs.org'], expectedDomains:['nodejs.org'], tags:['node','freshness','multi-claim','official'], difficulty:'hard', suites:['smoke','regression'], expectedEvidence:[need('current','Current 阶段',['current']),need('active','Active LTS 阶段',['active lts']),need('maintenance','Maintenance LTS 阶段',['maintenance'])] }),
+  official({ id:'node-esm', title:'Node.js ESM', question:'Node.js 如何通过 package.json 的 type 字段控制 .js 文件被视为 ES module 还是 CommonJS？请只引用 nodejs.org。', includeDomains:['nodejs.org'], expectedDomains:['nodejs.org'], tags:['node','module','official'], difficulty:'medium', expectedEvidence:[need('type','type 字段',['"type"','type']),need('module','module 设置',['module']),need('commonjs','commonjs 设置',['commonjs'])] }),
+  official({ id:'node-env', title:'Node.js 环境变量', question:'Node.js 的 process.env 如何读取环境变量，值的类型是什么？请只引用 nodejs.org。', includeDomains:['nodejs.org'], expectedDomains:['nodejs.org'], tags:['node','api','official'], difficulty:'easy', expectedEvidence:[need('env','process.env',['process.env']),need('string','字符串值',['string'])] }),
+  official({ id:'node-test', title:'Node.js 测试运行器', question:'Node.js 内置 test runner 如何通过 node --test 运行测试？请只引用 nodejs.org。', includeDomains:['nodejs.org'], expectedDomains:['nodejs.org'], tags:['node','testing','official'], difficulty:'easy', expectedEvidence:[need('test','node --test',['--test'])] }),
+  official({ id:'node-fetch', title:'Node.js Fetch', question:'Node.js 的全局 fetch 基于什么 Web 标准接口，如何处理响应状态？请只引用 nodejs.org。', includeDomains:['nodejs.org'], expectedDomains:['nodejs.org'], tags:['node','web-api','official'], difficulty:'medium', expectedEvidence:[need('fetch','fetch',['fetch']),need('response','Response',['response'])] }),
+  official({ id:'node-worker-threads', title:'Node.js Worker Threads', question:'Node.js worker_threads 模块适合解决什么类型的 CPU 密集型工作，主线程如何与 worker 通信？请只引用 nodejs.org。', includeDomains:['nodejs.org'], expectedDomains:['nodejs.org'], tags:['node','concurrency','multi-claim','official'], difficulty:'hard', expectedEvidence:[need('cpu','CPU 密集任务',['cpu']),need('message','消息通信',['message','postmessage'])] }),
+
+  // OpenAI docs: direct authority and multi-claim API facts (4)
+  official({ id:'openai-responses-api', title:'Responses API', question:'OpenAI Responses API 的 input 和 output 有什么作用？请只引用官方开发者文档。', includeDomains:['platform.openai.com'], expectedDomains:['platform.openai.com'], tags:['openai','api','multi-claim','official'], difficulty:'medium', suites:['smoke','regression'], expectedEvidence:[need('input','input',['input']),need('output','output',['output'])] }),
+  official({ id:'openai-function-calling', title:'函数调用', question:'OpenAI API 中工具/函数调用的 tool_calls 与 function_call_output 分别承担什么作用？请只引用官方开发者文档。', includeDomains:['platform.openai.com'], expectedDomains:['platform.openai.com'], tags:['openai','api','multi-claim','official'], difficulty:'hard', expectedEvidence:[need('call','tool_calls',['tool_calls','function call']),need('output','function_call_output',['function_call_output'])] }),
+  official({ id:'openai-rate-limits', title:'速率限制', question:'OpenAI API 的速率限制通常按哪些维度衡量，如何查看组织的限制？请只引用官方开发者文档。', includeDomains:['platform.openai.com'], expectedDomains:['platform.openai.com'], tags:['openai','api','freshness','official'], difficulty:'hard', expectedEvidence:[need('limits','rate limits',['rate limit']),need('usage','限制维度或用量',['requests','tokens','usage'])] }),
+  official({ id:'openai-api-keys', title:'API Key 安全', question:'OpenAI 官方如何建议保管 API key，哪些位置不应暴露密钥？请只引用官方开发者文档。', includeDomains:['platform.openai.com'], expectedDomains:['platform.openai.com'], tags:['openai','security','official'], difficulty:'medium', expectedEvidence:[need('key','API key',['api key']),need('secret','保密要求',['secret','environment variable','client-side'])] }),
+
+  // negative / URL / adversarial cases (2)
+  { id:'tavily-nonexistent-parameter', title:'不存在的 Tavily 参数', question:'Tavily Search API 的 quantum_oracle_depth 参数有哪些可选值？请只引用 Tavily 官方文档。', category:'unanswerable', answerable:false, includeDomains:['docs.tavily.com'], expectedDomains:['docs.tavily.com'], expectedEvidence:[], tags:['negative','api','official'], difficulty:'medium', suites:['smoke','regression'] },
+  { id:'mdn-nonexistent-header', title:'不存在的 HTTP 头', question:'HTTP 响应头 X-Quantum-Cache-Policy 的标准语义是什么？请仅依据 MDN Web Docs；找不到时不要猜测。', category:'unanswerable', answerable:false, includeDomains:['developer.mozilla.org'], expectedDomains:['developer.mozilla.org'], expectedEvidence:[], tags:['negative','http','mdn','official'], difficulty:'medium', suites:['regression'] }
 ];
 
-export const webEvalSuiteVersion = 1;
-
-export function getWebEvalCases(ids?: string[]) {
-  if (!ids?.length) return webEvalCases;
-  const selected = new Set(ids);
-  return webEvalCases.filter((item) => selected.has(item.id));
-}
+export const webEvalSuiteVersion = 2;
+export const webEvalSuites: Array<{ id: WebEvalSuite; label: string; description: string }> = [
+  { id:'smoke', label:'冒烟集', description:'10 道代表题，适合日常调试与低成本回归。' },
+  { id:'regression', label:'完整回归集', description:'36 道深度题，覆盖 API、时效、多事实点、反干扰与不可回答问题。' }
+];
+export function getWebEvalCases(ids?: string[]) { if (!ids?.length) return webEvalCases.filter((item) => item.suites.includes('smoke')); const selected = new Set(ids); return webEvalCases.filter((item) => selected.has(item.id)); }

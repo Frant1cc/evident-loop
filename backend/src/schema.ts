@@ -55,6 +55,7 @@ export const webEvaluationCases = sqliteTable('web_evaluation_cases', {
   includeDomainsJson: text('include_domains_json'),
   expectedDomainsJson: text('expected_domains_json').notNull(),
   expectedEvidenceJson: text('expected_evidence_json').notNull(),
+  metadataJson: text('metadata_json'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull()
 });

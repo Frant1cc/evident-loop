@@ -11,7 +11,7 @@ export const webToolModules: ToolModule[] = [
       function: {
         name: 'retrieve_web_evidence',
         description:
-          'Search the public web through one complete controlled quality loop. Call this tool at most once per user request: it scores Tavily results, fetches diverse candidate pages, rejects irrelevant content, rewrites weak queries toward uncovered claims within a fixed budget, and returns auditable sources, per-claim coverage, plus sufficient/empty/exhausted verdicts. Treat only sufficient results with adequate claim coverage as strong evidence; exhausted means some related material was found but the quality budget ended before confidence or coverage was sufficient.',
+          'Retrieve public web evidence through one controlled quality loop. Call this tool at most once per user request: it detects URL/PDF, official-docs, freshness, China-domestic, dynamic-page, verification, and vertical-domain signals; builds an auditable provider route; directly fetches explicit URLs when appropriate; then scores search results, fetches diverse pages, and rewrites weak queries toward uncovered claims within a fixed budget. Treat only sufficient results with adequate claim coverage as strong evidence.',
         parameters: {
           type: 'object',
           properties: {

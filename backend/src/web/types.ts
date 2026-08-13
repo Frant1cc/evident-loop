@@ -5,6 +5,54 @@ import type { ClaimAssessment } from './claims.js';
 export type WebRetrievalVerdict = 'sufficient' | 'weak' | 'empty' | 'exhausted';
 export type SearchQualityVerdict = 'sufficient' | 'weak' | 'empty';
 export type PageQualityVerdict = 'sufficient' | 'weak' | 'irrelevant' | 'unreadable';
+export type RetrievalCapability = 'web_search' | 'web_fetch' | 'docs_search' | 'vertical_search';
+export type VerticalDomain = 'academic' | 'security' | 'finance' | 'legal' | 'code';
+
+export type IntentSignal = {
+  matched: boolean;
+  confidence: number;
+  reasons: string[];
+};
+
+export type RetrievalIntent = {
+  routerVersion: string;
+  urls: string[];
+  requiredCapabilities: RetrievalCapability[];
+  knownUrl: IntentSignal;
+  pdf: IntentSignal;
+  officialDocs: IntentSignal;
+  freshness: IntentSignal;
+  chineseLanguage: IntentSignal;
+  chinaDomestic: IntentSignal;
+  dynamicPage: IntentSignal;
+  verification: IntentSignal;
+  vertical: IntentSignal & { domains: VerticalDomain[] };
+};
+
+export type ProviderCandidate = {
+  provider: string;
+  score: number;
+  configured: boolean;
+  reasons: string[];
+};
+
+export type ProviderRoute = {
+  capability: RetrievalCapability;
+  candidates: ProviderCandidate[];
+};
+
+export type RetrievalQueryRoute = {
+  policyVersion: string;
+  strategy: 'direct_fetch' | 'fetch_then_verify' | 'official_docs_first' | 'vertical_first' | 'china_current_first' | 'current_web_first' | 'general_web';
+  searchRequired: boolean;
+  directFetchUrls: string[];
+  initialQueries: string[];
+  /** Authoritative domains to constrain the first search without restricting later fallback searches. */
+  preferredDomains?: string[];
+  inferredTimeRange?: 'day' | 'week' | 'month' | 'year';
+  providerRoutes: ProviderRoute[];
+  reasons: string[];
+};
 
 export type ScoredWebSearchResult = WebSearchResult & {
   canonicalUrl: string;
@@ -54,6 +102,8 @@ export type WebRetrievalDiagnostics = {
 
 export type WebRetrievalResult = {
   question: string;
+  intent: RetrievalIntent;
+  queryRoute: RetrievalQueryRoute;
   verdict: WebRetrievalVerdict;
   score: number;
   retrievalQueries: string[];

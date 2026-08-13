@@ -48,3 +48,50 @@ test('does not treat an unrelated pricing article as evidence for API depth pric
   assert.equal(coverage.claims[2]?.supported, true);
   assert.deepEqual(coverage.claims[2]?.sourceUrls, ['https://docs.tavily.com/documentation/api-credits']);
 });
+
+test('normalizes enumeration prefixes and keeps short technical claims', () => {
+  const claims = extractWebClaims(
+    'SSE 长连接优化，包括心跳机制、消息压缩、缓冲设置、服务端并发控制、鉴权'
+  );
+
+  assert.deepEqual(claims.map((claim) => claim.text), [
+    'SSE 长连接优化',
+    '心跳机制',
+    '消息压缩',
+    '缓冲设置',
+    '服务端并发控制',
+    '鉴权'
+  ]);
+});
+
+test('uses technical synonyms when assessing SSE claim coverage', () => {
+  const claims = extractWebClaims('心跳机制、消息压缩、缓冲设置、服务端并发控制、鉴权');
+  const coverage = assessClaimCoverage(claims, [{
+    url: 'https://nginx.org/en/docs/http/ngx_http_proxy_module.html',
+    content: [
+      'Send a heartbeat event to keep the connection alive.',
+      'Disable gzip compression for low latency.',
+      'Set proxy_buffering off and X-Accel-Buffering: no.',
+      'Use worker_connections as the connection limit and apply backpressure.',
+      'Authentication uses an access token or secure cookie.'
+    ].join('\n')
+  }]);
+
+  assert.deepEqual(coverage.uncoveredClaims, []);
+});
+
+test('recognizes English reconnection and multiplexing evidence for Chinese claims', () => {
+  const claims = extractWebClaims('断线重连、多路复用、客户端优化、鉴权与超时、性能与并发优化最佳实践');
+  const coverage = assessClaimCoverage(claims, [{
+    url: 'https://developer.mozilla.org/docs/Web/API/Server-sent_events',
+    content: [
+      'EventSource provides automatic reconnection and sends Last-Event-ID when reconnecting.',
+      'HTTP/2 multiplexing avoids the low per-domain connection limit.',
+      'Client-side code handles onerror and calls close() when the stream is no longer needed.',
+      'Authentication uses secure cookies and the proxy has an idle timeout.',
+      'Non-blocking event loops improve throughput and scalability under high concurrency.'
+    ].join('\n')
+  }]);
+
+  assert.deepEqual(coverage.uncoveredClaims, []);
+});

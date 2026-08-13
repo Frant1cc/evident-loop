@@ -4,14 +4,27 @@ import { failure, success } from '../response.js';
 import { createAndStartRagEvaluation, subscribeToRagEvaluation } from '../rag/eval/service.js';
 import { deleteEvaluationRecord, getEvaluationRecord, listEvaluationRecords } from '../rag/eval/store.js';
 import { createSseStream } from '../sse.js';
-import { createAndStartWebEvaluation, listWebEvaluationCases, subscribeToWebEvaluation } from '../web/eval/service.js';
+import { createAndStartWebEvaluation, exportWebEvaluationLibrary, getWebEvaluationLibrary, subscribeToWebEvaluation } from '../web/eval/service.js';
 import { deleteWebEvaluationRecord, getWebEvaluationRecord, listWebEvaluationRecords } from '../web/eval/store.js';
-import { createCustomWebEvalCase, deleteCustomWebEvalCase } from '../web/eval/caseStore.js';
+import { createCustomWebEvalCase, deleteCustomWebEvalCase, importCustomWebEvalCases } from '../web/eval/caseStore.js';
 
 export const evaluationsRouter = Router();
 
 evaluationsRouter.get('/web/evaluation-cases', (_req, res) => {
-  res.json(success({ cases: listWebEvaluationCases() }));
+  res.json(success(getWebEvaluationLibrary()));
+});
+
+evaluationsRouter.get('/web/evaluation-cases/export', (_req, res) => {
+  res.json(success({ library: exportWebEvaluationLibrary() }));
+});
+
+evaluationsRouter.post('/web/evaluation-cases/import', (req, res) => {
+  try {
+    const result = importCustomWebEvalCases(req.body);
+    res.status(201).json(success(result, `已导入 ${result.importedCount} 道本地题`));
+  } catch (error) {
+    res.status(400).json(failure(getErrorMessage(error, '导入题库失败')));
+  }
 });
 
 evaluationsRouter.post('/web/evaluation-cases', (req, res) => {

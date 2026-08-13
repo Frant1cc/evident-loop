@@ -87,6 +87,7 @@ export const initDb = () => {
       include_domains_json TEXT,
       expected_domains_json TEXT NOT NULL,
       expected_evidence_json TEXT NOT NULL,
+      metadata_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -426,4 +427,9 @@ export const initDb = () => {
     CREATE INDEX IF NOT EXISTS agent_artifacts_task_updated_at_idx
     ON agent_artifacts(task_id, updated_at DESC);
   `);
+  // Existing installations created before the local-library metadata field.
+  const columns = sqlite.prepare('PRAGMA table_info(web_evaluation_cases)').all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === 'metadata_json')) {
+    sqlite.exec('ALTER TABLE web_evaluation_cases ADD COLUMN metadata_json TEXT');
+  }
 };

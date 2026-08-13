@@ -8,7 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/*.test.ts src/agent/*.test.ts src/rag/*.test.ts src/runtime/*.test.ts src/documents/*.test.ts src/artifacts/*.test.ts src/research/*.test.ts src/streaming/*.test.ts src/web/*.test.ts src/modules/*.test.ts src/llm/*.test.ts",
+    "test": "tsx --test src/*.test.ts src/agent/*.test.ts src/rag/*.test.ts src/runtime/*.test.ts src/documents/*.test.ts src/artifacts/*.test.ts src/research/*.test.ts src/streaming/*.test.ts src/web/*.test.ts src/web/eval/*.test.ts src/modules/*.test.ts src/llm/*.test.ts",
     "runtime:verify": "tsx src/runtime/verify.ts",
     "rag:sync": "tsx src/rag/syncCli.ts",
     "rag:eval:validate": "tsx src/rag/eval/validateFixtures.ts",

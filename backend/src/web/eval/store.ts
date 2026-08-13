@@ -1,8 +1,9 @@
 import { sqlite } from '../../db.js';
 import type { WebEvalReport } from './run.js';
+import type { WebEvalCase } from './fixtures.js';
 
 export type WebEvaluationStatus = 'queued' | 'running' | 'completed' | 'failed';
-export type WebEvaluationConfig = { caseIds: string[]; suiteVersion: number; k: number };
+export type WebEvaluationConfig = { caseIds: string[]; suiteVersion: number; k: number; caseSnapshot?: WebEvalCase[] };
 export type WebEvaluationRecord = {
   id: string;
   name: string;

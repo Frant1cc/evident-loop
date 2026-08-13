@@ -15,7 +15,15 @@ import {
 } from './quality.js';
 import { rewriteWebQuery, type RewriteWebQueryOptions } from './queryRewrite.js';
 import { assessClaimCoverage, extractWebClaims, type ClaimEvidence, type WebClaim } from './claims.js';
-import type { PageAttempt, QueryAttempt, RequiredEvidenceNeed, WebRetrievalResult } from './types.js';
+import { detectRetrievalIntent } from './intent.js';
+import { buildRetrievalQueryRoute } from './routing.js';
+import type {
+  PageAttempt,
+  QueryAttempt,
+  RequiredEvidenceNeed,
+  ScoredWebSearchResult,
+  WebRetrievalResult
+} from './types.js';
 
 const inputSchema = z.object({
   question: z.string().trim().min(1).max(1_000),
@@ -50,20 +58,40 @@ export async function retrieveWebEvidence(
   options: { signal?: AbortSignal; dependencies?: WebRetrievalDependencies } = {}
 ): Promise<WebRetrievalResult> {
   const input = inputSchema.parse(args);
+  const intent = detectRetrievalIntent(input.question);
+  const queryRoute = buildRetrievalQueryRoute(intent, {
+    question: input.question,
+    explicitTimeRange: input.timeRange,
+    includeDomains: input.includeDomains
+  });
   const isSingleDomainSearch = input.includeDomains?.length === 1;
+  const claims: WebClaim[] = input.requiredEvidence?.length
+    ? input.requiredEvidence.map(toRequiredClaim)
+    : extractWebClaims(input.question);
+  const isBroadMultiClaimQuestion = claims.length >= 5;
+  const canExpandForUncoveredTechnicalClaims = input.maxPages === undefined
+    && isBroadMultiClaimQuestion
+    && intent.officialDocs.matched;
   // A domain-constrained request cannot gain confidence through cross-domain corroboration,
-  // so give it more room to locate the exact page within that authority.
-  const queryBudget = input.maxQueries ?? (isSingleDomainSearch ? 4 : 3);
-  const pageBudget = input.maxPages ?? (isSingleDomainSearch ? 8 : 5);
+  // so give it more room to locate the exact page within that authority. Broad
+  // multi-part questions also need more than the three-query single-fact budget.
+  const queryBudget = input.maxQueries ?? (isBroadMultiClaimQuestion ? 5 : isSingleDomainSearch ? 4 : 3);
+  let pageBudget = input.maxPages ?? (isBroadMultiClaimQuestion || isSingleDomainSearch ? 8 : 5);
+  const maximumPageBudget = canExpandForUncoveredTechnicalClaims ? 10 : pageBudget;
   const search = options.dependencies?.search ?? webSearch;
   const fetch = options.dependencies?.fetch ?? fetchPage;
   const rewrite = options.dependencies?.rewrite ?? rewriteWebQuery;
   const now = options.dependencies?.now ?? Date.now;
   const startedAt = now();
-  const claims: WebClaim[] = input.requiredEvidence?.length
-    ? input.requiredEvidence.map(toRequiredClaim)
-    : extractWebClaims(input.question);
-  const pendingQueries = [input.question];
+  // The first official-docs query is domain constrained. Preserve one broad
+  // overview query before gap-focused rewrites so comprehensive implementation
+  // guides can still be discovered across the open web.
+  const pendingQueries = [
+    ...queryRoute.initialQueries,
+    ...(input.maxQueries === undefined && isBroadMultiClaimQuestion && queryRoute.preferredDomains?.length
+      ? [buildBroadOverviewQuery(input.question)]
+      : [])
+  ];
   const seenQueries = new Set<string>();
   const fetchedUrls = new Set<string>();
   const evidenceDomains = new Set<string>();
@@ -74,6 +102,24 @@ export async function retrieveWebEvidence(
   const evidence: ClaimEvidence[] = [];
   let budgetExhaustedBy: WebRetrievalResult['diagnostics']['budgetExhaustedBy'];
   let stopReason = 'No usable web evidence was found';
+
+  for (const url of queryRoute.directFetchUrls.slice(0, pageBudget)) {
+    throwIfAborted(options.signal);
+    const candidate = directUrlCandidate(url);
+    fetchedUrls.add(candidate.canonicalUrl);
+    await fetchCandidate(candidate, true);
+  }
+
+  if (!queryRoute.searchRequired) {
+    if (sources.length) {
+      stopReason = 'Explicit URL provided sufficient directly fetched evidence';
+      return buildResult('sufficient');
+    }
+    stopReason = sources.length
+      ? 'Explicit URL was fetched but did not cover enough of the question'
+      : 'Explicit URL did not produce usable evidence';
+    return buildResult(sources.length ? 'weak' : 'empty');
+  }
 
   while (seenQueries.size < queryBudget) {
     throwIfAborted(options.signal);
@@ -99,12 +145,25 @@ export async function retrieveWebEvidence(
       options.signal,
       {
         searchDepth,
-        timeRange: input.timeRange,
-        includeDomains: input.includeDomains,
+        timeRange: input.timeRange ?? queryRoute.inferredTimeRange,
+        includeDomains: input.includeDomains
+          ?? (seenQueries.size === 1 ? queryRoute.preferredDomains : undefined),
         excludeDomains: input.excludeDomains
       }
     );
-    const scored = scoreSearchResults(input.question, response.results);
+    // Rewrites deliberately focus on an uncovered subtopic. Score each result
+    // against that focused query as well as the original question, otherwise a
+    // strong heartbeat/backpressure page can be rejected for not repeating all
+    // nine topics from a broad initial request.
+    const scoredForQuestion = scoreSearchResults(
+      input.question,
+      response.results,
+      queryRoute.preferredDomains
+    );
+    const scoredForQuery = normalizeQuery(query) === normalizeQuery(input.question)
+      ? scoredForQuestion
+      : scoreSearchResults(query, response.results, queryRoute.preferredDomains);
+    const scored = mergeSearchScores(scoredForQuestion, scoredForQuery);
     const assessment = assessSearchQuality(scored);
     const remainingPages = pageBudget - fetchedUrls.size;
     const selected = remainingPages > 0
@@ -122,39 +181,7 @@ export async function retrieveWebEvidence(
     for (const candidate of selected) {
       throwIfAborted(options.signal);
       fetchedUrls.add(candidate.canonicalUrl);
-      try {
-        const currentCoverage = assessClaimCoverage(claims, evidence);
-        const pageQuestion = [input.question, ...currentCoverage.uncoveredClaims].join('\n');
-        const page = await fetch(
-          { url: candidate.canonicalUrl, query: pageQuestion, maxChunks: 6 },
-          options.signal
-        );
-        const quality = assessPageQuality(pageQuestion, candidate, page);
-        pageAttempts.push({
-          url: candidate.canonicalUrl,
-          title: page.title || candidate.title,
-          domain: candidate.domain,
-          verdict: quality.verdict,
-          score: quality.score,
-          selectedChunkCount: quality.chunks.length
-        });
-
-        if (quality.verdict === 'irrelevant' || quality.verdict === 'unreadable') continue;
-        pageScores.push(quality.score);
-        evidence.push({ url: candidate.canonicalUrl, content: quality.chunks.map((chunk) => chunk.content).join('\n\n') });
-        evidenceDomains.add(candidate.domain);
-        sources.push(toRagSource(candidate.canonicalUrl, page.title || candidate.title, candidate.domain, quality));
-      } catch (error) {
-        pageAttempts.push({
-          url: candidate.canonicalUrl,
-          title: candidate.title,
-          domain: candidate.domain,
-          verdict: 'unreadable',
-          score: 0,
-          selectedChunkCount: 0,
-          error: error instanceof Error ? error.message : 'Page fetch failed'
-        });
-      }
+      await fetchCandidate(candidate, false, query);
     }
 
     const coverage = assessClaimCoverage(claims, evidence);
@@ -181,6 +208,11 @@ export async function retrieveWebEvidence(
       return buildResult('sufficient');
     }
     if (fetchedUrls.size >= pageBudget) {
+      if (pageBudget < maximumPageBudget && coverage.uncoveredClaims.length) {
+        pageBudget = maximumPageBudget;
+        stopReason = 'Expanded page budget for uncovered technical claims';
+        continue;
+      }
       stopReason = coverage.uncoveredClaims.length
         ? 'Page budget exhausted before all question claims were supported'
         : 'Page budget exhausted before evidence became sufficient';
@@ -211,6 +243,8 @@ export async function retrieveWebEvidence(
     const coverage = assessClaimCoverage(claims, evidence);
     return {
       question: input.question,
+      intent,
+      queryRoute,
       verdict,
       score: Math.max(0, ...pageScores),
       retrievalQueries: queryAttempts.map((attempt) => attempt.query),
@@ -234,6 +268,124 @@ export async function retrieveWebEvidence(
       }
     };
   }
+
+  async function fetchCandidate(
+    candidate: ScoredWebSearchResult,
+    userProvided = false,
+    searchQuery = input.question
+  ) {
+    try {
+      const currentCoverage = assessClaimCoverage(claims, evidence);
+      const uncovered = claims.filter((claim) => currentCoverage.uncoveredClaims.includes(claim.text));
+      const pageQuestion = [
+        candidate.title,
+        candidate.snippet,
+        searchQuery,
+        ...uncovered.flatMap((claim) => [claim.text, ...claim.evidenceGroups.flat()])
+      ].join('\n');
+      const page = await fetch(
+        { url: candidate.canonicalUrl, query: pageQuestion, maxChunks: 6 },
+        options.signal
+      );
+      // An explicit URL is itself the user's relevance selection. Requiring the
+      // page to repeat generic verbs such as "summarize" would reject readable
+      // source material, so direct fetches are gated by readability only.
+      const quality = userProvided
+        ? assessUserProvidedPage(page)
+        : assessPageAgainstClaims(candidate, page, searchQuery, uncovered.length ? uncovered : claims);
+      pageAttempts.push({
+        url: candidate.canonicalUrl,
+        title: page.title || candidate.title,
+        domain: candidate.domain,
+        verdict: quality.verdict,
+        score: quality.score,
+        selectedChunkCount: quality.chunks.length
+      });
+
+      if (quality.verdict === 'irrelevant' || quality.verdict === 'unreadable') return;
+      pageScores.push(quality.score);
+      evidence.push({ url: candidate.canonicalUrl, content: quality.chunks.map((chunk) => chunk.content).join('\n\n') });
+      evidenceDomains.add(candidate.domain);
+      sources.push(toRagSource(candidate.canonicalUrl, page.title || candidate.title, candidate.domain, quality));
+    } catch (error) {
+      pageAttempts.push({
+        url: candidate.canonicalUrl,
+        title: candidate.title,
+        domain: candidate.domain,
+        verdict: 'unreadable',
+        score: 0,
+        selectedChunkCount: 0,
+        error: error instanceof Error ? error.message : 'Page fetch failed'
+      });
+    }
+  }
+}
+
+function assessPageAgainstClaims(
+  candidate: ScoredWebSearchResult,
+  page: FetchPageResult,
+  searchQuery: string,
+  claims: WebClaim[]
+): ReturnType<typeof assessPageQuality> {
+  const queries = [
+    searchQuery,
+    ...claims.flatMap((claim) => [claim.text, ...claim.evidenceGroups.flat()])
+  ];
+  return queries
+    .map((query) => assessPageQuality(query, candidate, page))
+    .sort((left, right) => right.score - left.score)[0]
+    ?? { verdict: 'irrelevant', score: 0, chunks: [] };
+}
+
+function buildBroadOverviewQuery(question: string) {
+  return question
+    .replace(/\s*(?:官方文档|官方资料|official documentation|official docs)\s*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 500);
+}
+
+function mergeSearchScores(
+  broad: ScoredWebSearchResult[],
+  focused: ScoredWebSearchResult[]
+): ScoredWebSearchResult[] {
+  const broadByUrl = new Map(broad.map((result) => [result.canonicalUrl, result]));
+  return focused
+    .map((result) => {
+      const broadResult = broadByUrl.get(result.canonicalUrl);
+      if (!broadResult || broadResult.finalScore >= result.finalScore) return broadResult ?? result;
+      return result;
+    })
+    .sort((left, right) => right.finalScore - left.finalScore);
+}
+
+function assessUserProvidedPage(page: FetchPageResult): ReturnType<typeof assessPageQuality> {
+  if (page.totalChars < webQualityThresholds.minimumReadableChars || !page.content.trim()) {
+    return { verdict: 'unreadable', score: 0, chunks: [] };
+  }
+  const chunks = (page.chunks?.length
+    ? page.chunks
+    : [{ index: 0, chars: page.content.length, content: page.content }])
+    .slice(0, 4)
+    .map((chunk) => ({ index: chunk.index, content: chunk.content, lexicalScore: 1, finalScore: 1 }));
+  return { verdict: 'sufficient', score: 1, chunks };
+}
+
+function directUrlCandidate(rawUrl: string): ScoredWebSearchResult {
+  const canonicalUrl = new URL(rawUrl).toString();
+  const domain = new URL(canonicalUrl).hostname.toLowerCase();
+  return {
+    title: canonicalUrl,
+    url: canonicalUrl,
+    snippet: 'User-provided URL',
+    score: 1,
+    canonicalUrl,
+    domain,
+    providerScore: 1,
+    lexicalScore: 1,
+    completenessScore: 1,
+    finalScore: 1
+  };
 }
 
 function toRequiredClaim(need: RequiredEvidenceNeed): WebClaim {
