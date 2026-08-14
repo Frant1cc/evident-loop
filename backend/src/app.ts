@@ -18,6 +18,7 @@ import { createTasksRouter } from './routes/tasks.js';
 import type { ToolCatalog } from './tools/contracts.js';
 import { toolCatalog } from './tools/registry.js';
 import { createToolRuntime } from './tools/runtime.js';
+import { createDefaultResearchSkillRuntime } from './skills/runtime.js';
 
 export type AppDependencies = {
   llm?: LlmProvider;
@@ -31,6 +32,9 @@ export function createApp(dependencies: AppDependencies = {}) {
   const model = dependencies.model ?? configuredLlm.model;
   const tools = dependencies.tools ?? toolCatalog;
   const toolRuntime = createToolRuntime(tools);
+  const skillRuntime = createDefaultResearchSkillRuntime({
+    knownToolNames: new Set(toolRuntime.getDefinitions().map((tool) => tool.function.name))
+  });
   const llm = dependencies.llm ?? configuredLlm.llm;
 
   app.use(cors());
@@ -43,7 +47,7 @@ export function createApp(dependencies: AppDependencies = {}) {
   app.use('/api', evaluationsRouter);
   app.use('/api', createAgentRouter(toolRuntime));
   app.use('/api', artifactsRouter);
-  app.use('/api', createResearchRouter(createResearchApplication({ llm, model, toolRuntime })));
+  app.use('/api', createResearchRouter(createResearchApplication({ llm, model, toolRuntime, skillRuntime })));
   app.use('/api', createTasksRouter(createTaskApplication({ llm, model, toolRuntime })));
   app.use('/api', dbTestRouter);
 

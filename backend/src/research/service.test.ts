@@ -9,6 +9,7 @@ import { createResearchApplication } from '../modules/research/index.js';
 import { createResearchRouter } from '../routes/research.js';
 import { toolCatalog } from '../tools/registry.js';
 import { createToolRuntime } from '../tools/runtime.js';
+import { createDefaultResearchSkillRuntime } from '../skills/runtime.js';
 import {
   cancelResearchRun,
   createAndStartResearchRun
@@ -22,6 +23,9 @@ import {
 
 initDb();
 const toolRuntime = createToolRuntime(toolCatalog);
+const skillRuntime = createDefaultResearchSkillRuntime({
+  knownToolNames: new Set(toolRuntime.getDefinitions().map((tool) => tool.function.name))
+});
 const allTools = { mode: 'all' as const };
 
 test('runs research independently and only stops through explicit cancellation', async () => {
@@ -114,7 +118,7 @@ test('closing an SSE subscription does not cancel its research run', async () =>
   assert.ok(scheduled);
 
   const app = express();
-  app.use('/api', createResearchRouter(createResearchApplication({ model: 'test-model', toolRuntime })));
+  app.use('/api', createResearchRouter(createResearchApplication({ model: 'test-model', toolRuntime, skillRuntime })));
   const server = createServer(app);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();

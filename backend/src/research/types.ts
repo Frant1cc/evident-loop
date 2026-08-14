@@ -1,6 +1,7 @@
 import type { RagSource } from '../rag/types.js';
 import type { ChatMessage } from '../agent/types.js';
 import type { ToolPolicy } from '../tools/contracts.js';
+import type { ResearchSkillSnapshot } from '../skills/contracts.js';
 
 export type ResearchMessageStatus = 'streaming' | 'complete' | 'error';
 export type ResearchStepStatus = 'running' | 'complete' | 'error';
@@ -66,6 +67,8 @@ export type ResearchRunInput = {
   contextMessages: ChatMessage[];
   promptPreview: ResearchPromptPreview;
   toolPolicy: ToolPolicy;
+  /** Selected official skill. Absent means "通用研究" (general research). */
+  skill?: ResearchSkillSnapshot;
 };
 
 export type ResearchRun = {

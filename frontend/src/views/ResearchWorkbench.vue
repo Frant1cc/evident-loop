@@ -10,9 +10,11 @@ import {
   deleteResearchNote,
   getResearchConversation,
   listResearchConversations,
+  listResearchSkills,
   listResearchTools,
   startResearchMessage,
   streamResearchRun,
+  type ResearchSkillInfo,
   type ResearchStreamEvent,
   type ResearchToolInfo
 } from '../api/research';
@@ -65,6 +67,8 @@ const deleteTarget = ref<ResearchConversation>();
 const deleting = ref(false);
 const availableTools = ref<ResearchToolInfo[]>([]);
 const enabledTools = ref<Record<string, boolean>>({});
+const availableSkills = ref<ResearchSkillInfo[]>([]);
+const selectedSkillId = ref<string>();
 const previewArtifact = ref<WordArtifact>();
 let requestController: AbortController | undefined;
 let subscriptionSequence = 0;
@@ -119,7 +123,7 @@ const artifactsByMessageId = computed(() => {
 });
 
 onMounted(async () => {
-  await Promise.all([loadConversations(), loadTools()]);
+  await Promise.all([loadConversations(), loadTools(), loadSkills()]);
   if (conversations.value[0]) await selectConversation(conversations.value[0].id);
   else await createConversation();
 });
@@ -134,7 +138,32 @@ async function loadTools() {
   }
 }
 
+async function loadSkills() {
+  try {
+    const { skills } = await listResearchSkills();
+    availableSkills.value = skills;
+  } catch {
+    // Skills are optional; a failed load falls back to "通用研究" while research keeps working.
+    availableSkills.value = [];
+    selectedSkillId.value = undefined;
+  }
+}
+
+const selectedSkill = computed(() => availableSkills.value.find((skill) => skill.id === selectedSkillId.value));
+
+function selectSkill(id: string | undefined) {
+  if (loading.value) return;
+  selectedSkillId.value = id;
+  // Selecting a skill auto-enables its required tools; the toggle count updates visibly (§4.4, §12.3).
+  const skill = availableSkills.value.find((item) => item.id === id);
+  for (const name of skill?.requiredTools ?? []) {
+    if (name in enabledTools.value) enabledTools.value[name] = true;
+  }
+}
+
 function toggleTool(name: string) {
+  // Required tools of the active skill cannot be turned off while the skill is selected.
+  if (selectedSkill.value?.requiredTools.includes(name)) return;
   enabledTools.value[name] = !enabledTools.value[name];
 }
 
@@ -185,7 +214,7 @@ async function send() {
       : enabledToolNames.value.length
         ? { mode: 'selected' as const, names: enabledToolNames.value }
         : { mode: 'none' as const };
-    const started = await startResearchMessage(conversationId, content, toolPolicy);
+    const started = await startResearchMessage(conversationId, content, toolPolicy, selectedSkillId.value);
     messageRenderer.upsert(started.userMessage);
     messageRenderer.upsert(started.assistantMessage);
     promptPreview.value = started.promptPreview;
@@ -468,9 +497,12 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
         :connection-state="connectionState"
         :tools="availableTools"
         :enabled-tools="enabledTools"
+        :skills="availableSkills"
+        :selected-skill-id="selectedSkillId"
         @send="send"
         @stop="stopResearch"
         @toggle-tool="toggleTool"
+        @select-skill="selectSkill"
         @citation="selectCitation"
         @preview="previewArtifact = $event"
       />

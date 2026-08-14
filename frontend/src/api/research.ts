@@ -36,8 +36,21 @@ export type ResearchToolInfo = {
   description: string;
 };
 
+export type ResearchSkillInfo = {
+  id: string;
+  version: string;
+  label: string;
+  description: string;
+  recommendedTools: string[];
+  requiredTools: string[];
+};
+
 export function listResearchTools() {
   return request<{ tools: ResearchToolInfo[] }>('/api/research/tools');
+}
+
+export function listResearchSkills() {
+  return request<{ skills: ResearchSkillInfo[] }>('/api/research/skills');
 }
 
 export function listResearchConversations() {
@@ -77,7 +90,8 @@ export function deleteResearchNote(noteId: string) {
 export function startResearchMessage(
   conversationId: string,
   content: string,
-  toolPolicy: ToolPolicy
+  toolPolicy: ToolPolicy,
+  skillId?: string
 ) {
   return request<{
     run: ResearchRun;
@@ -86,7 +100,7 @@ export function startResearchMessage(
     promptPreview: ResearchPromptPreview;
   }>(`/api/research/conversations/${encodeURIComponent(conversationId)}/messages`, {
     method: 'POST',
-    body: { content, toolPolicy }
+    body: { content, toolPolicy, ...(skillId ? { skillId } : {}) }
   });
 }
 
