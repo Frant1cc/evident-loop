@@ -1,8 +1,6 @@
 import type { ToolCatalog } from './contracts.js';
-import { toolCatalog } from './registry.js';
+import { builtInToolRuntime, createToolRuntime } from './runtime.js';
 
-export function getToolDefinitions(catalog: ToolCatalog = toolCatalog) {
-  return [...catalog.values()]
-    .filter((tool) => tool.exposedToModel !== false)
-    .map((tool) => tool.definition);
+export function getToolDefinitions(catalog?: ToolCatalog) {
+  return (catalog ? createToolRuntime(catalog) : builtInToolRuntime).getDefinitions();
 }

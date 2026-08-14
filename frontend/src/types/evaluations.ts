@@ -218,11 +218,13 @@ export type WebEvaluationCaseResult = {
   budgetExhausted?: boolean;
   officialSourceRate?: number;
   pageExtractionSuccessRate?: number;
+  subjectConsistencyRate?: number;
+  subjectMismatchUrls?: string[];
   failureReason?: WebEvaluationFailureReason;
   uncoveredNeedLabels?: string[];
 };
 
-export type WebEvaluationFailureReason = 'passed' | 'false_sufficient' | 'budget_exhausted' | 'no_sources' | 'official_source_missing' | 'evidence_gap' | 'low_rank';
+export type WebEvaluationFailureReason = 'passed' | 'false_sufficient' | 'subject_mismatch' | 'budget_exhausted' | 'no_sources' | 'official_source_missing' | 'evidence_gap' | 'low_rank';
 
 export type WebEvaluationMetrics = {
   caseCount: number;
@@ -245,6 +247,8 @@ export type WebEvaluationMetrics = {
   officialSourceRate?: number;
   pageExtractionSuccessRate?: number;
   p95QueryCount?: number;
+  subjectConsistencyRate?: number;
+  subjectMismatchCount?: number;
   failureReasons?: Array<{ code: Exclude<WebEvaluationFailureReason, 'passed'>; count: number; caseIds: string[] }>;
 };
 

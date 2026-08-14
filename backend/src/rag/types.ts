@@ -1,8 +1,13 @@
+import type { KnowledgeFormat, SourceLocator } from '../knowledge/types.js';
+
 export type RagDocument = {
   file: string;
   title: string;
   content: string;
   lineCount: number;
+  format?: KnowledgeFormat;
+  parserName?: string;
+  parserVersion?: string;
 };
 
 export type ChunkContentType = 'text' | 'table' | 'code' | 'mixed';
@@ -26,6 +31,10 @@ export type DocumentChunk = {
   nextChunkId?: string;
   tokenCount?: number;
   contentType?: ChunkContentType;
+  format?: KnowledgeFormat;
+  locator?: SourceLocator;
+  sourceBlockIds?: string[];
+  parserVersion?: string;
 };
 
 export type RagSource = DocumentChunk & {

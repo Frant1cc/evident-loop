@@ -1,3 +1,8 @@
+import { createHash } from 'node:crypto';
+
+import { isPdfPageHeading, mergeLocators } from '../knowledge/locator.js';
+import type { KnowledgeBlock } from '../knowledge/types.js';
+import type { KnowledgeDocument } from './knowledgeFiles.js';
 import type { ChunkContentType, DocumentChunk, RagDocument } from './types.js';
 
 export const chunkingConfig = {
@@ -5,6 +10,9 @@ export const chunkingConfig = {
   targetMinTokens: 200,
   overlapTokens: 60
 } as const;
+
+export const MARKDOWN_CHUNKER_VERSION = 'markdown-v1';
+export const STRUCTURED_CHUNKER_VERSION = 'structured-v1';
 
 type BlockKind = 'text' | 'table' | 'code';
 
@@ -46,8 +54,25 @@ export function chunkMarkdownDocument(document: RagDocument): DocumentChunk[] {
     ...chunk,
     chunkIndex: index,
     previousChunkId: drafts[index - 1]?.id,
-    nextChunkId: drafts[index + 1]?.id
+    nextChunkId: drafts[index + 1]?.id,
+    format: document.format ?? 'md',
+    parserVersion: document.parserVersion,
+    locator: chunk.locator ?? {
+      normalizedLineStart: chunk.startLine,
+      normalizedLineEnd: chunk.endLine
+    }
   }));
+}
+
+export function chunkKnowledgeDocument(document: KnowledgeDocument | RagDocument): DocumentChunk[] {
+  if (isStructuredDocument(document)) {
+    return chunkStructuredDocument(document);
+  }
+  return chunkMarkdownDocument(document);
+}
+
+export function getChunkerVersion(document: { format?: string }) {
+  return document.format && document.format !== 'md' ? STRUCTURED_CHUNKER_VERSION : MARKDOWN_CHUNKER_VERSION;
 }
 
 /** Approximation used for chunk budgets and diagnostics; avoids coupling indexing to a model tokenizer. */
@@ -386,4 +411,220 @@ function contentType(kinds: Set<BlockKind>): ChunkContentType {
   if (kinds.has('code')) return 'code';
   if (kinds.has('table')) return 'table';
   return 'text';
+}
+
+function isStructuredDocument(document: KnowledgeDocument | RagDocument): document is KnowledgeDocument {
+  return 'blocks' in document
+    && Array.isArray(document.blocks)
+    && document.blocks.length > 0
+    && document.format !== undefined
+    && document.format !== 'md';
+}
+
+function chunkStructuredDocument(document: KnowledgeDocument): DocumentChunk[] {
+  const bodyBlocks = document.blocks.filter((block) => block.type !== 'heading' || block.headingPath.length > 0);
+  const sections = groupStructuredSections(bodyBlocks);
+  const drafts = sections.flatMap((section) => chunkStructuredSection(document, section));
+
+  return drafts.map((chunk, index) => ({
+    ...chunk,
+    chunkIndex: index,
+    previousChunkId: drafts[index - 1]?.id,
+    nextChunkId: drafts[index + 1]?.id
+  }));
+}
+
+type StructuredSection = {
+  heading?: string;
+  headingPath: string[];
+  parentPath: string[];
+  pathOccurrence: number;
+  blocks: KnowledgeBlock[];
+};
+
+function groupStructuredSections(blocks: KnowledgeBlock[]): StructuredSection[] {
+  const sections: StructuredSection[] = [];
+  const occurrences = new Map<string, number>();
+  let current: KnowledgeBlock[] = [];
+  let currentPath: string[] = [];
+
+  const close = () => {
+    if (!current.length) return;
+    const headingPath = currentPath.filter((item) => !isPdfPageHeading(item));
+    const pathKey = headingPath.join('\u001f') || '__intro__';
+    const pathOccurrence = (occurrences.get(pathKey) ?? 0) + 1;
+    occurrences.set(pathKey, pathOccurrence);
+    sections.push({
+      heading: headingPath[headingPath.length - 1],
+      headingPath,
+      parentPath: headingPath.slice(0, -1),
+      pathOccurrence,
+      blocks: current
+    });
+    current = [];
+  };
+
+  for (const block of blocks) {
+    const path = block.headingPath.filter((item) => !isPdfPageHeading(item));
+    if (current.length && path.join('\u001f') !== currentPath.join('\u001f')) close();
+    currentPath = path;
+    if (block.type === 'heading') continue;
+    current.push(block);
+  }
+  close();
+  return sections;
+}
+
+function chunkStructuredSection(document: KnowledgeDocument, section: StructuredSection): ChunkDraft[] {
+  const packed = packStructuredBlocks(section.blocks);
+  const parentId = section.parentPath.length
+    ? `${document.file}:${stablePathKey(section.parentPath)}`
+    : undefined;
+
+  return packed.map((group, index) => {
+    const content = group.map((block) => block.text).join('\n\n').trim();
+    const locator = mergeLocators(group.map((block) => block.locator));
+    const kinds = new Set(group.map((block) => structuredKind(block.type)));
+    const sourceBlockIds = group.map((block) => block.id);
+    return {
+      id: structuredChunkId({
+        documentPath: document.file,
+        parserVersion: document.parserVersion,
+        headingPath: section.headingPath,
+        sourceBlockIds,
+        sectionOccurrence: section.pathOccurrence,
+        partIndex: index
+      }),
+      file: document.file,
+      title: document.title,
+      heading: section.heading,
+      headingPath: section.headingPath,
+      content,
+      startLine: locator?.normalizedLineStart ?? 1,
+      endLine: locator?.normalizedLineEnd ?? 1,
+      partIndex: index,
+      parentId,
+      tokenCount: estimateTokens(content),
+      contentType: contentType(kinds),
+      format: document.format,
+      parserVersion: document.parserVersion,
+      locator,
+      sourceBlockIds
+    };
+  });
+}
+
+function packStructuredBlocks(blocks: KnowledgeBlock[]): KnowledgeBlock[][] {
+  const expanded = blocks.flatMap((block) => splitStructuredBlock(block));
+  const groups: KnowledgeBlock[][] = [];
+  let current: KnowledgeBlock[] = [];
+  let currentTokens = 0;
+
+  for (const block of expanded) {
+    const tokens = estimateTokens(block.text);
+    const atomic = block.type === 'table' || block.type === 'code';
+    if (atomic && current.length) {
+      groups.push(current);
+      current = [];
+      currentTokens = 0;
+    }
+    if (current.length && currentTokens + tokens > chunkingConfig.targetMaxTokens) {
+      groups.push(current);
+      current = [];
+      currentTokens = 0;
+    }
+    current.push(block);
+    currentTokens += tokens;
+    if (atomic) {
+      groups.push(current);
+      current = [];
+      currentTokens = 0;
+    }
+  }
+  if (current.length) groups.push(current);
+  return groups;
+}
+
+function splitStructuredBlock(block: KnowledgeBlock): KnowledgeBlock[] {
+  if (block.type !== 'table') {
+    if (estimateTokens(block.text) <= chunkingConfig.targetMaxTokens) return [block];
+    return splitOversizedText(block);
+  }
+
+  if (estimateTokens(block.text) <= chunkingConfig.targetMaxTokens) return [block];
+  return splitTableBlock(block);
+}
+
+function splitOversizedText(block: KnowledgeBlock): KnowledgeBlock[] {
+  const units = block.text.match(/[^。！？.!?；;]+[。！？.!?；;]?/gu) ?? [block.text];
+  const parts: KnowledgeBlock[] = [];
+  let current = '';
+  let part = 0;
+  const flush = () => {
+    if (!current.trim()) return;
+    parts.push({
+      ...block,
+      id: `${block.id}:part-${part}`,
+      text: current.trim(),
+      order: block.order + part / 1000
+    });
+    part += 1;
+    current = '';
+  };
+
+  for (const unit of units) {
+    if (current && estimateTokens(current + unit) > chunkingConfig.targetMaxTokens) flush();
+    current += unit;
+  }
+  flush();
+  return parts.length ? parts : [block];
+}
+
+function splitTableBlock(block: KnowledgeBlock): KnowledgeBlock[] {
+  const lines = block.text.split('\n').filter((line) => line.trim());
+  if (lines.length < 4) return [block];
+  const header = lines.slice(0, 2);
+  const rows = lines.slice(2);
+  const parts: KnowledgeBlock[] = [];
+  let currentRows: string[] = [];
+  let part = 0;
+
+  const flush = () => {
+    if (!currentRows.length) return;
+    const text = [...header, ...currentRows].join('\n');
+    parts.push({
+      ...block,
+      id: `${block.id}:rows-${part}`,
+      text,
+      order: block.order + part / 1000
+    });
+    part += 1;
+    currentRows = [];
+  };
+
+  for (const row of rows) {
+    const candidate = [...header, ...currentRows, row].join('\n');
+    if (currentRows.length && estimateTokens(candidate) > chunkingConfig.targetMaxTokens) flush();
+    currentRows.push(row);
+  }
+  flush();
+  return parts.length ? parts : [block];
+}
+
+function structuredKind(type: KnowledgeBlock['type']): BlockKind {
+  if (type === 'table') return 'table';
+  if (type === 'code') return 'code';
+  return 'text';
+}
+
+function structuredChunkId(input: {
+  documentPath: string;
+  parserVersion: string;
+  headingPath: string[];
+  sourceBlockIds: string[];
+  sectionOccurrence: number;
+  partIndex: number;
+}) {
+  const digest = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+  return `${input.documentPath}:${digest.slice(0, 24)}`;
 }

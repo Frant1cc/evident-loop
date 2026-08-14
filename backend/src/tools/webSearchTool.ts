@@ -16,6 +16,10 @@ export type WebSearchResult = {
   url: string;
   snippet: string;
   score?: number;
+  /** Provider that discovered this result. */
+  provider?: string;
+  /** Optional provider-supplied page content that can avoid a second fetch. */
+  content?: string;
 };
 
 type TavilyResponse = {

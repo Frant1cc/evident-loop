@@ -1,18 +1,29 @@
-import { createHash } from 'node:crypto';
+import { extname } from 'node:path';
 
 import { Router, type Response } from 'express';
+import multer from 'multer';
 
-import { chunkMarkdownDocument } from '../rag/chunker.js';
+import { getKnowledgeMaxUploadBytes } from '../knowledge/config.js';
+import { KnowledgeImportError } from '../knowledge/errors.js';
+import {
+  assertDocumentEditable,
+  deleteImportedDocument,
+  importKnowledgeUpload,
+  reparseKnowledgeDocument
+} from '../knowledge/importService.js';
+import { originalFileStore } from '../knowledge/originalFileStore.js';
+import { chunkKnowledgeDocument } from '../rag/chunker.js';
 import { getEmbeddingModel } from '../rag/embeddingClient.js';
 import {
-  deleteKnowledgeDocument,
   knowledgeDocumentExists,
   listKnowledgeDocuments,
   readKnowledgeDocument,
   resolveKnowledgePath,
-  writeKnowledgeDocument
+  resolveManualMarkdownPath,
+  writeKnowledgeDocument,
+  type KnowledgeDocument
 } from '../rag/knowledgeFiles.js';
-import { removeKnowledgeDocumentVectors, syncRagIndex, vectorizeKnowledgeDocument } from '../rag/sync.js';
+import { getIndexFingerprint, syncRagIndex, vectorizeKnowledgeDocument } from '../rag/sync.js';
 import { listStoredChunks, vectorCollectionExists } from '../rag/vectorStore.js';
 import { failure, success } from '../response.js';
 
@@ -33,9 +44,9 @@ knowledgeRouter.get('/knowledge/documents', async (_req, res) => {
     }
 
     const summaries = documents.map((document) => {
-      const chunks = chunkMarkdownDocument(document);
+      const chunks = chunkKnowledgeDocument(document);
       const indexedChunks = storedByFile.get(document.file) ?? [];
-      const documentHash = createHash('sha256').update(document.content).digest('hex');
+      const documentHash = getIndexFingerprint(document);
       const hasMatchingIndex = indexedChunks.length === chunks.length && indexedChunks.every((storedChunk) =>
         storedChunk.payload.documentHash === documentHash && storedChunk.payload.embeddingModel === getEmbeddingModel()
       );
@@ -43,18 +54,13 @@ knowledgeRouter.get('/knowledge/documents', async (_req, res) => {
         !latest || chunk.payload.indexedAt > latest ? chunk.payload.indexedAt : latest,
       undefined);
 
-      return {
-        path: document.file,
-        title: document.title,
-        lineCount: document.lineCount,
-        sizeBytes: document.sizeBytes,
-        updatedAt: document.updatedAt,
+      return toDocumentSummary(document, {
         chunkCount: chunks.length,
         indexedChunkCount: indexedChunks.length,
         indexStatus: !indexAvailable ? 'unavailable' : hasMatchingIndex ? 'indexed' : indexedChunks.length ? 'outdated' : 'pending',
         indexedAt: latestIndexedAt,
         embeddingModel: indexedChunks[0]?.payload.embeddingModel
-      };
+      });
     });
 
     res.json(success({
@@ -74,18 +80,93 @@ knowledgeRouter.get('/knowledge/documents', async (_req, res) => {
 knowledgeRouter.get('/knowledge/documents/content', (req, res) => {
   try {
     const path = parsePath(req.query.path);
-    const document = readKnowledgeDocument(path);
-
-    res.json(success({
-      path: document.file,
-      title: document.title,
-      content: document.content,
-      lineCount: document.lineCount,
-      sizeBytes: document.sizeBytes,
-      updatedAt: document.updatedAt
-    }));
+    res.json(success(toDocumentDetail(readKnowledgeDocument(path))));
   } catch (error) {
     respondDocumentError(res, error);
+  }
+});
+
+knowledgeRouter.get('/knowledge/documents/original', async (req, res) => {
+  try {
+    const path = parsePath(req.query.path);
+    const document = readKnowledgeDocument(path);
+    if (!document.storageKey || document.sourceType !== 'imported') {
+      res.status(404).json(failure('Original file is not available for this document'));
+      return;
+    }
+
+    const bytes = await originalFileStore.read(document.storageKey);
+    const filename = document.originalName ?? path;
+    res.setHeader('Content-Type', document.mimeType || contentTypeForPath(path));
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    res.send(bytes);
+  } catch (error) {
+    respondDocumentError(res, error);
+  }
+});
+
+knowledgeRouter.post('/knowledge/documents/upload', (req, res) => {
+  const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: getKnowledgeMaxUploadBytes(), files: 1 }
+  }).single('file');
+
+  upload(req, res, async (error) => {
+    try {
+      if (error) {
+        if (isMulterLimitError(error)) {
+          res.status(413).json(failure(`文件不能超过 ${Math.round(getKnowledgeMaxUploadBytes() / 1_000_000)} MB。`));
+          return;
+        }
+        throw error;
+      }
+      if (!req.file) {
+        res.status(400).json(failure('file is required'));
+        return;
+      }
+
+      const result = await importKnowledgeUpload({
+        upload: {
+          originalName: req.file.originalname,
+          mimeType: req.file.mimetype,
+          size: req.file.size,
+          buffer: req.file.buffer
+        },
+        path: typeof req.body?.path === 'string' ? req.body.path : undefined,
+        autoIndex: parseAutoIndex(req.body?.autoIndex)
+      });
+
+      const message = result.indexStatus === 'indexed'
+        ? 'Document imported'
+        : 'Document imported; indexing is pending';
+      res.status(201).json(success({
+        document: toDocumentDetail(result.document),
+        indexStatus: result.indexStatus,
+        ...(result.indexResult ? { indexResult: result.indexResult } : {}),
+        ...(result.indexError ? { indexError: result.indexError } : {})
+      }, message));
+    } catch (caught) {
+      respondImportError(res, caught);
+    }
+  });
+});
+
+knowledgeRouter.post('/knowledge/documents/reparse', async (req, res) => {
+  try {
+    const path = parsePath(req.body?.path);
+    const autoIndex = parseAutoIndex(req.body?.autoIndex);
+    const result = await reparseKnowledgeDocument(path, autoIndex);
+    const message = result.indexStatus === 'indexed'
+      ? 'Document reparsed'
+      : 'Document reparsed; indexing is pending';
+    res.json(success({
+      document: toDocumentDetail(result.document),
+      indexStatus: result.indexStatus,
+      ...(result.indexResult ? { indexResult: result.indexResult } : {}),
+      ...(result.indexError ? { indexError: result.indexError } : {})
+    }, message));
+  } catch (error) {
+    respondImportError(res, error);
   }
 });
 
@@ -99,9 +180,8 @@ knowledgeRouter.post('/knowledge/documents', async (req, res) => {
     }
 
     const document = writeKnowledgeDocument(path, content);
-    const indexResult = autoIndex ? await vectorizeKnowledgeDocument(document.file) : undefined;
-
-    res.status(201).json(success({ document: toDocumentDetail(document), indexResult }, 'Document created'));
+    const indexed = await indexIfRequested(document.file, autoIndex);
+    res.status(201).json(success({ document: toDocumentDetail(document), ...indexed }, 'Document created'));
   } catch (error) {
     respondMutationError(res, error, 'Document was saved but indexing failed');
   }
@@ -116,12 +196,12 @@ knowledgeRouter.put('/knowledge/documents', async (req, res) => {
       return;
     }
 
+    assertDocumentEditable(path);
     const document = writeKnowledgeDocument(path, content);
-    const indexResult = autoIndex ? await vectorizeKnowledgeDocument(document.file) : undefined;
-
-    res.json(success({ document: toDocumentDetail(document), indexResult }, 'Document updated'));
+    const indexed = await indexIfRequested(document.file, autoIndex);
+    res.json(success({ document: toDocumentDetail(document), ...indexed }, 'Document updated'));
   } catch (error) {
-    respondMutationError(res, error, 'Document was saved but indexing failed');
+    respondImportError(res, error, 'Document was saved but indexing failed');
   }
 });
 
@@ -135,9 +215,7 @@ knowledgeRouter.delete('/knowledge/documents', async (req, res) => {
       return;
     }
 
-    deleteKnowledgeDocument(path);
-    if (autoIndex) await removeKnowledgeDocumentVectors(path);
-
+    await deleteImportedDocument(path, autoIndex);
     res.json(success({ path, vectorsDeleted: autoIndex }, 'Document deleted'));
   } catch (error) {
     respondMutationError(res, error, 'Document was deleted but vector cleanup failed');
@@ -148,7 +226,7 @@ knowledgeRouter.post('/knowledge/documents/chunk', (req, res) => {
   try {
     const path = parsePath(req.body?.path);
     const document = readKnowledgeDocument(path);
-    const chunks = chunkMarkdownDocument(document);
+    const chunks = chunkKnowledgeDocument(document);
 
     res.json(success({
       path: document.file,
@@ -166,7 +244,9 @@ knowledgeRouter.post('/knowledge/documents/chunk', (req, res) => {
         previousChunkId: chunk.previousChunkId,
         nextChunkId: chunk.nextChunkId,
         tokenCount: chunk.tokenCount,
-        contentType: chunk.contentType
+        contentType: chunk.contentType,
+        format: chunk.format,
+        locator: chunk.locator
       }))
     }));
   } catch (error) {
@@ -203,7 +283,7 @@ function parseDocumentBody(body: unknown) {
   }
 
   const { path, content, autoIndex } = body as { path?: unknown; content?: unknown; autoIndex?: unknown };
-  const parsedPath = parsePath(path);
+  const parsedPath = resolveManualMarkdownPath(parseRawPath(path));
 
   if (typeof content !== 'string' || !content.trim()) {
     throw new Error('content must be a non-empty string');
@@ -217,13 +297,16 @@ function parseDocumentBody(body: unknown) {
 }
 
 function parsePath(value: unknown) {
-  if (typeof value !== 'string' || !value.trim()) {
-    throw new Error('path must be a non-empty Markdown path');
-  }
-
-  const path = value.trim();
+  const path = parseRawPath(value);
   resolveKnowledgePath(path);
   return path;
+}
+
+function parseRawPath(value: unknown) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error('path must be a non-empty document path');
+  }
+  return value.trim();
 }
 
 function parseAutoIndex(value: unknown) {
@@ -245,20 +328,83 @@ async function getStoredChunks() {
   }
 }
 
-function toDocumentDetail(document: ReturnType<typeof readKnowledgeDocument>) {
+async function indexIfRequested(path: string, autoIndex: boolean) {
+  if (!autoIndex) return {};
+  try {
+    return { indexResult: await vectorizeKnowledgeDocument(path), indexStatus: 'indexed' as const };
+  } catch (error) {
+    return {
+      indexStatus: 'pending' as const,
+      indexError: error instanceof Error ? error.message : 'Indexing failed'
+    };
+  }
+}
+
+function toDocumentSummary(document: KnowledgeDocument, index: {
+  chunkCount: number;
+  indexedChunkCount: number;
+  indexStatus: 'indexed' | 'pending' | 'outdated' | 'unavailable';
+  indexedAt?: string;
+  embeddingModel?: string;
+}) {
+  return {
+    path: document.file,
+    title: document.title,
+    lineCount: document.lineCount,
+    sizeBytes: document.sizeBytes,
+    updatedAt: document.updatedAt,
+    format: document.format,
+    sourceType: document.sourceType,
+    originalName: document.originalName,
+    originalSize: document.originalSize,
+    pageCount: document.metadata.pageCount,
+    editable: document.editable,
+    parseWarnings: document.parseWarnings,
+    ...index
+  };
+}
+
+function toDocumentDetail(document: KnowledgeDocument) {
   return {
     path: document.file,
     title: document.title,
     content: document.content,
     lineCount: document.lineCount,
     sizeBytes: document.sizeBytes,
-    updatedAt: document.updatedAt
+    updatedAt: document.updatedAt,
+    format: document.format,
+    sourceType: document.sourceType,
+    originalName: document.originalName,
+    originalSize: document.originalSize,
+    pageCount: document.metadata.pageCount,
+    editable: document.editable,
+    parseWarnings: document.parseWarnings
   };
 }
 
+function contentTypeForPath(path: string) {
+  const extension = extname(path).toLowerCase();
+  if (extension === '.pdf') return 'application/pdf';
+  if (extension === '.docx') return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  if (extension === '.txt') return 'text/plain; charset=utf-8';
+  return 'text/markdown; charset=utf-8';
+}
+
 function respondDocumentError(res: Response, error: unknown) {
+  if (error instanceof KnowledgeImportError) {
+    res.status(error.status).json(failure(error.message));
+    return;
+  }
   const message = getErrorMessage(error, 'Knowledge document request failed');
   res.status(message.startsWith('Document not found:') ? 404 : 400).json(failure(message));
+}
+
+function respondImportError(res: Response, error: unknown, upstreamMessage?: string) {
+  if (error instanceof KnowledgeImportError) {
+    res.status(error.status).json(failure(error.message));
+    return;
+  }
+  respondMutationError(res, error, upstreamMessage ?? 'Knowledge import failed');
 }
 
 function respondMutationError(res: Response, error: unknown, upstreamMessage: string) {
@@ -276,5 +422,9 @@ function getErrorMessage(error: unknown, fallback: string) {
 }
 
 function isClientError(message: string) {
-  return message.includes('path') || message.includes('Markdown') || message.includes('content') || message.includes('Request body');
+  return message.includes('path') || message.includes('Markdown') || message.includes('content') || message.includes('Request body') || message.includes('document');
+}
+
+function isMulterLimitError(error: unknown) {
+  return Boolean(error && typeof error === 'object' && 'code' in error && (error as { code: string }).code === 'LIMIT_FILE_SIZE');
 }

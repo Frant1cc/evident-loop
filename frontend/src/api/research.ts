@@ -10,6 +10,7 @@ import type {
 } from '../types/research';
 import { consumeResumableSse } from './resumableSse';
 import type { StreamConnectionState } from '../types/streaming';
+import type { ToolPolicy } from '../types/tasks';
 
 type ApiResponse<T> = {
   code: 0 | 1;
@@ -35,8 +36,21 @@ export type ResearchToolInfo = {
   description: string;
 };
 
+export type ResearchSkillInfo = {
+  id: string;
+  version: string;
+  label: string;
+  description: string;
+  recommendedTools: string[];
+  requiredTools: string[];
+};
+
 export function listResearchTools() {
   return request<{ tools: ResearchToolInfo[] }>('/api/research/tools');
+}
+
+export function listResearchSkills() {
+  return request<{ skills: ResearchSkillInfo[] }>('/api/research/skills');
 }
 
 export function listResearchConversations() {
@@ -76,7 +90,8 @@ export function deleteResearchNote(noteId: string) {
 export function startResearchMessage(
   conversationId: string,
   content: string,
-  allowedTools?: string[]
+  toolPolicy: ToolPolicy,
+  skillId?: string
 ) {
   return request<{
     run: ResearchRun;
@@ -85,7 +100,7 @@ export function startResearchMessage(
     promptPreview: ResearchPromptPreview;
   }>(`/api/research/conversations/${encodeURIComponent(conversationId)}/messages`, {
     method: 'POST',
-    body: { content, ...(allowedTools ? { allowedTools } : {}) }
+    body: { content, toolPolicy, ...(skillId ? { skillId } : {}) }
   });
 }
 

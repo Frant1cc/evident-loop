@@ -4,7 +4,7 @@ import { PhCircleNotch } from '@phosphor-icons/vue';
 import ResearchHeader from './ResearchHeader.vue';
 import ResearchMessages from './ResearchMessages.vue';
 import ResearchComposer from './ResearchComposer.vue';
-import type { ResearchToolInfo } from '../../api/research';
+import type { ResearchSkillInfo, ResearchToolInfo } from '../../api/research';
 import type { WordArtifact } from '../../types/artifacts';
 import type { ResearchMessage } from '../../types/research';
 import type { StreamConnectionState } from '../../types/streaming';
@@ -21,6 +21,8 @@ defineProps<{
   connectionState: StreamConnectionState;
   tools: ResearchToolInfo[];
   enabledTools: Record<string, boolean>;
+  skills: ResearchSkillInfo[];
+  selectedSkillId?: string;
 }>();
 
 const input = defineModel<string>('input', { required: true });
@@ -29,6 +31,7 @@ const emit = defineEmits<{
   send: [];
   stop: [];
   toggleTool: [name: string];
+  selectSkill: [id: string | undefined];
   citation: [key: string];
   preview: [artifact: WordArtifact];
 }>();
@@ -69,9 +72,12 @@ const emit = defineEmits<{
           :stopping="stopping"
           :tools="tools"
           :enabled-tools="enabledTools"
+          :skills="skills"
+          :selected-skill-id="selectedSkillId"
           @send="emit('send')"
           @stop="emit('stop')"
           @toggle-tool="emit('toggleTool', $event)"
+          @select-skill="emit('selectSkill', $event)"
         />
       </div>
     </footer>

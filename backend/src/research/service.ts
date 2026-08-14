@@ -3,6 +3,10 @@ import type { StreamEventEnvelope } from '@evident-loop/stream-protocol';
 import { DEFAULT_MAX_TOOL_ROUNDS } from '../agent/config.js';
 import { runAgentLoop, type AgentLoopEvent, type RunAgentLoopOptions } from '../agent/agentLoop.js';
 import type { LlmProvider } from '../llm/contracts.js';
+import type { ToolPolicy, ToolRuntime } from '../tools/contracts.js';
+import { normalizeToolPolicy } from '../tools/policy.js';
+import type { OfficialResearchSkill, ResearchSkillSnapshot } from '../skills/contracts.js';
+import type { ResearchSkillRuntime } from '../skills/runtime.js';
 import { appendStreamEvent } from '../streaming/eventStore.js';
 import { publishStreamEvent, subscribeToStream } from '../streaming/eventHub.js';
 import { isExplicitWordDocumentRequest } from '../tools/wordDocumentTool.js';
@@ -64,6 +68,15 @@ Rules:
 - If a tool fails, explain the failure based on the tool error instead of pretending it succeeded.
 - Stop calling tools once you have enough information to answer.`;
 
+/**
+ * Append a trusted skill block to the base prompt. The base prompt's evidence,
+ * citation, tool-protocol and failure rules are never replaced (§4.2).
+ */
+export function composeResearchSystemPrompt(basePrompt: string, skill?: OfficialResearchSkill) {
+  if (!skill) return basePrompt;
+  return `${basePrompt}\n\n<official_research_skill id="${skill.id}" version="${skill.version}">\n${skill.instructions}\n</official_research_skill>`;
+}
+
 export type ResearchRunEvent =
   | { type: 'research_step'; step: ResearchStep }
   | { type: 'tool_call_started'; step: ResearchStep }
@@ -86,7 +99,10 @@ type ResearchAgentRunner = (options: RunAgentLoopOptions) => ReturnType<typeof r
 export function createAndStartResearchRun(options: {
   conversationId: string;
   content: string;
-  allowedToolNames?: string[];
+  toolPolicy: ToolPolicy;
+  toolRuntime: ToolRuntime;
+  skill?: ResearchSkillSnapshot;
+  skillRuntime?: ResearchSkillRuntime;
   apiKey?: string;
   llm?: LlmProvider;
   model?: string;
@@ -131,7 +147,8 @@ export function createAndStartResearchRun(options: {
       content: options.content,
       contextMessages,
       promptPreview,
-      allowedToolNames: options.allowedToolNames
+      toolPolicy: options.toolPolicy,
+      ...(options.skill ? { skill: options.skill } : {})
     }
   });
 
@@ -142,7 +159,9 @@ export function createAndStartResearchRun(options: {
       apiKey: options.apiKey,
       llm: options.llm,
       model: options.model ?? DEFAULT_MODEL,
-      runAgent: options.runAgent ?? runAgentLoop
+      runAgent: options.runAgent ?? runAgentLoop,
+      toolRuntime: options.toolRuntime,
+      skillRuntime: options.skillRuntime
     });
   });
 
@@ -212,10 +231,21 @@ async function executePersistedResearchRun(options: {
   llm?: LlmProvider;
   model: string;
   runAgent: ResearchAgentRunner;
+  toolRuntime: ToolRuntime;
+  skillRuntime?: ResearchSkillRuntime;
 }) {
   let run = getResearchRun(options.runId);
   const runInput = getResearchRunInput(options.runId);
   if (!run || !runInput || run.status !== 'queued') return;
+  const storedInput = runInput as typeof runInput & { allowedToolNames?: string[] };
+  const toolPolicy = normalizeToolPolicy(storedInput.toolPolicy ?? storedInput.allowedToolNames);
+
+  // Resolve the exact skill version and verify its digest. A missing version or
+  // digest mismatch fails loudly rather than silently using the latest (§6.2).
+  const resolvedSkill = runInput.skill && options.skillRuntime
+    ? options.skillRuntime.resolveSnapshot(runInput.skill)
+    : undefined;
+  const systemPrompt = composeResearchSystemPrompt(AGENT_SYSTEM_PROMPT, resolvedSkill?.definition);
 
   const abortController = new AbortController();
   activeControllers.set(run.id, abortController);
@@ -239,9 +269,10 @@ async function executePersistedResearchRun(options: {
       message: runInput.content,
       contextMessages: runInput.contextMessages,
       model: options.model,
-      systemPrompt: AGENT_SYSTEM_PROMPT,
+      systemPrompt,
       maxToolRounds: DEFAULT_MAX_TOOL_ROUNDS,
-      allowedToolNames: runInput.allowedToolNames,
+      toolPolicy,
+      toolRuntime: options.toolRuntime,
       requiredToolName: isExplicitWordDocumentRequest(runInput.content)
         ? 'generate_word_document'
         : undefined,
@@ -249,6 +280,7 @@ async function executePersistedResearchRun(options: {
       onEvent: async (event) => handleAgentEvent({
         event,
         run: run!,
+        skillSnapshot: resolvedSkill?.snapshot,
         activeToolSteps,
         researchSources,
         sourceIds,
@@ -308,6 +340,7 @@ async function executePersistedResearchRun(options: {
 async function handleAgentEvent(options: {
   event: AgentLoopEvent;
   run: ResearchRun;
+  skillSnapshot?: ResearchSkillSnapshot;
   activeToolSteps: Map<string, ResearchStep>;
   researchSources: ResearchSource[];
   sourceIds: Set<string>;
@@ -325,7 +358,11 @@ async function handleAgentEvent(options: {
       type: 'llm',
       status: 'complete',
       title: event.title,
-      input: { model: event.model, tools: event.tools }
+      input: {
+        model: event.model,
+        tools: event.tools,
+        ...(options.skillSnapshot ? { skill: options.skillSnapshot } : {})
+      }
     });
     emit(run.id, { type: 'research_step', step });
     return;

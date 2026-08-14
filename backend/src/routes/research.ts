@@ -3,7 +3,12 @@ import { Router } from 'express';
 import { isTerminalEventType, SNAPSHOT_EVENT_TYPE, type StreamEventEnvelope } from '@evident-loop/stream-protocol';
 
 import { LlmNotConfiguredError } from '../llm/errors.js';
-import type { ResearchApplication, ResearchRunStatus } from '../modules/research/index.js';
+import {
+  ResearchSkillToolError,
+  UnknownResearchSkillError,
+  type ResearchApplication,
+  type ResearchRunStatus
+} from '../modules/research/index.js';
 import { failure, success } from '../response.js';
 import { createSseStream } from '../sse.js';
 
@@ -13,6 +18,10 @@ export function createResearchRouter(research: ResearchApplication) {
 
   router.get('/research/tools', (_req, res) => {
     res.json(success({ tools: research.listTools() }));
+  });
+
+  router.get('/research/skills', (_req, res) => {
+    res.json(success({ skills: research.listSkills() }));
   });
 
   router.get('/research/conversations', (_req, res) => {
@@ -86,18 +95,26 @@ export function createResearchRouter(research: ResearchApplication) {
       res.status(400).json(failure('content is required'));
       return;
     }
+    const skillId = req.body?.skillId === undefined || req.body?.skillId === null
+      ? undefined
+      : String(req.body.skillId);
     try {
       const started = research.startMessage(
         req.params.conversationId,
         content,
-        research.normalizeAllowedTools(req.body?.allowedTools)
+        research.normalizeToolPolicy(req.body?.toolPolicy ?? req.body?.allowedTools),
+        skillId
       );
       res.status(202).json(success(started, 'Research task queued'));
     } catch (error) {
       const message = getErrorMessage(error);
       const status = error instanceof LlmNotConfiguredError
         ? 500
-        : message === 'Research conversation not found' ? 404 : 409;
+        : error instanceof UnknownResearchSkillError
+          ? 400
+          : error instanceof ResearchSkillToolError
+            ? 409
+            : message === 'Research conversation not found' ? 404 : 409;
       res.status(status).json(failure(message));
     }
   });

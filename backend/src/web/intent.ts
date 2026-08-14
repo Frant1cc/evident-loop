@@ -117,7 +117,9 @@ export function detectRetrievalIntent(question: string): RetrievalIntent {
       : signal(false);
 
   const capabilities = new Set<RetrievalCapability>();
-  if (urls.length) capabilities.add('web_fetch');
+  // Every evidence path eventually needs readable page content, whether the
+  // URL came from the user or from a search provider.
+  capabilities.add('web_fetch');
   if (!urls.length || verificationMatches.length) capabilities.add('web_search');
   if (officialDocs.matched) capabilities.add('docs_search');
   if (vertical.matched && vertical.confidence >= 0.8) capabilities.add('vertical_search');

@@ -41,6 +41,25 @@ export type ProviderRoute = {
   candidates: ProviderCandidate[];
 };
 
+export type ProviderAttemptStatus =
+  | 'success'
+  | 'empty'
+  | 'low_quality'
+  | 'timeout'
+  | 'rate_limited'
+  | 'auth_error'
+  | 'provider_error'
+  | 'skipped';
+
+export type ProviderAttempt = {
+  capability: RetrievalCapability;
+  provider: string;
+  status: ProviderAttemptStatus;
+  durationMs: number;
+  resultCount: number;
+  reason?: string;
+};
+
 export type RetrievalQueryRoute = {
   policyVersion: string;
   strategy: 'direct_fetch' | 'fetch_then_verify' | 'official_docs_first' | 'vertical_first' | 'china_current_first' | 'current_web_first' | 'general_web';
@@ -77,6 +96,7 @@ export type QueryAttempt = {
   topScore?: number;
   resultCount: number;
   selectedUrls: string[];
+  provider?: string;
 };
 
 export type PageAttempt = {
@@ -87,6 +107,9 @@ export type PageAttempt = {
   score: number;
   selectedChunkCount: number;
   error?: string;
+  provider?: string;
+  subjectConsistencyScore?: number;
+  subjectMismatch?: boolean;
 };
 
 export type WebRetrievalDiagnostics = {
@@ -98,6 +121,11 @@ export type WebRetrievalDiagnostics = {
   independentDomains: number;
   durationMs: number;
   stopReason: string;
+  providerAttempts: ProviderAttempt[];
+  providersUsed: string[];
+  fallbackUsed: boolean;
+  subjectConsistencyRate?: number;
+  subjectMismatchUrls?: string[];
 };
 
 export type WebRetrievalResult = {

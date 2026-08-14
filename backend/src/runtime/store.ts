@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { sqlite } from '../db.js';
+import { normalizeToolPolicy } from '../tools/policy.js';
 import type {
   AgentCheckpoint,
   AgentCheckpointState,
@@ -179,7 +180,7 @@ export function insertTask(task: AgentTask) {
       task.currentStepId ?? null,
       task.maxSteps,
       task.maxTokens,
-      JSON.stringify(task.allowedTools),
+      JSON.stringify(task.toolPolicy),
       task.checkpointVersion,
       task.createdAt,
       task.updatedAt
@@ -663,7 +664,7 @@ function toTask(row: TaskRow): AgentTask {
     ...(row.current_step_id ? { currentStepId: row.current_step_id } : {}),
     maxSteps: row.max_steps,
     maxTokens: row.max_tokens,
-    allowedTools: parseStringArray(row.allowed_tools_json),
+    toolPolicy: normalizeToolPolicy(parseJson(row.allowed_tools_json)),
     checkpointVersion: row.checkpoint_version,
     createdAt: row.created_at,
     updatedAt: row.updated_at
@@ -708,7 +709,10 @@ function toCheckpoint(row: CheckpointRow): AgentCheckpoint {
     taskId: row.task_id,
     version: row.version,
     state: {
-      task: state.task,
+      task: { ...state.task, toolPolicy: normalizeToolPolicy(
+        (state.task as AgentTask & { allowedTools?: string[] }).toolPolicy
+          ?? (state.task as AgentTask & { allowedTools?: string[] }).allowedTools
+      ) },
       steps: state.steps,
       reviews: state.reviews ?? [],
       evidenceGaps: state.evidenceGaps ?? [],

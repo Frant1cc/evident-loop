@@ -41,6 +41,8 @@ export type RagSource = {
   score: number;
   mergedChunkIds?: string[];
   contextHeadings?: string[];
+  format?: import('../lib/sourceLocator').KnowledgeFormat;
+  locator?: import('../lib/sourceLocator').SourceLocator;
 };
 
 export type AgentTraceStep =

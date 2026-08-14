@@ -11,7 +11,30 @@ export const knowledgeDocuments = sqliteTable('knowledge_documents', {
   path: text('path').primaryKey(),
   content: text('content').notNull(),
   createdAt: text('created_at').notNull(),
-  updatedAt: text('updated_at').notNull()
+  updatedAt: text('updated_at').notNull(),
+  sourceType: text('source_type').notNull().default('manual'),
+  format: text('format').notNull().default('md'),
+  mimeType: text('mime_type'),
+  originalName: text('original_name'),
+  originalSize: integer('original_size'),
+  storageKey: text('storage_key'),
+  parserName: text('parser_name').notNull().default('markdown'),
+  parserVersion: text('parser_version').notNull().default('1'),
+  parseWarningsJson: text('parse_warnings_json').notNull().default('[]'),
+  metadataJson: text('metadata_json').notNull().default('{}'),
+  contentHash: text('content_hash'),
+  originalHash: text('original_hash')
+});
+
+export const knowledgeDocumentBlocks = sqliteTable('knowledge_document_blocks', {
+  id: text('id').primaryKey(),
+  documentPath: text('document_path').notNull(),
+  blockOrder: integer('block_order').notNull(),
+  blockType: text('block_type').notNull(),
+  text: text('text').notNull(),
+  headingPathJson: text('heading_path_json').notNull().default('[]'),
+  locatorJson: text('locator_json').notNull().default('{}'),
+  metadataJson: text('metadata_json').notNull().default('{}')
 });
 
 export const ragEvaluations = sqliteTable('rag_evaluations', {
@@ -135,6 +158,7 @@ export const researchSources = sqliteTable('research_sources', {
   startLine: integer('start_line').notNull(),
   endLine: integer('end_line').notNull(),
   score: real('score').notNull(),
+  locatorJson: text('locator_json'),
   createdAt: text('created_at').notNull()
 });
 

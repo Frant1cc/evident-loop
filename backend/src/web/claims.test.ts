@@ -81,7 +81,7 @@ test('uses technical synonyms when assessing SSE claim coverage', () => {
 });
 
 test('recognizes English reconnection and multiplexing evidence for Chinese claims', () => {
-  const claims = extractWebClaims('断线重连、多路复用、客户端优化、鉴权与超时、性能与并发优化最佳实践');
+  const claims = extractWebClaims('SSE 断线重连、多路复用、客户端优化、鉴权与超时、性能与并发优化最佳实践');
   const coverage = assessClaimCoverage(claims, [{
     url: 'https://developer.mozilla.org/docs/Web/API/Server-sent_events',
     content: [
@@ -94,4 +94,39 @@ test('recognizes English reconnection and multiplexing evidence for Chinese clai
   }]);
 
   assert.deepEqual(coverage.uncoveredClaims, []);
+});
+
+test('rejects WebSocket-only evidence for SSE operational claims', () => {
+  const claims = extractWebClaims('SSE 心跳保活、背压控制、压缩、负载均衡、与 WebSocket 对比');
+  const coverage = assessClaimCoverage(claims, [{
+    url: 'https://example.com/websocket-guide',
+    content: 'WebSocket uses heartbeat, connection limits, gzip compression and load balancing.'
+  }]);
+
+  assert.deepEqual(coverage.claims.filter((claim) => claim.supported), []);
+  assert.equal(coverage.subjectConsistencyRate, 0);
+  assert.deepEqual(coverage.subjectMismatchUrls, ['https://example.com/websocket-guide']);
+});
+
+test('requires real backpressure semantics near the SSE subject', () => {
+  const claims = extractWebClaims('SSE 背压控制');
+  const unrelated = assessClaimCoverage(claims, [{
+    url: 'https://example.com/limits', content: 'SSE has a maximum connection limit.'
+  }]);
+  const supported = assessClaimCoverage(claims, [{
+    url: 'https://example.com/stream', content: 'An SSE server respects stream backpressure and waits for the drain event when the write buffer reaches highWaterMark.'
+  }]);
+
+  assert.equal(unrelated.claims[0]?.supported, false);
+  assert.equal(supported.claims[0]?.supported, true);
+});
+
+test('does not combine a subject-only chunk with an unrelated fact chunk', () => {
+  const claims = extractWebClaims('SSE 压缩');
+  const coverage = assessClaimCoverage(claims, [
+    { url: 'https://example.com/guide', content: 'SSE uses EventSource for one-way updates.' },
+    { url: 'https://example.com/guide', content: 'WebSocket payload compression can use gzip.' }
+  ]);
+
+  assert.equal(coverage.claims[0]?.supported, false);
 });

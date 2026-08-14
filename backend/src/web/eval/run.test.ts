@@ -71,11 +71,22 @@ test('aggregates retrieval diagnostics and separates failure causes', async () =
   assert.equal(report.metrics.pageExtractionSuccessRate, 1);
 });
 
+test('reports subject mismatch as a dedicated evaluation failure', () => {
+  const result = evaluateCase(testCase, retrieval('weak', [], {
+    subjectConsistencyRate: 0,
+    subjectMismatchUrls: ['https://example.com/websocket-only']
+  }));
+
+  assert.equal(result.failureReason, 'subject_mismatch');
+  assert.equal(result.subjectConsistencyRate, 0);
+  assert.deepEqual(result.subjectMismatchUrls, ['https://example.com/websocket-only']);
+});
+
 function source(url: string, content: string): RagSource {
   return { id: url, file: url, title: 'Official docs', content, startLine: 1, endLine: 1, score: 0.9 };
 }
 
-function retrieval(verdict: WebRetrievalResult['verdict'], sources: RagSource[], patch: Partial<WebRetrievalResult> & { budgetExhaustedBy?: WebRetrievalResult['diagnostics']['budgetExhaustedBy'] } = {}): WebRetrievalResult {
+function retrieval(verdict: WebRetrievalResult['verdict'], sources: RagSource[], patch: Partial<WebRetrievalResult> & Partial<WebRetrievalResult['diagnostics']> = {}): WebRetrievalResult {
   return {
     question: 'q',
     intent: {
@@ -91,7 +102,11 @@ function retrieval(verdict: WebRetrievalResult['verdict'], sources: RagSource[],
     verdict, score: 0.8, retrievalQueries: ['q'], queryAttempts: patch.queryAttempts ?? [], pageAttempts: patch.pageAttempts ?? [], sources,
     claims: [], coverageScore: 0.5, coveredClaimCount: 1, totalClaimCount: 2, uncoveredClaims: [],
     diagnostics: { queriesUsed: 1, pagesFetched: sources.length, queryBudget: 3, pageBudget: 5,
-      independentDomains: sources.length ? 1 : 0, durationMs: 25, stopReason: 'test', budgetExhaustedBy: patch.budgetExhaustedBy }
+      independentDomains: sources.length ? 1 : 0, durationMs: 25, stopReason: 'test',
+      providerAttempts: [], providersUsed: [], fallbackUsed: false,
+      budgetExhaustedBy: patch.budgetExhaustedBy,
+      subjectConsistencyRate: patch.subjectConsistencyRate,
+      subjectMismatchUrls: patch.subjectMismatchUrls }
   };
 }
 

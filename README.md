@@ -1,71 +1,78 @@
-# EvidentLoop（开发中）
+<div align="center">
+  <img src="docs/assets/evident-loop-8bit.svg" alt="EvidentLoop — evidence-first research agent" width="100%" />
+
+  English · [简体中文](./README.zh-CN.md)
+</div>
+
+# EvidentLoop (Under Development)
 
 An evidence-first durable research agent.
 
-一个面向研究任务的可恢复、可审计、可评测 Agent。
+EvidentLoop is a recoverable, auditable, and evaluable agent for long-running research tasks.
 
-项目正在快速开发，接口、数据结构和交互方式可能调整。目前重点不是继续堆叠聊天功能，而是把 Durable Runtime、Source–Evidence–Claim 证据链、受控检索和可复现评测做扎实。
+The project is evolving quickly, and its APIs, data models, and interactions may change. Its current focus is not adding more chat features, but strengthening the durable runtime, Source–Evidence–Claim traceability, controlled retrieval, and reproducible evaluation.
 
-欢迎通过 Issue、Pull Request 和设计讨论参与共创。本 README 同时作为项目说明和贡献指南。
+Contributions through issues, pull requests, and design discussions are welcome. This README also serves as the project overview and contribution guide.
 
-## 项目状态
+## Project Status
 
-当前版本适合本地开发、架构学习和功能演示，尚未达到公网生产部署标准。
+The current version is suitable for local development, architecture study, and demonstrations. It is not ready for public production deployment.
 
-已经实现：
+Implemented:
 
-- 多轮 Function Calling Agent Loop
-- 任务规划、人工审批、显式状态机和 Checkpoint
-- 工具执行记录、幂等复用和失败重试
-- Source–Evidence–Claim 证据链
-- Reviewer 驱动的证据缺口识别与一次受控补充检索
-- Markdown 知识库、Dense/Hybrid RAG 和查询改写
-- Recall@K、MRR、拒答能力等 RAG 评测
-- 可断线重连、支持显式停止的后台研究工作台，以及任务控制台和 Word 报告生成
+- Multi-turn function-calling agent loop
+- Task planning, human approval, explicit state machine, and checkpoints
+- Tool execution records, idempotent reuse, and failure retries
+- Source–Evidence–Claim traceability
+- Reviewer-driven evidence-gap detection with one controlled supplementary retrieval pass
+- Multi-format knowledge base for Markdown, TXT, DOCX, and text-based PDF, with structure-aware chunking, page or source-line citations, Dense/Hybrid RAG, and query rewriting
+- RAG evaluation with Recall@K, MRR, and abstention metrics
+- Disconnect-resilient background research with explicit cancellation, a task console, and Word report generation
 
-正在开发或尚未完成：
+In progress or not yet implemented:
 
-- `maxTokens` 已进入任务约束，但尚未完成真实 Token 统计与强制预算控制
-- LLM 和 Embedding Provider 仍需要进一步解耦
-- API 暂无认证、用户隔离和速率限制
-- `fetch_page` 等联网工具仍需生产级 SSRF 加固
-- 前端自动化测试和端到端测试覆盖不足
-- 多实例任务锁、队列调度和完整 Run Replay 尚未实现
+- `maxTokens` is part of task constraints, but real token accounting and hard budget enforcement are not complete
+- LLM and embedding providers still need further decoupling
+- The API has no authentication, user isolation, or rate limiting
+- Network tools such as `fetch_page` still require production-grade SSRF hardening
+- OCR for scanned PDFs, XLSX/CSV/PPTX import, and visual PDF layout reconstruction are not implemented
+- Frontend automation and end-to-end test coverage remain limited
+- Multi-instance task locking, queue scheduling, and full run replay are not implemented
 
-请不要在介绍、简历或文章中把尚未完成的能力描述为已经实现。
+Do not describe unfinished capabilities as implemented in articles, portfolios, or résumés.
 
-## 核心工作流
+## Core Workflow
 
 ```mermaid
 flowchart LR
-    U["用户目标"] --> P["Planner 生成计划"]
-    P --> A["人工审批"]
-    A --> E["Executor 执行步骤"]
-    E --> T["RAG / Web / Document Tools"]
-    T --> C["Source–Evidence–Claim 证据链"]
-    C --> R["Reviewer 审查证据"]
-    R -->|证据不足| E
-    R -->|通过| W["Writer 生成报告"]
-    W --> O["可审计产物"]
+    U["User goal"] --> P["Planner creates a plan"]
+    P --> A["Human approval"]
+    A --> E["Executor runs steps"]
+    E --> T["RAG / Web / Document tools"]
+    T --> C["Source–Evidence–Claim chain"]
+    C --> R["Reviewer checks evidence"]
+    R -->|Evidence gap| E
+    R -->|Pass| W["Writer creates report"]
+    W --> O["Auditable artifact"]
 ```
 
-项目遵循几个基本原则：
+The project follows several principles:
 
-- 约束应该由运行时代码执行，不能只写在 Prompt 中。
-- 证据不足时应明确说明限制，不能让模型补写不存在的来源。
-- 检索改动应通过固定评测集验证，不能只依赖主观体验。
-- 对长任务保留状态、事件和工具结果，使失败后能够判断哪些工作可以安全复用。
-- 优先保持核心实现可理解，再考虑引入大型 Agent 框架。
+- Runtime constraints must be enforced by code, not only stated in prompts.
+- When evidence is insufficient, the system should state the limitation instead of inventing sources.
+- Retrieval changes should be validated against fixed evaluation sets rather than subjective impressions alone.
+- Long-running tasks should retain state, events, and tool results so recovery can safely determine what may be reused.
+- Keep the core implementation understandable before introducing large agent frameworks.
 
-## 快速启动
+## Quick Start
 
-环境要求：
+Requirements:
 
 - Node.js 20+
 - pnpm 10+
-- Docker 与 Docker Compose
-- DeepSeek 或 MiniMax API Key
-- 支持 OpenAI Embeddings 协议的 Embedding API Key
+- Docker and Docker Compose
+- A DeepSeek or MiniMax API key
+- An embedding API key for an OpenAI-compatible embeddings endpoint
 
 ```bash
 pnpm install
@@ -74,93 +81,94 @@ pnpm qdrant:up
 pnpm dev
 ```
 
-启动前编辑 `backend/.env`，选择一个文本模型 Provider，并填写 Embedding Key。DeepSeek 示例：
+Before starting, edit `backend/.env`, select a text-model provider, and configure embeddings. DeepSeek example:
 
 ```dotenv
-DEEPSEEK_API_KEY=你的_DeepSeek_Key
-EMBEDDING_API_KEY=你的_Embedding_Key
+DEEPSEEK_API_KEY=your_deepseek_key
+EMBEDDING_API_KEY=your_embedding_key
 ```
 
-MiniMax 示例：
+MiniMax example:
 
 ```dotenv
 LLM_PROVIDER=minimax
-MINIMAX_API_KEY=你的_MiniMax_Key
+MINIMAX_API_KEY=your_minimax_key
 MINIMAX_MODEL=MiniMax-M3
 MINIMAX_BASE_URL=https://api.minimaxi.com/v1
-EMBEDDING_API_KEY=你的_Embedding_Key
+EMBEDDING_API_KEY=your_embedding_key
 ```
 
-如果需要使用联网搜索工具，还需配置：
+To use web search tools, also configure:
 
 ```dotenv
-TAVILY_API_KEY=你的_Tavily_Key
+TAVILY_API_KEY=your_tavily_key
 ```
 
-访问地址：
+Local endpoints:
 
-- 前端：http://localhost:5173
-- 后端健康检查：http://localhost:3000/api/health
-- Qdrant 控制台：http://localhost:6333/dashboard
+- Frontend: http://localhost:5173
+- Backend health check: http://localhost:3000/api/health
+- Qdrant dashboard: http://localhost:6333/dashboard
 
-首次启动后，可在“知识库”页面上传 `knowledge-samples/` 中的 Markdown 示例文件，并保持“保存后自动向量化”开启。
+After the first launch, upload files from the **Knowledge Base** screen and leave **Automatically vectorize after saving** enabled. Supported formats are `.md`, `.txt`, `.docx`, and text-based `.pdf`. Markdown samples remain available in `knowledge-samples/`. Imported PDF and DOCX files are read-only, but their originals can be downloaded or reparsed. Scanned PDFs and PDFs without extractable text are rejected rather than stored as empty documents.
 
-完整的环境变量、首次初始化、功能验收和故障排查见 [运行指南](./RUNNING.md)。
+See the [running guide](./RUNNING.md) for complete environment configuration, first-run setup, acceptance checks, and troubleshooting. The guide is currently written in Chinese.
 
-## 项目结构
+## Project Structure
 
 ```text
 .
 ├── frontend/                   # Vue 3 + Vite + TypeScript
 ├── backend/                    # Express + TypeScript + SQLite
 │   └── src/
-│       ├── modules/            # 模块应用层入口与边界
-│       ├── llm/                # LLM Provider 端口与适配器
-│       ├── agent/              # Function Calling Agent Loop
-│       ├── runtime/            # 状态机、Checkpoint、证据链和任务执行
-│       ├── rag/                # Chunk、检索、融合、改写和评测
-│       ├── tools/              # 工具契约、能力目录与组合注册
-│       └── documents/          # Word 文档 Schema 与渲染
-├── docs/knowledge/             # 内置评测和演示知识文档
-├── knowledge-samples/          # 可导入知识库的示例资料
-├── docker-compose.yml          # 本地 Qdrant
-└── RUNNING.md                  # 完整运行指南
+│       ├── modules/            # Application-layer module APIs and boundaries
+│       ├── llm/                # LLM provider port and adapters
+│       ├── agent/              # Function-calling agent loop
+│       ├── runtime/            # State machine, checkpoints, evidence chain, task execution
+│       ├── knowledge/          # Multi-format import, parsers, originals, source locators
+│       ├── rag/                # Chunking, retrieval, fusion, rewriting, evaluation
+│       ├── tools/              # Tool contracts, capability catalogs, composition
+│       └── documents/          # Word document schema and rendering
+├── docs/knowledge/             # Built-in evaluation and demo documents
+├── knowledge-samples/          # Importable knowledge-base samples
+├── docker-compose.yml          # Local Qdrant service
+└── RUNNING.md                  # Full running guide (Chinese)
 ```
 
-后端模块依赖方向和新增 Provider/Tool 的约定见 [模块化架构约定](./docs/development/modular-architecture.md)。
+See the [modular architecture conventions](./docs/development/modular-architecture.md) for backend dependency direction and guidelines for adding providers and tools. This document is currently written in Chinese.
 
-## 如何参与共创
+## Contributing
 
-### 适合贡献的方向
+### Good Contribution Areas
 
-优先欢迎以下类型的贡献：
+Contributions are especially welcome in the following areas:
 
-| 方向 | 示例 |
+| Area | Examples |
 | --- | --- |
-| Runtime | Token/成本/时间预算、恢复语义、并发任务锁、Run Replay |
-| Agent Loop | 上下文管理、错误恢复、工具调用协议兼容、流式事件 |
-| RAG | Reranker、检索评测用例、置信度校准、查询融合 |
-| Provider | LLM Provider、Embedding Provider、兼容 API 适配 |
-| Tool Safety | Zod 参数校验、权限策略、超时、SSRF 防护 |
-| Frontend | 任务可观测性、证据链展示、错误反馈、端到端测试 |
-| Documentation | 架构说明、复现实验、英文文档、运行排错 |
+| Runtime | Token/cost/time budgets, recovery semantics, concurrent task locking, run replay |
+| Agent Loop | Context management, error recovery, tool-call protocol compatibility, streaming events |
+| RAG | Rerankers, retrieval evaluation cases, confidence calibration, query fusion |
+| Providers | LLM providers, embedding providers, compatible API adapters |
+| Tool Safety | Zod validation, permission policies, timeouts, SSRF protection |
+| Frontend | Task observability, evidence-chain display, error feedback, end-to-end tests |
+| Documentation | Architecture explanations, reproducible experiments, English docs, troubleshooting |
 
-第一次参与时，可以从文档、测试、配置校验或小范围 UI 问题开始。涉及 Runtime 状态、数据库结构、工具权限或 Provider 抽象的大改动，建议先创建 Issue 讨论方案。
+For a first contribution, documentation, tests, configuration validation, and small UI issues are good starting points. For significant changes to runtime state, database schemas, tool permissions, or provider abstractions, open an issue to discuss the design first.
 
-### 开始开发
+### Development Workflow
 
-1. Fork 仓库并从最新主分支创建功能分支。
-2. 在 Issue 中说明要解决的问题、预期行为和验证方式。
-3. 保持一次 Pull Request 只解决一个主题。
-4. 修改实现时同步补充或更新测试。
-5. 如果改变配置、接口或用户操作方式，同步更新 README 或 `RUNNING.md`。
-6. 提交 Pull Request，并说明改动、设计取舍、验证结果和已知限制。
+1. Fork the repository and create a feature branch from the latest main branch.
+2. Describe the problem, expected behavior, and verification approach in an issue.
+3. Keep each pull request focused on one subject.
+4. Add or update tests together with implementation changes.
+5. Update the README or `RUNNING.md` when configuration, APIs, or user workflows change.
+6. In the pull request, explain the change, design tradeoffs, verification results, and known limitations.
 
-小型修复可以直接提交 Pull Request；架构调整请先讨论，避免贡献者投入大量工作后才发现方向不一致。
+Small fixes may be submitted directly. Discuss architectural changes first to avoid investing heavily in a direction that does not fit the project.
 
-### 本地验证
+### Local Verification
 
-提交前至少执行：
+Run at least the following before submitting:
 
 ```bash
 pnpm typecheck
@@ -169,76 +177,77 @@ pnpm --filter backend runtime:verify
 pnpm build
 ```
 
-依赖变更还应执行：
+For dependency changes, also run:
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm audit --registry=https://registry.npmjs.org/ --prod
 ```
 
-当前根目录的 `pnpm lint` 只是预留入口，尚未接入正式 Lint 工具，不能代替类型检查和测试。
+The root `pnpm lint` command is currently a placeholder and is not a substitute for type checking and tests.
 
-### Pull Request 检查清单
+### Pull Request Checklist
 
-- [ ] 改动目标清晰，没有混入无关重构
-- [ ] TypeScript 类型检查通过
-- [ ] 现有自动化测试通过
-- [ ] 新行为包含对应测试或说明无法自动测试的原因
-- [ ] 前端变化附带截图或录屏
-- [ ] 配置、接口或运行方式变化已更新文档
-- [ ] 没有提交 `.env`、API Key、数据库、生成文件或个人 IDE 配置
-- [ ] 没有把尚未实现或未经评测的能力描述为完成
-- [ ] 已说明兼容性影响、数据迁移需求和已知限制
+- [ ] The change has a clear goal and contains no unrelated refactoring
+- [ ] TypeScript type checking passes
+- [ ] Existing automated tests pass
+- [ ] New behavior has tests, or the PR explains why it cannot be tested automatically
+- [ ] Frontend changes include screenshots or a recording
+- [ ] Documentation is updated for configuration, API, or workflow changes
+- [ ] No `.env`, API keys, databases, generated files, or personal IDE configuration are committed
+- [ ] Unimplemented or unevaluated capabilities are not described as complete
+- [ ] Compatibility impact, migrations, and known limitations are documented
 
-## Issue 建议格式
+## Issue Template Guidance
 
-为了让问题更容易复现和认领，Issue 建议包含：
+To make issues easier to reproduce and pick up, include:
 
-- 问题背景和使用场景
-- 当前行为与期望行为
-- 最小复现步骤
-- Node.js、pnpm、操作系统和相关服务版本
-- 错误日志或界面截图，注意删除密钥和个人数据
-- 如果是功能提案，说明为什么适合进入项目核心，而不是业务定制
+- Background and use case
+- Current and expected behavior
+- Minimal reproduction steps
+- Node.js, pnpm, operating system, and related service versions
+- Logs or screenshots with secrets and personal data removed
+- For feature proposals, why the capability belongs in the project core rather than a business-specific extension
 
-可以在标题前使用 `[Runtime]`、`[RAG]`、`[Frontend]`、`[Tool]`、`[Docs]` 等模块标记。
+You can prefix issue titles with module labels such as `[Runtime]`, `[RAG]`, `[Frontend]`, `[Tool]`, or `[Docs]`.
 
-## 数据与安全
+## Data and Security
 
-- SQLite 数据、会话、任务和生成文档默认写入 `backend/data/`。
-- Qdrant 保存派生向量和来源元数据，数据位于本地 Docker volume。
-- `.env`、数据库、构建产物和本地配置禁止提交。
-- 示例配置只能保留空值或无效占位值，禁止放入真实密钥。
-- 当前 API 没有认证和限流，请不要把开发服务器直接暴露到公网。
-- 提交日志、截图或 Issue 前，请检查是否包含对话数据、文档内容、Token 或内部地址。
+- SQLite data, conversations, tasks, and generated documents are stored under `backend/data/` by default.
+- Imported knowledge-base originals are stored under `backend/data/knowledge-files/` by default.
+- Qdrant stores derived vectors and source metadata in a local Docker volume.
+- Never commit `.env` files, databases, build artifacts, or local configuration.
+- Example configuration files must contain only empty or invalid placeholder values.
+- The API currently has no authentication or rate limiting. Do not expose the development server directly to the public internet.
+- Before sharing logs, screenshots, or issues, check for conversations, document content, tokens, and internal addresses.
 
-## 常用命令
+## Common Commands
 
 ```bash
-pnpm dev                 # 同时启动前后端
-pnpm typecheck           # TypeScript 检查
-pnpm test                # 自动化测试
-pnpm build               # 生产构建检查
-pnpm qdrant:up           # 启动 Qdrant
-pnpm qdrant:down         # 停止 Qdrant，保留数据卷
-pnpm rag:sync            # 重建或同步知识库索引
-pnpm rag:eval            # 执行真实检索链路评测
-pnpm rag:eval:smoke      # 执行不依赖外部 Embedding 的冒烟评测
+pnpm dev                 # Start frontend and backend
+pnpm typecheck           # TypeScript checks
+pnpm test                # Automated tests
+pnpm build               # Production build checks
+pnpm qdrant:up           # Start Qdrant
+pnpm qdrant:down         # Stop Qdrant and keep its volume
+pnpm rag:sync            # Rebuild or synchronize the knowledge index
+pnpm rag:eval            # Run evaluation through the real retrieval pipeline
+pnpm rag:eval:smoke      # Run the smoke evaluation without external embeddings
 ```
 
-## 贡献目标
+## Project Goals
 
-这个项目不追求最快堆出最多功能，而是希望形成一个能够回答以下问题的参考实现：
+Rather than maximizing feature count as quickly as possible, EvidentLoop aims to become a reference implementation that can answer:
 
-- Agent 中断后，系统如何知道从哪里继续？
-- 工具已经成功但请求断开时，如何避免重复执行？
-- 一条结论如何追溯到具体来源和证据？
-- Reviewer 发现证据不足后，如何进行有预算的补充检索？
-- RAG 优化如何通过固定数据集证明没有回退？
-- 模型、工具和运行时之间的职责边界应该放在哪里？
+- After an agent is interrupted, how does the system know where to resume?
+- If a tool succeeded but the request disconnected, how can duplicate execution be avoided?
+- How can a claim be traced to a specific source and piece of evidence?
+- When the reviewer finds insufficient evidence, how can supplementary retrieval remain budgeted and controlled?
+- How can fixed datasets prove that a RAG optimization did not regress quality?
+- Where should responsibilities sit between the model, tools, and runtime?
 
-如果你的贡献能让这些问题更清晰、更可靠或更容易复现，它就非常适合这个项目。
+If a contribution makes these questions clearer, more reliable, or easier to reproduce, it is a strong fit for the project.
 
 ## License
 
-EvidentLoop 使用 [Apache License 2.0](./LICENSE) 开源。
+EvidentLoop is licensed under the [Apache License 2.0](./LICENSE).

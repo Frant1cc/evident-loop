@@ -20,14 +20,17 @@ import {
   listResearchMessages,
   updateResearchNote
 } from '../../research/store.js';
-import { getToolDefinitions } from '../../tools/definitions.js';
-import type { ToolCatalog } from '../../tools/contracts.js';
+import type { ToolPolicy, ToolRuntime } from '../../tools/contracts.js';
+import { normalizeToolPolicy, restrictToolPolicyToRegistered } from '../../tools/policy.js';
+import type { ResearchSkillRuntime } from '../../skills/runtime.js';
+import type { ResolvedResearchSkill } from '../../skills/contracts.js';
 import { getMaxSequence, listStreamEventsAfter } from '../../streaming/eventStore.js';
 
 export type ResearchApplicationDependencies = {
   llm?: LlmProvider;
   model: string;
-  tools: ToolCatalog;
+  toolRuntime: ToolRuntime;
+  skillRuntime: ResearchSkillRuntime;
 };
 
 /** Use-case boundary for research conversations and durable background runs. */
@@ -38,17 +41,21 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
   };
 
   return {
-    listTools: () => [...dependencies.tools.values()]
+    listTools: () => dependencies.toolRuntime.listModules()
       .filter((tool) => tool.exposedToModel !== false)
       .map((tool) => ({
         name: tool.definition.function.name,
         label: tool.label,
         description: tool.definition.function.description
       })),
-    normalizeAllowedTools: (value: unknown) => {
-      if (!Array.isArray(value)) return undefined;
-      const registered = new Set(getToolDefinitions(dependencies.tools).map((tool) => tool.function.name));
-      return value.filter((name): name is string => typeof name === 'string' && registered.has(name));
+    listSkills: () => dependencies.skillRuntime.list(),
+    normalizeToolPolicy: (value: unknown): ToolPolicy => {
+      const registered = new Set(
+        dependencies.toolRuntime.getDefinitions().map((tool) => tool.function.name)
+      );
+      const policy = restrictToolPolicyToRegistered(normalizeToolPolicy(value), registered);
+      if (policy.mode === 'selected' && !policy.names.length) return { mode: 'none' };
+      return policy;
     },
     listConversations: listResearchConversations,
     createConversation: createResearchConversation,
@@ -68,14 +75,29 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
     },
     updateNote: updateResearchNote,
     deleteNote: deleteResearchNote,
-    startMessage: (conversationId: string, content: string, allowedTools?: string[]) =>
-      createAndStartResearchRun({
+    startMessage: (
+      conversationId: string,
+      content: string,
+      toolPolicy: ToolPolicy,
+      skillId?: string
+    ) => {
+      const registered = new Set(
+        dependencies.toolRuntime.getDefinitions().map((tool) => tool.function.name)
+      );
+      const skill = skillId
+        ? resolveSkillForRun(dependencies.skillRuntime, skillId, toolPolicy, registered)
+        : undefined;
+      return createAndStartResearchRun({
         conversationId,
         content,
-        allowedToolNames: allowedTools,
+        toolPolicy,
+        toolRuntime: dependencies.toolRuntime,
+        skill: skill?.snapshot,
+        skillRuntime: dependencies.skillRuntime,
         llm: requireLlm(),
         model: dependencies.model
-      }),
+      });
+    },
     getRun: getResearchRun,
     getRunSnapshot: getResearchRunSnapshot,
     subscribeToRun: subscribeToResearchRun,
@@ -86,3 +108,42 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
 }
 
 export type ResearchApplication = ReturnType<typeof createResearchApplication>;
+
+/** Thrown when a run selects a skill whose required tools are not authorized. */
+export class ResearchSkillToolError extends Error {}
+
+/** Thrown when a run references a skill id that is not registered. */
+export class UnknownResearchSkillError extends Error {}
+
+/**
+ * Resolve the latest version of a skill and confirm the user's ToolPolicy already
+ * authorizes every required tool. A skill never widens the policy (§4.4, §9).
+ */
+function resolveSkillForRun(
+  skillRuntime: ResearchSkillRuntime,
+  skillId: string,
+  toolPolicy: ToolPolicy,
+  registeredNames: Set<string>
+): ResolvedResearchSkill {
+  let resolved: ResolvedResearchSkill;
+  try {
+    resolved = skillRuntime.resolveLatest(skillId);
+  } catch {
+    throw new UnknownResearchSkillError(`未知技能：${skillId}`);
+  }
+
+  const authorized = authorizedToolNames(toolPolicy, registeredNames);
+  const missing = resolved.definition.tools.required.filter((name) => !authorized.has(name));
+  if (missing.length) {
+    throw new ResearchSkillToolError(
+      `技能“${resolved.definition.label}”需要启用工具：${missing.join('、')}`
+    );
+  }
+  return resolved;
+}
+
+function authorizedToolNames(policy: ToolPolicy, registeredNames: Set<string>): Set<string> {
+  if (policy.mode === 'all') return new Set(registeredNames);
+  if (policy.mode === 'none') return new Set();
+  return new Set(policy.names.filter((name) => registeredNames.has(name)));
+}

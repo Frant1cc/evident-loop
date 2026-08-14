@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentTask, AgentTaskDetail, PlanStepDraft } from '../types/tasks';
+import type { AgentEvent, AgentTask, AgentTaskDetail, PlanStepDraft, ToolPolicy } from '../types/tasks';
 
 type ApiResponse<T> = {
   code: 0 | 1;
@@ -14,7 +14,7 @@ export function createAgentTask(input: {
   goal: string;
   maxSteps: number;
   maxTokens: number;
-  allowedTools: string[];
+  toolPolicy: ToolPolicy;
 }) {
   return request<AgentTaskDetail>('/api/tasks', { method: 'POST', body: input });
 }

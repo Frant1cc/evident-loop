@@ -3,6 +3,7 @@ import { nextTick, watch } from 'vue';
 
 import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { formatSourceLocator } from '../../lib/sourceLocator';
 import type { ResearchSource } from '../../types/research';
 
 const props = defineProps<{
@@ -12,6 +13,10 @@ const props = defineProps<{
 
 function isWebSource(source: ResearchSource) {
   return source.file.startsWith('http://') || source.file.startsWith('https://');
+}
+
+function sourceLocation(source: ResearchSource) {
+  return formatSourceLocator(source.locator, { startLine: source.startLine, endLine: source.endLine });
 }
 
 watch(
@@ -52,7 +57,7 @@ watch(
         <div class="mt-2 flex items-center gap-3 text-[11px] text-muted-foreground">
           <span v-if="source.score > 0" class="tabular-nums">相关度 {{ source.score.toFixed(3) }}</span>
           <span v-if="isWebSource(source)">网页来源</span>
-          <span v-else class="tabular-nums">第 {{ source.startLine }}–{{ source.endLine }} 行</span>
+          <span v-else class="tabular-nums">{{ sourceLocation(source) }}</span>
         </div>
         <p class="m-0 mt-2 line-clamp-4 whitespace-pre-wrap break-words text-[13px] leading-6 text-muted-foreground">{{ source.content }}</p>
         <Collapsible class="mt-2 border-t border-border pt-2">

@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
 
-import { chunkMarkdownDocument } from './chunker.js';
+import { chunkKnowledgeDocument, getChunkerVersion } from './chunker.js';
 import { loadMarkdownDocuments } from './documentLoader.js';
 import { createEmbeddings, getEmbeddingModel, isEmbeddingConfigured } from './embeddingClient.js';
 import { getKeywordStore } from './keywordStore.js';
-import { readKnowledgeDocument } from './knowledgeFiles.js';
-import type { RagDocument } from './types.js';
+import { readKnowledgeDocument, type KnowledgeDocument } from './knowledgeFiles.js';
+import type { DocumentChunk, RagDocument } from './types.js';
+import { formatSourceLocator } from '../knowledge/locator.js';
 import {
   deleteChunks,
   deleteChunksByFile,
@@ -28,7 +29,7 @@ type DesiredChunk = {
   contentHash: string;
   documentHash: string;
   embeddingInput: string;
-  chunk: ReturnType<typeof chunkMarkdownDocument>[number];
+  chunk: DocumentChunk;
 };
 
 export type KnowledgeIndexResult = {
@@ -128,6 +129,7 @@ async function vectorizeDocument(document: RagDocument, collection = getCollecti
   ensureEmbeddingConfigured();
 
   const desiredChunks = createDesiredChunks(document);
+  const documentHash = getIndexFingerprint(document);
   const hasCollection = await vectorCollectionExists(collection);
   const storedChunks = hasCollection ? await listStoredChunksForFile(document.file, collection) : [];
   const storedById = new Map(storedChunks.map((chunk) => [chunk.id, chunk]));
@@ -164,7 +166,7 @@ async function vectorizeDocument(document: RagDocument, collection = getCollecti
 
   return {
     file: document.file,
-    documentHash: hash(document.content),
+    documentHash,
     chunkCount: desiredChunks.length,
     unchanged: desiredChunks.length - changedChunks.length,
     upserted: points.length,
@@ -175,26 +177,43 @@ async function vectorizeDocument(document: RagDocument, collection = getCollecti
 }
 
 function createDesiredChunks(document: RagDocument): DesiredChunk[] {
-  const documentHash = hash(document.content);
+  const documentHash = getIndexFingerprint(document);
+  const chunks = chunkKnowledgeDocument(document as KnowledgeDocument);
 
-  return chunkMarkdownDocument(document).map((chunk) => {
+  return chunks.map((chunk) => {
     const embeddingInput = getEmbeddingInput(chunk);
 
     return {
       id: deterministicPointId(chunk.id),
-      // Neighbor links affect retrieval-time context assembly. Include them in the incremental
-      // signature so inserting/removing a section refreshes the two affected payloads without
-      // making document-order shifts re-embed every later chunk.
       contentHash: hash(JSON.stringify({
         embeddingInput,
         previousChunkId: chunk.previousChunkId,
-        nextChunkId: chunk.nextChunkId
+        nextChunkId: chunk.nextChunkId,
+        locator: chunk.locator,
+        parserVersion: 'parserVersion' in document ? document.parserVersion : undefined,
+        chunkerVersion: getChunkerVersion(document)
       })),
       documentHash,
       embeddingInput,
       chunk
     };
   });
+}
+
+export function getIndexFingerprint(document: RagDocument) {
+  const structured = 'blocks' in document ? document as KnowledgeDocument : undefined;
+  return hash(JSON.stringify({
+    content: document.content,
+    blocks: structured?.blocks.map((block) => ({
+      type: block.type,
+      text: block.text,
+      headingPath: block.headingPath,
+      locator: block.locator
+    })),
+    parserName: structured?.parserName ?? document.parserName,
+    parserVersion: structured?.parserVersion ?? document.parserVersion,
+    chunkerVersion: getChunkerVersion(document)
+  }));
 }
 
 export function deterministicPointId(value: string) {
@@ -204,9 +223,38 @@ export function deterministicPointId(value: string) {
 
 export function getEmbeddingInput(chunk: DesiredChunk['chunk']) {
   const headingPath = chunk.headingPath?.length
-    ? `章节路径: ${chunk.headingPath.join(' > ')}`
-    : chunk.heading;
-  return [`文档: ${chunk.title}`, headingPath, chunk.content].filter(Boolean).join('\n');
+    ? `章节: ${chunk.headingPath.join(' > ')}`
+    : chunk.heading ? `章节: ${chunk.heading}` : undefined;
+  const formatLine = chunk.format && chunk.format !== 'md' ? `文件类型: ${formatLabel(chunk.format)}` : undefined;
+  const source = chunk.format && chunk.format !== 'md'
+    ? formatSourceLocator(chunk.locator, { startLine: chunk.startLine, endLine: chunk.endLine })
+    : undefined;
+  const sourceLine = source ? `来源: ${source}` : undefined;
+  const body = chunk.contentType === 'table' ? tableEmbeddingText(chunk) : chunk.content;
+  return [`文档: ${chunk.title}`, formatLine, headingPath, sourceLine, body].filter(Boolean).join('\n');
+}
+
+function formatLabel(format: string) {
+  if (format === 'pdf') return 'PDF';
+  if (format === 'docx') return 'DOCX';
+  if (format === 'txt') return 'TXT';
+  return 'Markdown';
+}
+
+function tableEmbeddingText(chunk: DocumentChunk) {
+  const lines = chunk.content.split('\n').map((line) => line.trim()).filter((line) => line.startsWith('|'));
+  const rows = lines
+    .filter((line) => !/^\|?\s*:?-{3,}/u.test(line))
+    .map((line) => line.replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim()));
+  const headers = rows[0] ?? [];
+  const records = rows.slice(1);
+  const heading = chunk.headingPath?.length ? `章节: ${chunk.headingPath.join(' > ')}` : '';
+  const headerLine = headers.length ? `列: ${headers.join('、')}` : '';
+  const body = records.map((row) => {
+    const pairs = headers.map((header, index) => `${header}：${row[index] ?? ''}`).join('\n');
+    return `记录：\n${pairs || row.join('、')}`;
+  }).join('\n\n');
+  return [`文档: ${chunk.title}`, heading, headerLine, '', body || chunk.content].filter((line) => line !== undefined).join('\n');
 }
 
 function ensureEmbeddingConfigured() {

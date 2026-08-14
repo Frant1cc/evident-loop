@@ -1,4 +1,6 @@
 import type { DocumentChunk } from './types.js';
+import { parseLocator } from '../knowledge/locator.js';
+import type { KnowledgeFormat } from '../knowledge/types.js';
 
 /**
  * SQLite FTS5 关键词检索层。
@@ -10,7 +12,7 @@ import type { DocumentChunk } from './types.js';
  * - 通过工厂函数注入数据库实例：生产使用 better-sqlite3，测试可注入 node:sqlite。
  */
 
-export const FTS_TABLE = 'knowledge_chunk_fts_v2';
+export const FTS_TABLE = 'knowledge_chunk_fts_v3';
 
 /** 与 better-sqlite3 / node:sqlite 均兼容的最小接口 */
 export type SqliteLike = {
@@ -43,6 +45,9 @@ type FtsRow = {
   next_chunk_id: string | null;
   token_count: number | null;
   content_type: string | null;
+  format: string | null;
+  locator_json: string | null;
+  parser_version: string | null;
   score: number;
 };
 
@@ -125,6 +130,9 @@ export function createKeywordStore(db: SqliteLike) {
         next_chunk_id UNINDEXED,
         token_count UNINDEXED,
         content_type UNINDEXED,
+        format UNINDEXED,
+        locator_json UNINDEXED,
+        parser_version UNINDEXED,
         tokenize = 'unicode61'
       )
     `);
@@ -141,8 +149,9 @@ export function createKeywordStore(db: SqliteLike) {
         INSERT INTO ${FTS_TABLE} (
           title_seg, heading_seg, content_seg,
           collection, chunk_key, file, title, heading, heading_path, content, start_line, end_line,
-          chunk_index, part_index, parent_id, previous_chunk_id, next_chunk_id, token_count, content_type
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          chunk_index, part_index, parent_id, previous_chunk_id, next_chunk_id, token_count, content_type,
+          format, locator_json, parser_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const chunk of chunks) {
         insert.run(
@@ -166,7 +175,10 @@ export function createKeywordStore(db: SqliteLike) {
           chunk.previousChunkId ?? null,
           chunk.nextChunkId ?? null,
           chunk.tokenCount ?? null,
-          chunk.contentType ?? null
+          chunk.contentType ?? null,
+          chunk.format ?? null,
+          chunk.locator ? JSON.stringify(chunk.locator) : null,
+          chunk.parserVersion ?? null
         );
       }
       db.exec('COMMIT');
@@ -208,6 +220,7 @@ export function createKeywordStore(db: SqliteLike) {
       SELECT
         chunk_key, file, title, heading, heading_path, content, start_line, end_line,
         chunk_index, part_index, parent_id, previous_chunk_id, next_chunk_id, token_count, content_type,
+        format, locator_json, parser_version,
         -bm25(${FTS_TABLE}, 2.0, 3.0, 1.0) AS score
       FROM ${FTS_TABLE}
       WHERE ${FTS_TABLE} MATCH ? AND collection = ?
@@ -231,6 +244,9 @@ export function createKeywordStore(db: SqliteLike) {
       nextChunkId: row.next_chunk_id ?? undefined,
       tokenCount: row.token_count ?? undefined,
       contentType: isContentType(row.content_type) ? row.content_type : undefined,
+      format: isFormat(row.format) ? row.format : undefined,
+      locator: parseLocatorJson(row.locator_json),
+      parserVersion: row.parser_version ?? undefined,
       keywordScore: row.score
     }));
   }
@@ -268,6 +284,19 @@ function parseHeadingPath(value: string | null) {
 
 function isContentType(value: string | null): value is NonNullable<DocumentChunk['contentType']> {
   return value === 'text' || value === 'table' || value === 'code' || value === 'mixed';
+}
+
+function isFormat(value: string | null): value is KnowledgeFormat {
+  return value === 'md' || value === 'txt' || value === 'docx' || value === 'pdf';
+}
+
+function parseLocatorJson(value: string | null) {
+  if (!value) return undefined;
+  try {
+    return parseLocator(JSON.parse(value) as unknown);
+  } catch {
+    return undefined;
+  }
 }
 
 export type KeywordStore = ReturnType<typeof createKeywordStore>;

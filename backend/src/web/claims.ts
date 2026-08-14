@@ -1,6 +1,6 @@
 import { lexicalRelevance, normalizeQuery } from './quality.js';
 
-export type WebClaim = { id: string; text: string; evidenceGroups: string[][] };
+export type WebClaim = { id: string; text: string; evidenceGroups: string[][]; subjectTerms: string[] };
 export type ClaimEvidence = { content: string; url: string };
 export type ClaimAssessment = WebClaim & {
   score: number;
@@ -8,12 +8,16 @@ export type ClaimAssessment = WebClaim & {
   matchedGroups: number;
   totalGroups: number;
   sourceUrls: string[];
+  subjectMatched: boolean;
+  subjectMismatchUrls: string[];
 };
 export type ClaimCoverage = {
   claims: ClaimAssessment[];
   coverageScore: number;
   supportedClaimRatio: number;
   uncoveredClaims: string[];
+  subjectConsistencyRate: number;
+  subjectMismatchUrls: string[];
 };
 
 const SUPPORT_THRESHOLD = 0.55;
@@ -23,6 +27,7 @@ const SHORT_TECHNICAL_CLAIMS = new Set([
 
 /** Deterministic extraction keeps retrieval quality independent of an extra LLM call. */
 export function extractWebClaims(question: string): WebClaim[] {
+  const primarySubject = inferPrimarySubject(question);
   const cleaned = question
     .replace(/^(请|麻烦|帮我)\s*/i, '')
     .replace(/^(联网)?(查询|查找|搜索|查清|核对|确认|研究)\s*/i, '')
@@ -46,7 +51,7 @@ export function extractWebClaims(question: string): WebClaim[] {
       .replace(/(二者|两者)/g, hasBasicAndAdvanced ? 'basic 和 advanced ' : '$1')
       .replace(/[？?。！!]$/, '')
       .trim();
-    return { id: `C${index + 1}`, text, evidenceGroups: buildEvidenceGroups(text) };
+    return { id: `C${index + 1}`, text, evidenceGroups: buildEvidenceGroups(text), subjectTerms: primarySubject };
   });
 }
 
@@ -64,18 +69,24 @@ export function assessClaimCoverage(claims: WebClaim[], evidence: ClaimEvidence[
       matchedGroups: best?.matchedGroups ?? 0,
       totalGroups: claim.evidenceGroups.length,
       supported: Boolean(best?.supported),
-      sourceUrls: matches.filter((match) => match.supported).map((match) => match.item.url)
+      sourceUrls: matches.filter((match) => match.supported).map((match) => match.item.url),
+      subjectMatched: Boolean(best?.subjectMatched),
+      subjectMismatchUrls: matches.filter((match) => match.matchedGroups > 0 && !match.subjectMatched).map((match) => match.item.url)
     };
   });
 
   const supported = assessments.filter((claim) => claim.supported).length;
+  const relevantEvidence = evidence.filter((item) => assessments.some((claim) => scoreClaimEvidence(claim, item).matchedGroups > 0));
+  const consistentEvidence = relevantEvidence.filter((item) => assessments.some((claim) => scoreClaimEvidence(claim, item).subjectMatched));
   return {
     claims: assessments,
     coverageScore: assessments.length
       ? assessments.reduce((total, claim) => total + claim.score, 0) / assessments.length
       : 0,
     supportedClaimRatio: assessments.length ? supported / assessments.length : 0,
-    uncoveredClaims: assessments.filter((claim) => !claim.supported).map((claim) => claim.text)
+    uncoveredClaims: assessments.filter((claim) => !claim.supported).map((claim) => claim.text),
+    subjectConsistencyRate: relevantEvidence.length ? consistentEvidence.length / relevantEvidence.length : 0,
+    subjectMismatchUrls: [...new Set(assessments.flatMap((claim) => claim.subjectMismatchUrls))]
   };
 }
 
@@ -91,16 +102,16 @@ function buildEvidenceGroups(text: string): string[][] {
       'last event id', 'retry field', 'automatic retry', 'resumable stream'
     ]);
   }
-  if (/消息压缩|gzip|compression/.test(lower)) {
-    groups.push(['消息压缩', 'gzip', 'compression', 'compress', 'content-encoding']);
+  if (/压缩|gzip|compression/.test(lower)) {
+    groups.push(['消息压缩', '压缩', 'gzip', 'compression', 'compress', 'content-encoding']);
   }
   if (/缓冲|buffering|proxy_buffering/.test(lower)) {
     groups.push(['缓冲设置', '关闭缓冲', '代理缓冲', 'buffering', 'proxy_buffering', 'x-accel-buffering']);
   }
   if (/并发控制|连接数|backpressure|背压/.test(lower)) {
     groups.push([
-      '服务端并发控制', '并发控制', '连接数', '连接上限', 'connection limit',
-      'max connections', 'worker_connections', 'backpressure', '背压'
+      'backpressure', '背压', 'highwatermark', 'high water mark', 'drain event',
+      'write buffer', '写缓冲区', 'producer rate', '消费速度'
     ]);
   }
   if (/多路复用|multiplex|http\/2|http2/.test(lower)) {
@@ -127,6 +138,10 @@ function buildEvidenceGroups(text: string): string[][] {
       'scalability', 'event loop', 'non-blocking', 'worker_connections', 'connection limit'
     ]);
   }
+  if (/websocket/.test(lower) && /对比|区别|比较|versus|\bvs\b/.test(lower)) {
+    groups.push(['websocket']);
+    groups.push(['one-way', 'one way', 'unidirectional', 'bidirectional', '双向', '单向']);
+  }
   if (/search_depth|搜索深度/.test(lower)) groups.push(['search_depth', '搜索深度']);
   if (/可选值|取值|枚举|allowed|enum/.test(lower)) groups.push(['basic', 'advanced']);
   if (/作用|定位|用途|purpose|role|snippet|相关性/.test(lower)) {
@@ -151,22 +166,41 @@ function normalizeClaimFragment(fragment: string) {
 
 function scoreClaimEvidence(claim: WebClaim, item: ClaimEvidence) {
   const content = item.content.toLowerCase();
+  const subjectMatched = !claim.subjectTerms.length || claim.subjectTerms.some((term) => content.includes(term.toLowerCase()));
   const matchedGroups = claim.evidenceGroups.filter((group) =>
     group.some((term) => content.includes(term.toLowerCase()))
   ).length;
   const groupCoverage = matchedGroups / Math.max(claim.evidenceGroups.length, 1);
   const lexicalScore = lexicalRelevance(claim.text, item.content);
-  const score = claim.evidenceGroups.length > 1
+  const semanticScore = claim.evidenceGroups.length > 1
     ? groupCoverage * 0.75 + lexicalScore * 0.25
     : matchedGroups
       ? Math.max(lexicalScore, 0.75)
       : lexicalScore;
+  const score = subjectMatched ? semanticScore : semanticScore * 0.25;
   return {
     item,
     score,
     matchedGroups,
-    supported: matchedGroups === claim.evidenceGroups.length && score >= SUPPORT_THRESHOLD
+    subjectMatched,
+    supported: subjectMatched && matchedGroups === claim.evidenceGroups.length && score >= SUPPORT_THRESHOLD
   };
+}
+
+export function inferPrimarySubject(question: string): string[] {
+  const lower = question.toLowerCase();
+  if (/server-sent events|server sent events|\bsse\b|eventsource/.test(lower)) {
+    return ['server-sent events', 'server sent events', 'sse', 'eventsource'];
+  }
+  // For product APIs, requiring every evidence chunk to repeat the parameter
+  // name rejects legitimate pricing/credits pages. Entity binding is currently
+  // applied only to protocols where cross-topic contamination is common.
+  return [];
+}
+
+export function contentMatchesClaimSubject(claim: WebClaim, content: string) {
+  const normalized = content.toLowerCase();
+  return !claim.subjectTerms.length || claim.subjectTerms.some((term) => normalized.includes(term.toLowerCase()));
 }
 
 function extractAnchorTerms(text: string) {

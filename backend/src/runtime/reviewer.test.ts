@@ -14,7 +14,7 @@ function reviewerContext(): Parameters<AgentStepReviewer>[0] {
       currentStepId: 'step-1',
       maxSteps: 3,
       maxTokens: 12_000,
-      allowedTools: ['retrieve_web_evidence'],
+      toolPolicy: { mode: 'selected', names: ['retrieve_web_evidence'] },
       checkpointVersion: 1,
       createdAt: now,
       updatedAt: now

@@ -51,12 +51,25 @@ export async function rewriteWebQuery(options: RewriteWebQueryOptions): Promise<
 }
 
 function fallbackRewrite(options: RewriteWebQueryOptions) {
+  const gap = options.uncoveredClaims?.find((claim) => claim.trim());
+  if (gap) {
+    const subject = extractSubject(options.question);
+    const focused = `${subject} ${gap} ${/[一-鿿]/.test(options.question) ? '官方文档' : 'official documentation'}`.replace(/\s+/g, ' ').trim();
+    if (!hasSeen(focused, options.previousQueries)) return focused;
+  }
   const suffixes = /[一-鿿]/.test(options.question)
     ? [' 官方资料', ' 最新 权威来源']
     : [' official documentation', ' latest authoritative source'];
   return suffixes
     .map((suffix) => `${options.question}${suffix}`.trim())
     .find((candidate) => !hasSeen(candidate, options.previousQueries));
+}
+
+function extractSubject(question: string) {
+  const sse = question.match(/Server-Sent Events|Server Sent Events|\bSSE\b|EventSource/i)?.[0];
+  if (sse) return sse;
+  const api = question.match(/[A-Za-z0-9_.-]+\s+(?:Search\s+)?API/i)?.[0];
+  return api ?? question.split(/[：:，,；;]/)[0]?.trim().slice(0, 80) ?? question.slice(0, 80);
 }
 
 function hasSeen(query: string, previousQueries: string[]) {

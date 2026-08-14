@@ -34,3 +34,14 @@ export type ToolModule = {
 };
 
 export type ToolCatalog = ReadonlyMap<string, ToolModule>;
+
+export type ToolPolicy =
+  | { mode: 'all' }
+  | { mode: 'selected'; names: string[] }
+  | { mode: 'none' };
+
+export type ToolRuntime = {
+  listModules: () => ToolModule[];
+  getDefinitions: (policy?: ToolPolicy) => ToolDefinition[];
+  execute: (name: string, args: unknown, context?: ToolContext) => Promise<unknown>;
+};

@@ -252,7 +252,7 @@ test('expands budgets for a broad multi-claim research question', async () => {
   assert.equal(result.diagnostics.pageBudget, 8);
 });
 
-test('searches official technical domains first and falls back to the open web', async () => {
+test('keeps gap rewrites on inferred official domains', async () => {
   const includeDomains: Array<string[] | undefined> = [];
   let searchCount = 0;
   await retrieveWebEvidence(
@@ -273,7 +273,12 @@ test('searches official technical domains first and falls back to the open web',
     'html.spec.whatwg.org',
     'nginx.org'
   ]);
-  assert.equal(includeDomains.slice(1).every((domains) => domains === undefined), true);
+  assert.deepEqual(includeDomains[1], ['developer.mozilla.org', 'html.spec.whatwg.org', 'nginx.org']);
+  assert.deepEqual(includeDomains.slice(2), [
+    ['developer.mozilla.org', 'html.spec.whatwg.org'],
+    ['developer.mozilla.org', 'html.spec.whatwg.org'],
+    ['developer.mozilla.org', 'html.spec.whatwg.org']
+  ]);
 });
 
 test('preserves a broad open-web overview query before focused rewrites', async () => {
@@ -295,8 +300,8 @@ test('preserves a broad open-web overview query before focused rewrites', async 
 
   assert.match(queries[0]!, /官方文档/);
   assert.equal(queries[1], 'SSE 连接管理、心跳保活、断线重连、背压控制、Nginx 缓冲、多路复用、客户端优化、鉴权与超时');
-  assert.deepEqual(includeDomains[0], ['developer.mozilla.org', 'html.spec.whatwg.org', 'nginx.org']);
-  assert.equal(includeDomains[1], undefined);
+  assert.deepEqual(includeDomains[0], ['developer.mozilla.org', 'html.spec.whatwg.org', 'nginx.org', 'nodejs.org']);
+  assert.deepEqual(includeDomains[1], ['developer.mozilla.org', 'html.spec.whatwg.org', 'nginx.org', 'nodejs.org']);
   assert.match(queries[2]!, /^SSE focused /);
 });
 
@@ -361,6 +366,26 @@ test('expands the page budget only when broad technical claims remain uncovered'
   assert.equal(result.diagnostics.pageBudget, 10);
   assert.equal(result.diagnostics.pagesFetched, 10);
   assert.equal(result.diagnostics.budgetExhaustedBy, 'queries-and-pages');
+});
+
+test('rejects WebSocket-only pages as evidence for an SSE question', async () => {
+  let counter = 0;
+  const result = await retrieveWebEvidence(
+    { question: 'SSE 心跳保活、背压控制、压缩、负载均衡、与 WebSocket 对比', maxQueries: 2 },
+    { dependencies: {
+      rewrite: async ({ uncoveredClaims }) => `SSE ${uncoveredClaims?.[0] ?? 'gap'} official documentation`,
+      search: async ({ query }) => ({ query, results: [{
+        title: 'WebSocket production guide', url: `https://example${++counter}.com/websocket`,
+        snippet: 'WebSocket heartbeat compression connection limits and load balancing', score: 0.95
+      }] }),
+      fetch: async (args) => page(String((args as { url: string }).url), 'WebSocket heartbeat compression connection limits and load balancing.'.repeat(30))
+    } }
+  );
+
+  assert.notEqual(result.verdict, 'sufficient');
+  assert.equal(result.coveredClaimCount, 0);
+  assert.equal(result.pageAttempts.every((attempt) => attempt.subjectMismatch), true);
+  assert.equal(result.diagnostics.subjectConsistencyRate, 0);
 });
 
 function page(url: string, content: string): FetchPageResult {

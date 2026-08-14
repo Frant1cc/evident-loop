@@ -16,7 +16,9 @@ export const webQualityThresholds = {
   highConfidenceSingleSource: 0.76,
   multiSourceSufficient: 0.62,
   claimCoverageSufficient: 0.8,
-  claimSupportScore: 0.55
+  claimSupportScore: 0.55,
+  subjectConsistencySufficient: 0.8,
+  pageSubjectConsistency: 0.5
 } as const;
 
 const trackingParameters = new Set([

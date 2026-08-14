@@ -29,11 +29,13 @@ export type WebEvalCaseResult = {
   budgetExhausted: boolean;
   officialSourceRate: number;
   pageExtractionSuccessRate: number;
+  subjectConsistencyRate: number;
+  subjectMismatchUrls: string[];
   failureReason: WebEvalFailureReason;
   uncoveredNeedLabels: string[];
 };
 
-export type WebEvalFailureReason = 'passed' | 'false_sufficient' | 'budget_exhausted' | 'no_sources' | 'official_source_missing' | 'evidence_gap' | 'low_rank';
+export type WebEvalFailureReason = 'passed' | 'false_sufficient' | 'subject_mismatch' | 'budget_exhausted' | 'no_sources' | 'official_source_missing' | 'evidence_gap' | 'low_rank';
 
 export type WebEvalMetrics = {
   caseCount: number;
@@ -56,6 +58,8 @@ export type WebEvalMetrics = {
   officialSourceRate: number;
   pageExtractionSuccessRate: number;
   p95QueryCount: number;
+  subjectConsistencyRate: number;
+  subjectMismatchCount: number;
   failureReasons: Array<{ code: Exclude<WebEvalFailureReason, 'passed'>; count: number; caseIds: string[] }>;
 };
 
@@ -125,8 +129,10 @@ export function evaluateCase(testCase: WebEvalCase, result: WebRetrievalResult, 
   const pageExtractionSuccessRate = result.pageAttempts.length
     ? result.pageAttempts.filter((attempt) => attempt.selectedChunkCount > 0 && attempt.verdict !== 'unreadable').length / result.pageAttempts.length
     : 0;
+  const subjectConsistencyRate = result.diagnostics.subjectConsistencyRate ?? 1;
+  const subjectMismatchUrls = result.diagnostics.subjectMismatchUrls ?? [];
   const uncoveredNeedLabels = supportedNeeds.filter((need) => !need.supported).map((need) => need.label);
-  const failureReason = classifyFailure({ passed, falseSufficient, budgetExhausted, retrieved, expectedDomains: testCase.expectedDomains, evidenceRecall, hitAtK: Boolean(firstRelevant && firstRelevant <= k) });
+  const failureReason = classifyFailure({ passed, falseSufficient, subjectMismatch: subjectMismatchUrls.length > 0, budgetExhausted, retrieved, expectedDomains: testCase.expectedDomains, evidenceRecall, hitAtK: Boolean(firstRelevant && firstRelevant <= k) });
 
   return {
     id: testCase.id,
@@ -151,14 +157,14 @@ export function evaluateCase(testCase: WebEvalCase, result: WebRetrievalResult, 
     retrievalQueries: result.retrievalQueries,
     stopReason: result.diagnostics.stopReason,
     firstQueryHit, rewriteTriggered, rewriteRecovered, budgetExhausted,
-    officialSourceRate, pageExtractionSuccessRate, failureReason, uncoveredNeedLabels
+    officialSourceRate, pageExtractionSuccessRate, subjectConsistencyRate, subjectMismatchUrls, failureReason, uncoveredNeedLabels
   };
 }
 
 function aggregate(cases: WebEvalCaseResult[]): WebEvalMetrics {
   const count = cases.length || 1;
   const rewrites = cases.filter((item) => item.rewriteTriggered);
-  const failureCodes: Array<Exclude<WebEvalFailureReason, 'passed'>> = ['false_sufficient', 'budget_exhausted', 'no_sources', 'official_source_missing', 'evidence_gap', 'low_rank'];
+  const failureCodes: Array<Exclude<WebEvalFailureReason, 'passed'>> = ['false_sufficient', 'subject_mismatch', 'budget_exhausted', 'no_sources', 'official_source_missing', 'evidence_gap', 'low_rank'];
   return {
     caseCount: cases.length,
     passRate: average(cases.map((item) => Number(item.passed)), count),
@@ -180,14 +186,17 @@ function aggregate(cases: WebEvalCaseResult[]): WebEvalMetrics {
     officialSourceRate: average(cases.filter((item) => item.answerable).map((item) => item.officialSourceRate)),
     pageExtractionSuccessRate: average(cases.map((item) => item.pageExtractionSuccessRate), count),
     p95QueryCount: percentile(cases.map((item) => item.queryCount), 0.95),
+    subjectConsistencyRate: average(cases.map((item) => item.subjectConsistencyRate), count),
+    subjectMismatchCount: cases.filter((item) => item.subjectMismatchUrls.length > 0).length,
     failureReasons: failureCodes.map((code) => ({ code, caseIds: cases.filter((item) => item.failureReason === code).map((item) => item.id) }))
       .map((item) => ({ ...item, count: item.caseIds.length })).filter((item) => item.count > 0)
   };
 }
 
-function classifyFailure(input: { passed: boolean; falseSufficient: boolean; budgetExhausted: boolean; retrieved: WebEvalCaseResult['retrieved']; expectedDomains: string[]; evidenceRecall: number; hitAtK: boolean }): WebEvalFailureReason {
+function classifyFailure(input: { passed: boolean; falseSufficient: boolean; subjectMismatch: boolean; budgetExhausted: boolean; retrieved: WebEvalCaseResult['retrieved']; expectedDomains: string[]; evidenceRecall: number; hitAtK: boolean }): WebEvalFailureReason {
   if (input.passed) return 'passed';
   if (input.falseSufficient) return 'false_sufficient';
+  if (input.subjectMismatch) return 'subject_mismatch';
   if (input.budgetExhausted) return 'budget_exhausted';
   if (!input.retrieved.length) return 'no_sources';
   if (!input.retrieved.some((item) => domainMatches(item.domain, input.expectedDomains))) return 'official_source_missing';

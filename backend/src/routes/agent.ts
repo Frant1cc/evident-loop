@@ -5,6 +5,8 @@ import { runAgentLoop } from '../agent/agentLoop.js';
 import { createConfiguredLlm } from '../llm/config.js';
 import { LlmProviderApiError } from '../llm/openAiCompatibleClient.js';
 import { failure, success } from '../response.js';
+import type { ToolRuntime } from '../tools/contracts.js';
+import { builtInToolRuntime } from '../tools/runtime.js';
 import { isExplicitWordDocumentRequest } from '../tools/wordDocumentTool.js';
 
 const AGENT_SYSTEM_PROMPT = `You are EvidentLoop, an evidence-first durable research agent.
@@ -31,56 +33,61 @@ Rules:
 - If a tool fails, explain the failure based on the tool error instead of pretending it succeeded.
 - Stop calling tools once you have enough information to answer.`;
 
-export const agentRouter = Router();
+export function createAgentRouter(toolRuntime: ToolRuntime = builtInToolRuntime) {
+  const router = Router();
+  router.post('/agent/chat', async (req, res) => {
+    const configuredLlm = createConfiguredLlm();
 
-agentRouter.post('/agent/chat', async (req, res) => {
-  const configuredLlm = createConfiguredLlm();
-
-  if (!configuredLlm.llm) {
-    res.status(500).json(failure(`${configuredLlm.providerName} API key is not configured`));
-    return;
-  }
-
-  const message = String(req.body?.message ?? '').trim();
-
-  if (!message) {
-    res.status(400).json(failure('message is required'));
-    return;
-  }
-
-  // Abort the loop when the client disconnects so we stop burning LLM/tool budget on abandoned requests.
-  const controller = new AbortController();
-  res.on('close', () => {
-    if (!res.writableEnded) {
-      controller.abort(new Error('Client disconnected before the agent finished'));
-    }
-  });
-
-  try {
-    const result = await runAgentLoop({
-      llm: configuredLlm.llm,
-      message,
-      model: configuredLlm.model,
-      systemPrompt: AGENT_SYSTEM_PROMPT,
-      maxToolRounds: DEFAULT_MAX_TOOL_ROUNDS,
-      requiredToolName: isExplicitWordDocumentRequest(message)
-        ? 'generate_word_document'
-        : undefined,
-      signal: controller.signal
-    });
-
-    res.json(success(result));
-  } catch (error) {
-    // Connection is already gone; nothing to respond to.
-    if (controller.signal.aborted) return;
-
-    if (error instanceof LlmProviderApiError) {
-      // 401/403 mean a misconfigured key on our side; anything else is an upstream failure.
-      const isConfigIssue = error.status === 401 || error.status === 403;
-      res.status(isConfigIssue ? 500 : 502).json(failure(error.message));
+    if (!configuredLlm.llm) {
+      res.status(500).json(failure(`${configuredLlm.providerName} API key is not configured`));
       return;
     }
 
-    res.status(500).json(failure(error instanceof Error ? error.message : 'Agent chat failed'));
-  }
-});
+    const message = String(req.body?.message ?? '').trim();
+
+    if (!message) {
+      res.status(400).json(failure('message is required'));
+      return;
+    }
+
+    // Abort the loop when the client disconnects so we stop burning LLM/tool budget on abandoned requests.
+    const controller = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) {
+        controller.abort(new Error('Client disconnected before the agent finished'));
+      }
+    });
+
+    try {
+      const result = await runAgentLoop({
+        llm: configuredLlm.llm,
+        message,
+        model: configuredLlm.model,
+        systemPrompt: AGENT_SYSTEM_PROMPT,
+        maxToolRounds: DEFAULT_MAX_TOOL_ROUNDS,
+        toolRuntime,
+        requiredToolName: isExplicitWordDocumentRequest(message)
+          ? 'generate_word_document'
+          : undefined,
+        signal: controller.signal
+      });
+
+      res.json(success(result));
+    } catch (error) {
+      // Connection is already gone; nothing to respond to.
+      if (controller.signal.aborted) return;
+
+      if (error instanceof LlmProviderApiError) {
+        // 401/403 mean a misconfigured key on our side; anything else is an upstream failure.
+        const isConfigIssue = error.status === 401 || error.status === 403;
+        res.status(isConfigIssue ? 500 : 502).json(failure(error.message));
+        return;
+      }
+
+      res.status(500).json(failure(error instanceof Error ? error.message : 'Agent chat failed'));
+    }
+  });
+  return router;
+}
+
+export const agentRouter = createAgentRouter();
