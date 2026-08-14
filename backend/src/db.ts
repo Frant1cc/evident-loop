@@ -5,6 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { migrateKnowledgeSchema } from './knowledge/migrate.js';
+import { migrateChatConversationsToResearch } from './research/migrateChat.js';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const evidentLoopDbPath = resolve(currentDir, '../data/evident-loop.sqlite');
@@ -452,4 +453,5 @@ export const initDb = () => {
   }
 
   migrateKnowledgeSchema(sqlite);
+  migrateChatConversationsToResearch(sqlite);
 };

@@ -1,11 +1,10 @@
-export const configurableTabKeys = ['chat', 'research', 'tasks', 'evaluations', 'knowledge'] as const;
+export const configurableTabKeys = ['research', 'tasks', 'evaluations', 'knowledge'] as const;
 
 export type ConfigurableTabKey = (typeof configurableTabKeys)[number];
 export type AppTabKey = ConfigurableTabKey | 'settings';
 export type TabVisibility = Record<ConfigurableTabKey, boolean>;
 
 export const defaultTabVisibility: TabVisibility = {
-  chat: true,
   research: true,
   tasks: true,
   evaluations: true,

@@ -11,6 +11,7 @@ import { appendStreamEvent } from '../streaming/eventStore.js';
 import { publishStreamEvent, subscribeToStream } from '../streaming/eventHub.js';
 import { isExplicitWordDocumentRequest } from '../tools/wordDocumentTool.js';
 import { buildResearchContext, createConversationTitle } from './context.js';
+import { resolveExecutionMode } from './executionMode.js';
 import {
   addResearchSource,
   createResearchMessage,
@@ -35,6 +36,7 @@ import type {
   ResearchMessage,
   ResearchPromptPreview,
   ResearchRun,
+  ResearchRunInput,
   ResearchSource,
   ResearchStep
 } from './types.js';
@@ -67,6 +69,13 @@ Rules:
 - When generate_word_document succeeds, call it only once. The client renders the document card from the structured tool result, so do not include downloadUrl, previewUrl, localhost URLs, Markdown download links, or redundant download instructions in the final answer. Give only a concise content summary when useful.
 - If a tool fails, explain the failure based on the tool error instead of pretending it succeeded.
 - Stop calling tools once you have enough information to answer.`;
+
+// Quick conversations run a single streaming LLM call with no tools, no agent loop and
+// no skill instructions (§6.3). The prompt stays short and never promises tool usage.
+const QUICK_SYSTEM_PROMPT = `You are EvidentLoop, a clear and helpful AI assistant.
+Answer the user's request directly and accurately.
+Do not claim to have searched tools, documents, or the web when no tools were provided.
+If current external information is required, explain that the user can enable an appropriate tool.`;
 
 /**
  * Append a trusted skill block to the base prompt. The base prompt's evidence,
@@ -139,6 +148,7 @@ export function createAndStartResearchRun(options: {
     content: '',
     status: 'streaming'
   });
+  const toolPolicy = normalizeToolPolicy(options.toolPolicy);
   const run = createResearchRun({
     conversationId: conversation.id,
     userMessageId: userMessage.id,
@@ -147,8 +157,9 @@ export function createAndStartResearchRun(options: {
       content: options.content,
       contextMessages,
       promptPreview,
-      toolPolicy: options.toolPolicy,
-      ...(options.skill ? { skill: options.skill } : {})
+      toolPolicy,
+      ...(options.skill ? { skill: options.skill } : {}),
+      executionMode: resolveExecutionMode(options.skill, toolPolicy)
     }
   });
 
@@ -239,30 +250,38 @@ async function executePersistedResearchRun(options: {
   if (!run || !runInput || run.status !== 'queued') return;
   const storedInput = runInput as typeof runInput & { allowedToolNames?: string[] };
   const toolPolicy = normalizeToolPolicy(storedInput.toolPolicy ?? storedInput.allowedToolNames);
-
-  // Resolve the exact skill version and verify its digest. A missing version or
-  // digest mismatch fails loudly rather than silently using the latest (§6.2).
-  const resolvedSkill = runInput.skill && options.skillRuntime
-    ? options.skillRuntime.resolveSnapshot(runInput.skill)
-    : undefined;
-  const systemPrompt = composeResearchSystemPrompt(AGENT_SYSTEM_PROMPT, resolvedSkill?.definition);
+  // Runs created before executionMode existed are interpreted as 'research' (§6.1); we never
+  // re-derive an old run's mode from today's rules.
+  const executionMode = runInput.executionMode ?? 'research';
 
   const abortController = new AbortController();
   activeControllers.set(run.id, abortController);
   run = updateResearchRun(run.id, { status: 'running', startedAt: new Date().toISOString() }) ?? run;
   emit(run.id, { type: 'run_updated', run });
 
-  let sequence = listResearchSteps(run.conversationId)
-    .filter((step) => step.messageId === run!.assistantMessageId)
-    .reduce((maximum, step) => Math.max(maximum, step.sequence), 0);
-  const existingSources = listResearchSources(run.conversationId)
-    .filter((source) => source.messageId === run!.assistantMessageId);
-  let citationNumber = existingSources.length;
-  const sourceIds = new Set(existingSources.map((source) => source.id));
-  const researchSources = [...existingSources];
+  if (executionMode === 'quick') {
+    await runQuickConversation({ run, runInput, llm: options.llm, model: options.model, abortController });
+    return;
+  }
+
   const activeToolSteps = new Map<string, ResearchStep>();
 
   try {
+    // Resolve the exact skill version and verify its digest inside the protected
+    // lifecycle so a missing version or digest mismatch fails the persisted run.
+    const resolvedSkill = runInput.skill && options.skillRuntime
+      ? options.skillRuntime.resolveSnapshot(runInput.skill)
+      : undefined;
+    const systemPrompt = composeResearchSystemPrompt(AGENT_SYSTEM_PROMPT, resolvedSkill?.definition);
+    let sequence = listResearchSteps(run.conversationId)
+      .filter((step) => step.messageId === run!.assistantMessageId)
+      .reduce((maximum, step) => Math.max(maximum, step.sequence), 0);
+    const existingSources = listResearchSources(run.conversationId)
+      .filter((source) => source.messageId === run!.assistantMessageId);
+    let citationNumber = existingSources.length;
+    const sourceIds = new Set(existingSources.map((source) => source.id));
+    const researchSources = [...existingSources];
+
     const result = await options.runAgent({
       apiKey: options.apiKey,
       llm: options.llm,
@@ -317,6 +336,7 @@ async function executePersistedResearchRun(options: {
       promptPreview,
       run: completedRun
     });
+    emit(run.id, { type: 'run_updated', run: completedRun });
     emit(run.id, { type: 'done', run: completedRun });
   } catch (error) {
     if (getResearchRun(run.id)?.status === 'cancelled') return;
@@ -326,6 +346,81 @@ async function executePersistedResearchRun(options: {
       const step = updateResearchStep(activeStep.id, { status: 'error', output: undefined, error: message });
       if (step) emit(run.id, { type: 'research_step', step });
     }
+    const failedRun = updateResearchRun(run.id, {
+      status: 'failed',
+      error: message,
+      completedAt: new Date().toISOString()
+    });
+    if (failedRun) emit(run.id, { type: 'error', message, assistantMessage: failedMessage, run: failedRun });
+  } finally {
+    activeControllers.delete(run.id);
+  }
+}
+
+/**
+ * Quick conversation branch (§6.2): a single streaming LLM call with no tools, no skill
+ * instructions and no research steps or sources. It reuses the Research Run lifecycle and
+ * SSE events (assistant_delta / research_message_completed / run_updated / done) so the
+ * frontend renders it through the same pipeline as a research run.
+ */
+async function runQuickConversation(options: {
+  run: ResearchRun;
+  runInput: ResearchRunInput;
+  llm?: LlmProvider;
+  model: string;
+  abortController: AbortController;
+}) {
+  const { run, runInput, abortController } = options;
+  try {
+    if (!options.llm) throw new Error('LLM provider is not configured');
+
+    let reply = '';
+    await options.llm.stream(
+      {
+        model: options.model,
+        messages: [
+          { role: 'system', content: QUICK_SYSTEM_PROMPT },
+          ...runInput.contextMessages,
+          { role: 'user', content: runInput.content }
+        ],
+        signal: abortController.signal
+      },
+      (delta) => {
+        if (!delta.content) return;
+        reply += delta.content;
+        emit(run.id, { type: 'assistant_delta', messageId: run.assistantMessageId, content: delta.content });
+      }
+    );
+
+    if (getResearchRun(run.id)?.status === 'cancelled') return;
+    const completedMessage = updateResearchMessage(run.assistantMessageId, { content: reply, status: 'complete' });
+    if (!completedMessage) throw new Error('Research assistant message could not be completed');
+
+    const conversation = getResearchConversation(run.conversationId);
+    if (!conversation) throw new Error('Research conversation disappeared during execution');
+    const promptPreview = buildResearchContext(
+      conversation,
+      listResearchMessages(run.conversationId),
+      runInput.content
+    ).promptPreview;
+    const completedRun = updateResearchRun(run.id, {
+      status: 'completed',
+      completedAt: new Date().toISOString()
+    });
+    if (!completedRun) throw new Error('Research task could not be completed');
+    emit(run.id, {
+      type: 'research_message_completed',
+      message: completedMessage,
+      sources: [],
+      promptPreview,
+      run: completedRun
+    });
+    emit(run.id, { type: 'run_updated', run: completedRun });
+    emit(run.id, { type: 'done', run: completedRun });
+  } catch (error) {
+    if (getResearchRun(run.id)?.status === 'cancelled') return;
+    const message = getResearchFailureMessage(error);
+    const failedMessage = updateResearchMessage(run.assistantMessageId, { content: message, status: 'error' });
     const failedRun = updateResearchRun(run.id, {
       status: 'failed',
       error: message,

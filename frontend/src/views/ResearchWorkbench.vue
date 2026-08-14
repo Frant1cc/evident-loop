@@ -58,7 +58,7 @@ const stopping = ref(false);
 const activeRun = ref<ResearchRun>();
 const error = ref('');
 const collapsed = useCollapsiblePanel('research:sidebar-collapsed');
-const inspectorCollapsed = useCollapsiblePanel('research:inspector-collapsed');
+const inspectorCollapsed = useCollapsiblePanel('research:inspector-collapsed', true);
 const selectedSourceId = ref<string>();
 const selectedStep = ref<ResearchStep>();
 const activeRailTab = ref<'timeline' | 'sources' | 'details'>('timeline');
@@ -132,9 +132,10 @@ async function loadTools() {
   try {
     const { tools } = await listResearchTools();
     availableTools.value = tools;
-    enabledTools.value = Object.fromEntries(tools.map((tool) => [tool.name, true]));
+    // Every conversation starts with all tools OFF so the first turn is a quick chat (§4.1, §7).
+    enabledTools.value = Object.fromEntries(tools.map((tool) => [tool.name, false]));
   } catch {
-    // Tool toggles are an enhancement; the workbench still works with all tools when the list fails to load.
+    // Tool toggles are an enhancement; a failed load leaves the workbench in quick-chat mode.
   }
 }
 
@@ -143,7 +144,7 @@ async function loadSkills() {
     const { skills } = await listResearchSkills();
     availableSkills.value = skills;
   } catch {
-    // Skills are optional; a failed load falls back to "通用研究" while research keeps working.
+    // Skills are optional; a failed load leaves the next turn without a selected skill.
     availableSkills.value = [];
     selectedSkillId.value = undefined;
   }
@@ -181,12 +182,20 @@ async function createConversation() {
   await selectConversation(conversation.id);
 }
 
+// §4.1/§7: each conversation opens with no skill and all tools off. Skill/tools belong to the
+// Run, not the conversation, so there is no carry-over between conversations.
+function resetTurnDefaults() {
+  selectedSkillId.value = undefined;
+  for (const name of Object.keys(enabledTools.value)) enabledTools.value[name] = false;
+}
+
 async function selectConversation(id: string) {
   if (id === activeConversationId.value) return;
   disconnectResearchStream();
   loading.value = false;
   stopping.value = false;
   activeRun.value = undefined;
+  resetTurnDefaults();
   const detail = await getResearchConversation(id);
   activeConversationId.value = id;
   applyConversationDetail(detail);
@@ -241,7 +250,7 @@ function connectToRun(run: ResearchRun) {
   })
     .catch(async (err) => {
       if ((err as Error).name === 'AbortError' || sequence !== subscriptionSequence) return;
-      error.value = err instanceof Error ? `${err.message}，任务仍在后台运行。` : '研究进度连接已断开，任务仍在后台运行。';
+      error.value = err instanceof Error ? `${err.message}，任务仍在后台运行。` : '生成进度连接已断开，任务仍在后台运行。';
       await reloadActiveConversation();
     })
     .finally(() => {
@@ -345,7 +354,7 @@ async function stopResearch() {
     applyRun(result.run);
     await reloadActiveConversation();
   } catch (err) {
-    error.value = err instanceof Error ? err.message : '停止研究失败';
+    error.value = err instanceof Error ? err.message : '停止生成失败';
   } finally {
     stopping.value = false;
   }

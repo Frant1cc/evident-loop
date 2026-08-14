@@ -38,7 +38,8 @@ const enabledCount = computed(() => props.tools.filter((tool) => props.enabledTo
 const allDisabled = computed(() => props.tools.length > 0 && enabledCount.value === 0);
 
 const selectedSkill = computed(() => props.skills.find((skill) => skill.id === props.selectedSkillId));
-const skillLabel = computed(() => selectedSkill.value?.label ?? '通用研究');
+// "No skill" is an unselected state, not a pseudo-skill (§4.3, §15).
+const skillLabel = computed(() => selectedSkill.value?.label ?? '技能');
 // Tools the active skill requires are locked on and cannot be toggled off (§12.3).
 const requiredToolNames = computed(() => new Set(selectedSkill.value?.requiredTools ?? []));
 
@@ -64,12 +65,12 @@ function handleToggleTool(name: string) {
     class="rounded-2xl border border-input bg-card p-2 shadow-[0_12px_40px_-24px_oklch(0.145_0_0_/_0.45)] transition-shadow focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/20 dark:border-white/[0.09] dark:bg-card/80 dark:shadow-[0_18px_48px_-30px_rgb(0_0_0_/_0.9)]"
     @submit.prevent="loading || emit('send')"
   >
-    <label for="research-prompt" class="sr-only">输入研究问题</label>
+    <label for="research-prompt" class="sr-only">输入问题</label>
     <Textarea
       id="research-prompt"
       v-model="model"
       rows="1"
-      placeholder="输入研究问题…"
+      placeholder="输入问题…"
       autocomplete="off"
       class="max-h-44 min-h-12 resize-none border-0 bg-transparent px-2.5 py-2.5 shadow-none focus-visible:ring-0 dark:bg-transparent"
       @keydown="handleKeydown"
@@ -82,7 +83,7 @@ function handleToggleTool(name: string) {
             <CollapsibleTrigger as-child>
               <Button type="button" variant="ghost" size="sm" class="gap-1.5" :disabled="loading" :aria-expanded="skillsOpen">
                 <PhLightbulb :size="14" weight="bold" aria-hidden="true" />
-                技能：{{ skillLabel }}
+                {{ skillLabel }}
                 <PhCaretDown :size="13" class="transition-transform" :class="skillsOpen ? 'rotate-180' : ''" aria-hidden="true" />
               </Button>
             </CollapsibleTrigger>
@@ -93,16 +94,11 @@ function handleToggleTool(name: string) {
               <p class="px-2 py-1 text-[11px] font-medium text-muted-foreground">研究技能</p>
               <button
                 type="button"
-                :disabled="loading"
-                :aria-pressed="!selectedSkillId"
-                class="flex w-full items-start gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                :disabled="loading || !selectedSkillId"
+                class="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40"
                 @click="selectSkill(undefined)"
               >
-                <span class="min-w-0 flex-1">
-                  <span class="block font-medium text-foreground">通用研究</span>
-                  <span class="block text-[11px] text-muted-foreground">不启用官方技能，按默认方式研究。</span>
-                </span>
-                <PhCheck v-if="!selectedSkillId" :size="15" weight="bold" class="mt-0.5 shrink-0 text-primary" aria-hidden="true" />
+                <span class="min-w-0 flex-1 font-medium text-foreground">清除技能</span>
               </button>
               <button
                 v-for="skill in skills"
@@ -126,7 +122,7 @@ function handleToggleTool(name: string) {
         <div v-if="tools.length" ref="toolsMenu" class="relative">
           <Collapsible v-model:open="toolsOpen">
             <CollapsibleTrigger as-child>
-              <Button type="button" variant="ghost" size="sm" class="gap-1.5" :aria-expanded="toolsOpen">
+              <Button type="button" variant="ghost" size="sm" class="gap-1.5" :disabled="loading" :aria-expanded="toolsOpen">
                 <PhWrench :size="14" weight="bold" aria-hidden="true" />
                 工具 {{ enabledCount }}/{{ tools.length }}
                 <PhCaretDown :size="13" class="transition-transform" :class="toolsOpen ? 'rotate-180' : ''" aria-hidden="true" />
@@ -155,8 +151,8 @@ function handleToggleTool(name: string) {
           </Collapsible>
         </div>
 
-        <span v-if="allDisabled" class="truncate text-[11px] font-medium text-destructive" role="alert">
-          已关闭全部工具，本轮仅凭模型自身知识回答
+        <span v-if="allDisabled" class="truncate text-[11px] text-muted-foreground">
+          未启用工具，本轮直接对话
         </span>
       </div>
 
@@ -167,7 +163,7 @@ function handleToggleTool(name: string) {
         size="icon"
         class="rounded-xl"
         :disabled="stopping"
-        :aria-label="stopping ? '正在停止' : '停止研究'"
+        :aria-label="stopping ? '正在停止' : '停止生成'"
         @click="emit('stop')"
       >
         <PhCircleNotch v-if="stopping" :size="17" class="animate-spin" aria-hidden="true" />
@@ -179,7 +175,7 @@ function handleToggleTool(name: string) {
         size="icon"
         class="rounded-xl"
         :disabled="!model.trim()"
-        aria-label="发送研究问题"
+        aria-label="发送消息"
       >
         <PhArrowUp :size="17" weight="bold" aria-hidden="true" />
       </Button>

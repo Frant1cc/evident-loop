@@ -3,7 +3,6 @@ import { computed } from 'vue';
 import {
   PhArrowCounterClockwise,
   PhBooks,
-  PhChatCircleText,
   PhFlask,
   PhFlowArrow,
   PhGauge,
@@ -30,12 +29,6 @@ const emit = defineEmits<{
 }>();
 
 const tabOptions = [
-  {
-    key: 'chat',
-    label: '对话',
-    description: '与 AI 助手进行即时问答和连续对话。',
-    icon: PhChatCircleText
-  },
   {
     key: 'research',
     label: '研究工作台',
@@ -127,7 +120,7 @@ function restoreDefaults() {
             </div>
           </div>
 
-          <p class="m-0 border-t border-border bg-muted/30 px-5 py-3 text-xs leading-5 text-muted-foreground">固定顺序：对话、研究工作台、Agent 运行时、质量评测、知识库、设置。</p>
+          <p class="m-0 border-t border-border bg-muted/30 px-5 py-3 text-xs leading-5 text-muted-foreground">固定顺序：研究工作台、Agent 运行时、质量评测、知识库、设置。</p>
         </div>
       </section>
     </div>

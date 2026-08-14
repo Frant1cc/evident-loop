@@ -41,7 +41,7 @@ import type {
   ToolExecution
 } from '../types/tasks';
 import { listResearchTools } from '../api/research';
-import MarkdownMessage from '../components/chat/MarkdownMessage.vue';
+import MarkdownMessage from '../components/conversation/MarkdownMessage.vue';
 import PanelResizeHandle from '../components/common/PanelResizeHandle.vue';
 import TaskCreateForm from '../components/tasks/TaskCreateForm.vue';
 import TaskHistorySidebar from '../components/tasks/TaskHistorySidebar.vue';
