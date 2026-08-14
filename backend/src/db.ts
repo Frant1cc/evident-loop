@@ -445,5 +445,11 @@ export const initDb = () => {
     ON agent_artifacts(task_id, updated_at DESC);
   `);
 
+  // Existing installations created before the local-library metadata field.
+  const columns = sqlite.prepare('PRAGMA table_info(web_evaluation_cases)').all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === 'metadata_json')) {
+    sqlite.exec('ALTER TABLE web_evaluation_cases ADD COLUMN metadata_json TEXT');
+  }
+
   migrateKnowledgeSchema(sqlite);
 };

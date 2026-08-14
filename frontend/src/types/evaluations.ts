@@ -172,7 +172,7 @@ export type RagEvaluationDiff = {
 };
 
 export type WebEvaluationStatus = 'queued' | 'running' | 'completed' | 'failed';
-export type WebEvaluationCategory = 'official_api' | 'freshness' | 'multi_claim' | 'unanswerable';
+export type WebEvaluationCategory = 'official_api' | 'freshness' | 'multi_claim' | 'unanswerable' | 'url_direct';
 
 export type WebEvaluationCase = {
   id: string;
@@ -184,6 +184,9 @@ export type WebEvaluationCase = {
   timeRange?: 'day' | 'week' | 'month' | 'year';
   expectedDomains: string[];
   evidenceNeeds: Array<{ id: string; label: string }>;
+  tags: string[];
+  difficulty: 'easy' | 'medium' | 'hard';
+  suites: Array<'smoke' | 'regression'>;
   custom?: boolean;
 };
 
@@ -209,7 +212,19 @@ export type WebEvaluationCaseResult = {
   coverageScore: number;
   retrievalQueries: string[];
   stopReason: string;
+  firstQueryHit?: boolean;
+  rewriteTriggered?: boolean;
+  rewriteRecovered?: boolean;
+  budgetExhausted?: boolean;
+  officialSourceRate?: number;
+  pageExtractionSuccessRate?: number;
+  subjectConsistencyRate?: number;
+  subjectMismatchUrls?: string[];
+  failureReason?: WebEvaluationFailureReason;
+  uncoveredNeedLabels?: string[];
 };
+
+export type WebEvaluationFailureReason = 'passed' | 'false_sufficient' | 'subject_mismatch' | 'budget_exhausted' | 'no_sources' | 'official_source_missing' | 'evidence_gap' | 'low_rank';
 
 export type WebEvaluationMetrics = {
   caseCount: number;
@@ -223,6 +238,18 @@ export type WebEvaluationMetrics = {
   avgQueryCount: number;
   avgPageCount: number;
   avgDurationMs: number;
+  budgetExhaustedCount?: number;
+  budgetExhaustedRate?: number;
+  firstQueryHitRate?: number;
+  rewriteTriggeredCount?: number;
+  rewriteTriggeredRate?: number;
+  rewriteRecoveryRate?: number;
+  officialSourceRate?: number;
+  pageExtractionSuccessRate?: number;
+  p95QueryCount?: number;
+  subjectConsistencyRate?: number;
+  subjectMismatchCount?: number;
+  failureReasons?: Array<{ code: Exclude<WebEvaluationFailureReason, 'passed'>; count: number; caseIds: string[] }>;
 };
 
 export type WebEvaluation = {
@@ -232,8 +259,8 @@ export type WebEvaluation = {
   completedCases: number;
   totalCases: number;
   currentCaseId?: string;
-  config: { caseIds: string[]; suiteVersion: number; k: number };
-  report?: { schemaVersion: 1; suiteVersion: number; evaluatedAt: string; durationMs: number; k: number; metrics: WebEvaluationMetrics; cases: WebEvaluationCaseResult[] };
+  config: { caseIds: string[]; suiteVersion: number; k: number; caseSnapshot?: WebEvaluationCase[] };
+  report?: { schemaVersion: 1 | 2; suiteVersion: number; evaluatedAt: string; durationMs: number; k: number; metrics: WebEvaluationMetrics; cases: WebEvaluationCaseResult[] };
   error?: string;
   createdAt: string;
   startedAt?: string;

@@ -54,7 +54,15 @@ export function subscribeToRagEvaluation(
 }
 
 export function listWebEvaluationCases() {
-  return request<{ cases: WebEvaluationCase[] }>('/api/web/evaluation-cases');
+  return request<{ cases: WebEvaluationCase[]; benchmarkVersion: number; suites: { smoke: string[]; regression: string[] } }>('/api/web/evaluation-cases');
+}
+
+export function exportWebEvaluationCases() {
+  return request<{ library: WebEvaluationLibraryExport }>('/api/web/evaluation-cases/export');
+}
+
+export function importWebEvaluationCases(library: WebEvaluationLibraryExport) {
+  return request<{ importedCount: number; cases: WebEvaluationCase[] }>('/api/web/evaluation-cases/import', { method: 'POST', body: library });
 }
 
 export function createWebEvaluationCase(input: {
@@ -121,3 +129,10 @@ async function request<T>(path: string, init: { method?: string; body?: unknown 
   }
   return payload.data;
 }
+
+export type WebEvaluationLibraryExport = {
+  schemaVersion: 1;
+  exportedAt: string;
+  benchmark: { version: number; caseCount: number };
+  localCases: Array<WebEvaluationCase & { createdAt: string; updatedAt: string }>;
+};

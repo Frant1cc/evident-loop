@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 
 import { retrieveWebEvidence } from '../controller.js';
 import { getWebEvalCases, webEvalCases, webEvalSuiteVersion, type WebEvalCase } from './fixtures.js';
-import { listCustomWebEvalCases } from './caseStore.js';
+import { exportCustomWebEvalCases, listCustomWebEvalCases } from './caseStore.js';
 import { runWebEvaluation, type WebEvalProgress } from './run.js';
 import { createWebEvaluationRecord, updateWebEvaluationRecord, type WebEvaluationRecord } from './store.js';
 
@@ -16,6 +16,21 @@ export function listWebEvaluationCases() {
   const baseline = webEvalCases.map((item) => ({ ...item, custom: false }));
   const custom = listCustomWebEvalCases().map((item) => ({ ...item, custom: true }));
   return [...baseline, ...custom].map(({ expectedEvidence, ...item }) => ({ ...item, evidenceNeeds: expectedEvidence.map(({ id, label }) => ({ id, label })) }));
+}
+
+export function getWebEvaluationLibrary() {
+  return {
+    benchmarkVersion: webEvalSuiteVersion,
+    suites: {
+      smoke: webEvalCases.filter((item) => item.suites.includes('smoke')).map((item) => item.id),
+      regression: webEvalCases.filter((item) => item.suites.includes('regression')).map((item) => item.id)
+    },
+    cases: listWebEvaluationCases()
+  };
+}
+
+export function exportWebEvaluationLibrary() {
+  return exportCustomWebEvalCases(webEvalSuiteVersion, webEvalCases.length);
 }
 
 export function createAndStartWebEvaluation(input: { name?: string; caseIds?: unknown; k?: unknown } = {}) {
@@ -31,7 +46,7 @@ export function createAndStartWebEvaluation(input: { name?: string; caseIds?: un
   const record = createWebEvaluationRecord({
     id: randomUUID(), name: input.name?.trim().slice(0, 80) || `联网评测 · ${now.slice(0, 16).replace('T', ' ')}`,
     status: 'queued', completedCases: 0, totalCases: cases.length,
-    config: { caseIds: cases.map((item) => item.id), suiteVersion: webEvalSuiteVersion, k },
+    config: { caseIds: cases.map((item) => item.id), suiteVersion: webEvalSuiteVersion, k, caseSnapshot: cases },
     createdAt: now, updatedAt: now
   });
   activeEvaluationId = record.id;

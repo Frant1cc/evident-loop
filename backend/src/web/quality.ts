@@ -16,7 +16,9 @@ export const webQualityThresholds = {
   highConfidenceSingleSource: 0.76,
   multiSourceSufficient: 0.62,
   claimCoverageSufficient: 0.8,
-  claimSupportScore: 0.55
+  claimSupportScore: 0.55,
+  subjectConsistencySufficient: 0.8,
+  pageSubjectConsistency: 0.5
 } as const;
 
 const trackingParameters = new Set([
@@ -47,7 +49,11 @@ export function canonicalizeWebUrl(rawUrl: string) {
   return parsed.toString();
 }
 
-export function scoreSearchResults(question: string, results: WebSearchResult[]): ScoredWebSearchResult[] {
+export function scoreSearchResults(
+  question: string,
+  results: WebSearchResult[],
+  preferredDomains: string[] = []
+): ScoredWebSearchResult[] {
   const byUrl = new Map<string, ScoredWebSearchResult>();
 
   for (const result of results) {
@@ -64,8 +70,11 @@ export function scoreSearchResults(question: string, results: WebSearchResult[])
     const lexicalScore = lexicalRelevance(question, `${result.title}\n${result.snippet}`);
     const completenessScore = [result.title.trim(), result.url.trim(), result.snippet.trim()]
       .filter(Boolean).length / 3;
+    const authorityBoost = preferredDomains.some((preferred) =>
+      domain === preferred || domain.endsWith(`.${preferred}`)
+    ) ? 0.12 : 0;
     const finalScore = clamp01(
-      providerScore * 0.55 + lexicalScore * 0.35 + completenessScore * 0.10
+      providerScore * 0.55 + lexicalScore * 0.35 + completenessScore * 0.10 + authorityBoost
     );
     const scored: ScoredWebSearchResult = {
       ...result,
