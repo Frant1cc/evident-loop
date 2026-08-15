@@ -1,6 +1,6 @@
 import type { LlmProvider } from '../../llm/contracts.js';
 import { LlmNotConfiguredError } from '../../llm/errors.js';
-import { buildResearchContext } from '../../research/context.js';
+import { buildResearchContext } from '../../context/research/history.js';
 import {
   cancelResearchRun,
   createAndStartResearchRun,
@@ -18,6 +18,7 @@ import {
   getResearchRun,
   listResearchConversations,
   listResearchMessages,
+  listResearchSteps,
   updateResearchNote
 } from '../../research/store.js';
 import type { ToolPolicy, ToolRuntime } from '../../tools/contracts.js';
@@ -62,7 +63,7 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
     getConversation: (id: string) => {
       const conversation = getResearchConversation(id);
       if (!conversation) return undefined;
-      const { promptPreview } = buildResearchContext(conversation, listResearchMessages(id), '');
+      const { promptPreview } = buildResearchContext(conversation, listResearchMessages(id), '', listResearchSteps(id));
       return getResearchConversationDetail(id, promptPreview);
     },
     deleteConversation: (id: string) => {

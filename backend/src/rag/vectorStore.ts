@@ -55,7 +55,14 @@ export function getCollectionName() {
 }
 
 export async function vectorCollectionExists(collectionName = getCollectionName()) {
-  return (await client.collectionExists(collectionName)).exists;
+  try {
+    return (await client.collectionExists(collectionName)).exists;
+  } catch {
+    // Qdrant is unreachable (no Docker in some sandboxes / CI / dev). Treat as "no collection":
+    // RAG features degrade, but the rest of the backend — research, sources, the new evidence
+    // manifest — continues to work.
+    return false;
+  }
 }
 
 export async function ensureVectorCollection(vectorSize?: number, collectionName = getCollectionName()): Promise<void> {

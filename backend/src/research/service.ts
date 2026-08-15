@@ -3,14 +3,16 @@ import type { StreamEventEnvelope } from '@evident-loop/stream-protocol';
 import { DEFAULT_MAX_TOOL_ROUNDS } from '../agent/config.js';
 import { runAgentLoop, type AgentLoopEvent, type RunAgentLoopOptions } from '../agent/agentLoop.js';
 import type { LlmProvider } from '../llm/contracts.js';
+import { resolveLlmProvider } from '../llm/provider.js';
+import { appendStreamEvent } from '../streaming/eventStore.js';
+import { publishStreamEvent, subscribeToStream } from '../streaming/eventHub.js';
+import { isExplicitWordDocumentRequest } from '../tools/wordDocumentTool.js';
 import type { ToolPolicy, ToolRuntime } from '../tools/contracts.js';
 import { normalizeToolPolicy } from '../tools/policy.js';
 import type { OfficialResearchSkill, ResearchSkillSnapshot } from '../skills/contracts.js';
 import type { ResearchSkillRuntime } from '../skills/runtime.js';
-import { appendStreamEvent } from '../streaming/eventStore.js';
-import { publishStreamEvent, subscribeToStream } from '../streaming/eventHub.js';
-import { isExplicitWordDocumentRequest } from '../tools/wordDocumentTool.js';
-import { buildResearchContext, createConversationTitle } from './context.js';
+import { buildResearchContext, createConversationTitle } from '../context/research/history.js';
+import { createResearchContextManager } from '../context/research/manager.js';
 import { resolveExecutionMode } from './executionMode.js';
 import {
   addResearchSource,
@@ -134,7 +136,8 @@ export function createAndStartResearchRun(options: {
   const { messages: contextMessages, promptPreview } = buildResearchContext(
     conversation,
     priorMessages,
-    options.content
+    options.content,
+    listResearchSteps(conversation.id)
   );
   const userMessage = createResearchMessage({
     conversationId: conversation.id,
@@ -196,7 +199,7 @@ export function getResearchRunSnapshot(id: string): {
   if (!conversation) return undefined;
   const runInput = getResearchRunInput(id);
   const promptPreview = runInput?.promptPreview
-    ?? buildResearchContext(conversation, listResearchMessages(conversation.id), '').promptPreview;
+    ?? buildResearchContext(conversation, listResearchMessages(conversation.id), '', listResearchSteps(conversation.id)).promptPreview;
   const detail = getResearchConversationDetail(conversation.id, promptPreview);
   return detail ? { run, detail } : undefined;
 }
@@ -265,6 +268,15 @@ async function executePersistedResearchRun(options: {
   }
 
   const activeToolSteps = new Map<string, ResearchStep>();
+  const pendingLlmSteps: ResearchStep[] = [];
+  const toolParentStepIds = new Map<string, string>();
+  const contextManager = options.llm || options.apiKey
+    ? createResearchContextManager({
+        conversationId: run.conversationId,
+        llm: resolveLlmProvider({ llm: options.llm, apiKey: options.apiKey }),
+        model: options.model
+      })
+    : undefined;
 
   try {
     // Resolve the exact skill version and verify its digest inside the protected
@@ -290,17 +302,21 @@ async function executePersistedResearchRun(options: {
       model: options.model,
       systemPrompt,
       maxToolRounds: DEFAULT_MAX_TOOL_ROUNDS,
+      contextManager,
       toolPolicy,
       toolRuntime: options.toolRuntime,
       requiredToolName: isExplicitWordDocumentRequest(runInput.content)
         ? 'generate_word_document'
         : undefined,
       signal: abortController.signal,
+      conversationId: run.conversationId,
       onEvent: async (event) => handleAgentEvent({
         event,
         run: run!,
         skillSnapshot: resolvedSkill?.snapshot,
         activeToolSteps,
+        pendingLlmSteps,
+        toolParentStepIds,
         researchSources,
         sourceIds,
         nextSequence: () => ++sequence,
@@ -322,7 +338,8 @@ async function executePersistedResearchRun(options: {
     const promptPreview = buildResearchContext(
       conversation,
       listResearchMessages(run.conversationId),
-      runInput.content
+      runInput.content,
+      listResearchSteps(run.conversationId)
     ).promptPreview;
     const completedRun = updateResearchRun(run.id, {
       status: 'completed',
@@ -437,6 +454,8 @@ async function handleAgentEvent(options: {
   run: ResearchRun;
   skillSnapshot?: ResearchSkillSnapshot;
   activeToolSteps: Map<string, ResearchStep>;
+  pendingLlmSteps: ResearchStep[];
+  toolParentStepIds: Map<string, string>;
   researchSources: ResearchSource[];
   sourceIds: Set<string>;
   nextSequence: () => number;
@@ -451,7 +470,7 @@ async function handleAgentEvent(options: {
       messageId: run.assistantMessageId,
       sequence: options.nextSequence(),
       type: 'llm',
-      status: 'complete',
+      status: 'running',
       title: event.title,
       input: {
         model: event.model,
@@ -459,7 +478,23 @@ async function handleAgentEvent(options: {
         ...(options.skillSnapshot ? { skill: options.skillSnapshot } : {})
       }
     });
+    options.pendingLlmSteps.push(step);
     emit(run.id, { type: 'research_step', step });
+    return;
+  }
+
+  if (event.type === 'llm_response') {
+    const activeStep = options.pendingLlmSteps.shift();
+    if (!activeStep) return;
+    const step = updateResearchStep(activeStep.id, {
+      status: 'complete',
+      output: event.assistantMessage,
+      error: undefined
+    });
+    for (const toolCall of event.assistantMessage.tool_calls ?? []) {
+      options.toolParentStepIds.set(toolCall.id, activeStep.id);
+    }
+    if (step) emit(run.id, { type: 'research_step', step });
     return;
   }
 
@@ -471,7 +506,9 @@ async function handleAgentEvent(options: {
       type: 'tool',
       status: 'running',
       title: event.toolCall.name,
-      input: event.toolCall.arguments
+      input: event.toolCall.arguments,
+      parentStepId: options.toolParentStepIds.get(event.toolCall.id),
+      toolCallId: event.toolCall.id
     });
     options.activeToolSteps.set(event.toolCall.id, step);
     emit(run.id, { type: 'research_step', step });
@@ -488,6 +525,7 @@ async function handleAgentEvent(options: {
       error: event.toolCall.error
     });
     options.activeToolSteps.delete(event.toolCall.id);
+    options.toolParentStepIds.delete(event.toolCall.id);
     if (step) {
       emit(run.id, { type: 'research_step', step });
       emit(run.id, { type: 'tool_call_completed', step });

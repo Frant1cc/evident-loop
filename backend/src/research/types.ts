@@ -1,5 +1,6 @@
 import type { RagSource } from '../rag/types.js';
 import type { ChatMessage } from '../agent/types.js';
+import type { ContextState } from '../context/index.js';
 import type { ToolPolicy } from '../tools/contracts.js';
 import type { ResearchSkillSnapshot } from '../skills/contracts.js';
 import type { ResearchExecutionMode } from './executionMode.js';
@@ -14,6 +15,7 @@ export type ResearchConversation = {
   title: string;
   topic?: string;
   summary?: string;
+  contextState?: ContextState;
   createdAt: string;
   updatedAt: string;
 };
@@ -37,6 +39,8 @@ export type ResearchStep = {
   title: string;
   input?: unknown;
   output?: unknown;
+  parentStepId?: string;
+  toolCallId?: string;
   error?: string;
   startedAt: string;
   completedAt?: string;

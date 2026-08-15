@@ -130,6 +130,7 @@ async function requestOnce(
         ...(request.tools ? { tools: request.tools } : {}),
         ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
         ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+        ...(request.maxTokens !== undefined ? { max_tokens: request.maxTokens } : {}),
         ...(stream ? { stream: true, stream_options: { include_usage: true } } : {}),
         ...(options.buildExtraBody?.(request, stream) ?? {})
       }),

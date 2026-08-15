@@ -18,7 +18,8 @@ import {
   createResearchConversation,
   deleteResearchConversation,
   getResearchRun,
-  listResearchMessages
+  listResearchMessages,
+  listResearchSteps
 } from './store.js';
 
 initDb();
@@ -96,6 +97,60 @@ test('completes a queued background run and persists its final message', async (
     );
     assert.equal(assistant?.status, 'complete');
     assert.equal(assistant?.content, '后台研究已完成。');
+  } finally {
+    deleteResearchConversation(conversation.id);
+  }
+});
+
+test('persists native assistant tool calls and their matching durable tool audit rows', async () => {
+  const conversation = createResearchConversation();
+  let scheduled: (() => void) | undefined;
+  try {
+    const started = createAndStartResearchRun({
+      conversationId: conversation.id,
+      content: '检索一条证据',
+      toolPolicy: allTools,
+      toolRuntime,
+      apiKey: 'test-only',
+      schedule: (callback) => { scheduled = callback; },
+      runAgent: async (options) => {
+        const assistantMessage = {
+          role: 'assistant' as const,
+          content: '',
+          tool_calls: [{
+            id: 'call-evidence', type: 'function' as const,
+            function: { name: 'search_knowledge', arguments: '{"query":"evidence"}' }
+          }]
+        };
+        await options.onEvent?.({ type: 'llm', title: '模型判断', model: options.model, tools: ['search_knowledge'] });
+        await options.onEvent?.({ type: 'llm_response', assistantMessage });
+        await options.onEvent?.({
+          type: 'tool_started',
+          toolCall: { id: 'call-evidence', name: 'search_knowledge', arguments: { query: 'evidence' } }
+        });
+        await options.onEvent?.({
+          type: 'tool_completed',
+          toolCall: { id: 'call-evidence', name: 'search_knowledge', arguments: { query: 'evidence' }, result: { hit: true } }
+        });
+        return { reply: '已找到证据。', toolCalls: [], trace: [], sources: [] };
+      }
+    });
+    assert.ok(scheduled);
+    scheduled();
+    await waitFor(() => getResearchRun(started.run.id)?.status === 'completed');
+
+    const steps = listResearchSteps(conversation.id);
+    const decision = steps.find((step) => step.type === 'llm');
+    const tool = steps.find((step) => step.type === 'tool');
+    assert.deepEqual(decision?.output, {
+      role: 'assistant', content: '', tool_calls: [{
+        id: 'call-evidence', type: 'function',
+        function: { name: 'search_knowledge', arguments: '{"query":"evidence"}' }
+      }]
+    });
+    assert.equal(tool?.parentStepId, decision?.id);
+    assert.equal(tool?.toolCallId, 'call-evidence');
+    assert.deepEqual(tool?.output, { hit: true });
   } finally {
     deleteResearchConversation(conversation.id);
   }
