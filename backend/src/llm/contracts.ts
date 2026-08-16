@@ -22,6 +22,12 @@ export type ChatCompletion = {
   choices?: Array<{
     message?: ChatMessage;
   }>;
+  /** Usage is optional because OpenAI-compatible providers do not all return it. */
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
 };
 
 export type ChatCompletionRequest = {
@@ -33,6 +39,7 @@ export type ChatCompletionRequest = {
   signal?: AbortSignal;
   timeoutMs?: number;
   maxRetries?: number;
+  maxTokens?: number;
   reasoning?: boolean;
 };
 

@@ -1,6 +1,7 @@
 import { getRagSourcesFromToolTraces } from '../rag/index.js';
 import type { LlmProvider } from '../llm/contracts.js';
 import { resolveLlmProvider } from '../llm/provider.js';
+import type { ContextManager } from '../context/index.js';
 import type { ToolPolicy, ToolRuntime } from '../tools/contracts.js';
 import { builtInToolRuntime } from '../tools/runtime.js';
 import { DEFAULT_MAX_TOOL_ROUNDS } from './config.js';
@@ -46,6 +47,10 @@ export type RunAgentLoopOptions = {
   requiredToolName?: string;
   executeTool?: AgentToolExecutor;
   toolRuntime?: ToolRuntime;
+  /** Optional neutral, call-before-every-main-LLM context manager. */
+  contextManager?: ContextManager;
+  /** Conversation id propagated to ToolContext so conversation-scoped tools can resolve sources. */
+  conversationId?: string;
 };
 
 export async function runAgentLoop({
@@ -64,7 +69,9 @@ export async function runAgentLoop({
   allowedToolNames,
   requiredToolName,
   executeTool,
-  toolRuntime = builtInToolRuntime
+  toolRuntime = builtInToolRuntime,
+  contextManager,
+  conversationId
 }: RunAgentLoopOptions): Promise<AgentLoopResult> {
   const llm = resolveLlmProvider({ llm: providedLlm, apiKey });
   const messages: ChatMessage[] = [
@@ -113,7 +120,9 @@ export async function runAgentLoop({
       onEvent,
       executeTool,
       toolRuntime,
-      searchToolCalls
+      searchToolCalls,
+      contextManager,
+      conversationId
     });
     const { assistantMessage, parsedToolCalls, reply } = roundResult;
 
@@ -245,7 +254,9 @@ export async function runAgentLoop({
       executeTool,
       toolRuntime,
       searchToolCalls,
-      requiredSingleToolName: requiredToolName
+      requiredSingleToolName: requiredToolName,
+      contextManager,
+      conversationId
     });
     toolTraces.push(...reservedRound.toolTraces);
     trace.push(...reservedRound.trace);
@@ -265,12 +276,23 @@ export async function runAgentLoop({
       role: 'system',
       content: 'Tool rounds are complete. Answer now using the available tool results. Do not call tools. If the evidence is insufficient, say so clearly.'
     });
-    const completion = await llm.complete({ model, messages, temperature, signal });
+    await onEvent?.({ type: 'llm', title: '达到工具调用轮数上限，生成最终回答', model });
+    const preparedMessages = contextManager
+      ? await contextManager.prepare({ messages, model, signal })
+      : messages;
+    const completion = await llm.complete({ model, messages: preparedMessages, temperature, signal });
     const assistantMessage = completion.choices?.[0]?.message;
 
     if (!assistantMessage) {
       throw new Error(describeEmptyCompletion(completion));
     }
+    await contextManager?.recordMainPromptUsage?.({
+      messages,
+      model,
+      signal,
+      promptTokens: completion.usage?.prompt_tokens
+    });
+    await onEvent?.({ type: 'llm_response', assistantMessage });
 
     trace.push({ type: 'final_answer', label: '达到工具调用轮数上限，生成最终回答' });
     return {

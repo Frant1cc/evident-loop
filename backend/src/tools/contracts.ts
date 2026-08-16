@@ -14,6 +14,11 @@ export type ToolDefinition = {
 export type ToolContext = {
   /** Aborted when the request is cancelled. Long-running tools should observe it. */
   signal?: AbortSignal;
+  /**
+   * The conversation this tool call belongs to. Optional: tools that need scoping to a
+   * conversation (e.g. read_evidence) require it; stateless tools (calculator) can ignore it.
+   */
+  conversationId?: string;
 };
 
 export type ToolTrace = {

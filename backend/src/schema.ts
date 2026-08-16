@@ -104,6 +104,7 @@ export const researchConversations = sqliteTable('research_conversations', {
   title: text('title').notNull(),
   topic: text('topic'),
   summary: text('summary'),
+  contextStateJson: text('context_state_json'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull()
 });
@@ -141,6 +142,8 @@ export const researchSteps = sqliteTable('research_steps', {
   title: text('title').notNull(),
   inputJson: text('input_json'),
   outputJson: text('output_json'),
+  parentStepId: text('parent_step_id'),
+  toolCallId: text('tool_call_id'),
   error: text('error'),
   startedAt: text('started_at').notNull(),
   completedAt: text('completed_at')
