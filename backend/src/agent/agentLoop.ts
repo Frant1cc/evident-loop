@@ -3,6 +3,7 @@ import type { LlmProvider } from '../llm/contracts.js';
 import { resolveLlmProvider } from '../llm/provider.js';
 import type { ContextManager } from '../context/index.js';
 import type { ToolPolicy, ToolRuntime } from '../tools/contracts.js';
+import { normalizeToolPolicy } from '../tools/policy.js';
 import { builtInToolRuntime } from '../tools/runtime.js';
 import { DEFAULT_MAX_TOOL_ROUNDS } from './config.js';
 import {
@@ -80,7 +81,7 @@ export async function runAgentLoop({
     { role: 'user', content: message }
   ];
   const effectivePolicy = normalizeLegacyToolAliases(
-    toolPolicy ?? legacyAllowedNamesToPolicy(allowedToolNames)
+    normalizeToolPolicy(toolPolicy ?? legacyAllowedNamesToPolicy(allowedToolNames))
   );
   const tools = toolRuntime.getDefinitions(effectivePolicy);
   const toolNames = tools.map((tool) => tool.function.name);

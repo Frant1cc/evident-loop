@@ -1,5 +1,9 @@
 import type { ToolPolicy } from './contracts.js';
 
+export const legacyToolAliases: Readonly<Record<string, string>> = {
+  search_docs: 'search_knowledge'
+};
+
 export function normalizeToolPolicy(value: unknown, fallback: ToolPolicy = { mode: 'all' }): ToolPolicy {
   if (value === undefined) return fallback;
 
@@ -36,5 +40,8 @@ function normalizeNames(value: unknown) {
   if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
     throw new Error('tool names must be an array of strings');
   }
-  return [...new Set(value.map((item) => item.trim()).filter(Boolean))];
+  return [...new Set(value
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((name) => legacyToolAliases[name] ?? name))];
 }

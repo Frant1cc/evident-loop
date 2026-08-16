@@ -4,7 +4,7 @@ import { PhCircleNotch } from '@phosphor-icons/vue';
 import ResearchHeader from './ResearchHeader.vue';
 import ResearchMessages from './ResearchMessages.vue';
 import ResearchComposer from './ResearchComposer.vue';
-import type { ResearchSkillInfo, ResearchToolInfo } from '../../api/research';
+import type { ResearchSkillInfo, ResearchToolGroupInfo, ResearchToolInfo } from '../../api/research';
 import type { WordArtifact } from '../../types/artifacts';
 import type { ResearchMessage } from '../../types/research';
 import type { StreamConnectionState } from '../../types/streaming';
@@ -19,8 +19,11 @@ defineProps<{
   error: string;
   connectionHint: string;
   connectionState: StreamConnectionState;
-  tools: ResearchToolInfo[];
-  enabledTools: Record<string, boolean>;
+  toolGroups: ResearchToolGroupInfo[];
+  standaloneTools: ResearchToolInfo[];
+  enabledToolGroups: Record<string, boolean>;
+  enabledStandaloneTools: Record<string, boolean>;
+  lockedToolGroupIds: Set<string>;
   skills: ResearchSkillInfo[];
   selectedSkillId?: string;
 }>();
@@ -30,7 +33,8 @@ const input = defineModel<string>('input', { required: true });
 const emit = defineEmits<{
   send: [];
   stop: [];
-  toggleTool: [name: string];
+  toggleToolGroup: [id: string];
+  toggleStandaloneTool: [name: string];
   selectSkill: [id: string | undefined];
   citation: [key: string];
   preview: [artifact: WordArtifact];
@@ -70,13 +74,17 @@ const emit = defineEmits<{
           v-model="input"
           :loading="loading"
           :stopping="stopping"
-          :tools="tools"
-          :enabled-tools="enabledTools"
+          :tool-groups="toolGroups"
+          :standalone-tools="standaloneTools"
+          :enabled-tool-groups="enabledToolGroups"
+          :enabled-standalone-tools="enabledStandaloneTools"
+          :locked-tool-group-ids="lockedToolGroupIds"
           :skills="skills"
           :selected-skill-id="selectedSkillId"
           @send="emit('send')"
           @stop="emit('stop')"
-          @toggle-tool="emit('toggleTool', $event)"
+          @toggle-tool-group="emit('toggleToolGroup', $event)"
+          @toggle-standalone-tool="emit('toggleStandaloneTool', $event)"
           @select-skill="emit('selectSkill', $event)"
         />
       </div>

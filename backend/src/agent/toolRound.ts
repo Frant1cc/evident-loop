@@ -216,7 +216,6 @@ async function executeParsedToolCall(
 
 const dedupedSearchToolNames = new Set([
   'search_knowledge',
-  'search_docs',
   'retrieve_web_evidence',
   'web_search',
   'fetch_page'

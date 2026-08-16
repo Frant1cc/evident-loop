@@ -211,7 +211,7 @@ export function createKeywordStore(db: SqliteLike) {
   }
 
   /** BM25 检索。标题/章节权重高于正文；返回按相关性降序的 chunk 列表 */
-  function searchKeyword(query: string, limit: number, collection: string): KeywordSearchResult[] {
+  function searchKeyword(query: string, limit: number, collection: string, file?: string): KeywordSearchResult[] {
     ensureTable();
     const ftsQuery = buildFtsQuery(query);
     if (!ftsQuery) return [];
@@ -223,10 +223,10 @@ export function createKeywordStore(db: SqliteLike) {
         format, locator_json, parser_version,
         -bm25(${FTS_TABLE}, 2.0, 3.0, 1.0) AS score
       FROM ${FTS_TABLE}
-      WHERE ${FTS_TABLE} MATCH ? AND collection = ?
+      WHERE ${FTS_TABLE} MATCH ? AND collection = ?${file ? ' AND file = ?' : ''}
       ORDER BY score DESC
       LIMIT ?
-    `).all(ftsQuery, collection, Math.max(1, limit)) as FtsRow[];
+    `).all(ftsQuery, collection, ...(file ? [file] : []), Math.max(1, limit)) as FtsRow[];
 
     return rows.map((row) => ({
       id: row.chunk_key,
@@ -251,13 +251,13 @@ export function createKeywordStore(db: SqliteLike) {
     }));
   }
 
-  function listDocumentTopics(collection: string) {
+  function listDocumentTopics(collection: string, file?: string) {
     return db.prepare(`
       SELECT DISTINCT file, title
       FROM ${FTS_TABLE}
-      WHERE collection = ?
+      WHERE collection = ?${file ? ' AND file = ?' : ''}
       ORDER BY file ASC
-    `).all(collection) as Array<{ file: string; title: string }>;
+    `).all(collection, ...(file ? [file] : [])) as Array<{ file: string; title: string }>;
   }
 
   return {

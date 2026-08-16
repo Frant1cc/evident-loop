@@ -135,3 +135,27 @@ test('特殊字符查询不会导致 FTS 语法错误', async () => {
   assert.doesNotThrow(() => store.searchKeyword('NOT AND OR (grouping)', 5, 'main'));
   assert.equal(store.searchKeyword('！？。', 5, 'main').length, 0);
 });
+
+test('关键词召回覆盖英文、代码标识符、标题、正文和大小写差异', async () => {
+  const store = createKeywordStore(await openMemoryDb());
+  store.replaceFileChunks('main', 'api-guide.md', [chunk({
+    id: 'api',
+    file: 'api-guide.md',
+    title: 'Payment API Handbook',
+    heading: 'RetryClient.request_batch',
+    content: 'The exact body marker is durable_commit. Configure retry-policy for every HTTP API call.'
+  })]);
+
+  for (const query of ['payment', 'PAYMENT', 'request_batch', 'retry-policy', 'RetryClient', 'durable_commit', 'HTTP API']) {
+    assert.equal(store.searchKeyword(query, 5, 'main')[0]?.id, 'api', `expected hit for ${query}`);
+  }
+});
+
+test('file filter confines keyword results and topic catalog to one document', async () => {
+  const store = createKeywordStore(await openMemoryDb());
+  store.replaceFileChunks('main', 'a.md', [chunk({ id: 'a', file: 'a.md', title: 'A', content: 'shared marker' })]);
+  store.replaceFileChunks('main', 'b.md', [chunk({ id: 'b', file: 'b.md', title: 'B', content: 'shared marker' })]);
+
+  assert.deepEqual(store.searchKeyword('shared marker', 5, 'main', 'b.md').map((item) => item.id), ['b']);
+  assert.deepEqual(store.listDocumentTopics('main', 'a.md'), [{ file: 'a.md', title: 'A' }]);
+});

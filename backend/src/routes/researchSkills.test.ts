@@ -83,6 +83,25 @@ test('GET /research/skills returns metadata without instructions', async () => {
   });
 });
 
+test('GET /research/tools returns model tools and user-visible groups separately', async () => {
+  await withServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/research/tools`);
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    const names = payload.data.tools.map((tool: { name: string }) => tool.name);
+    assert.ok(names.includes('search_knowledge'));
+    assert.ok(names.includes('read_document'));
+    assert.ok(!names.includes('search_docs'));
+    assert.ok(!names.includes('knowledge'));
+    assert.deepEqual(payload.data.groups, [{
+      id: 'knowledge',
+      label: '知识库',
+      description: '检索知识库，并在需要时阅读相关文档。',
+      toolNames: ['search_knowledge', 'read_document']
+    }]);
+  });
+});
+
 test('runs without a skillId', async () => {
   const conversation = createResearchConversation();
   try {

@@ -6,15 +6,18 @@ import { PhArrowUp, PhCaretDown, PhCheck, PhCircleNotch, PhLightbulb, PhStop, Ph
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Textarea } from '@/components/ui/textarea';
-import type { ResearchSkillInfo, ResearchToolInfo } from '../../api/research';
+import type { ResearchSkillInfo, ResearchToolGroupInfo, ResearchToolInfo } from '../../api/research';
 
 const model = defineModel<string>({ required: true });
 
 const props = defineProps<{
   loading: boolean;
   stopping: boolean;
-  tools: ResearchToolInfo[];
-  enabledTools: Record<string, boolean>;
+  toolGroups: ResearchToolGroupInfo[];
+  standaloneTools: ResearchToolInfo[];
+  enabledToolGroups: Record<string, boolean>;
+  enabledStandaloneTools: Record<string, boolean>;
+  lockedToolGroupIds: Set<string>;
   skills: ResearchSkillInfo[];
   selectedSkillId?: string;
 }>();
@@ -22,7 +25,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   send: [];
   stop: [];
-  toggleTool: [name: string];
+  toggleToolGroup: [id: string];
+  toggleStandaloneTool: [name: string];
   selectSkill: [id: string | undefined];
 }>();
 
@@ -34,8 +38,12 @@ const skillsMenu = ref<HTMLElement>();
 onClickOutside(toolsMenu, () => (toolsOpen.value = false));
 onClickOutside(skillsMenu, () => (skillsOpen.value = false));
 
-const enabledCount = computed(() => props.tools.filter((tool) => props.enabledTools[tool.name]).length);
-const allDisabled = computed(() => props.tools.length > 0 && enabledCount.value === 0);
+const visibleToolCount = computed(() => props.toolGroups.length + props.standaloneTools.length);
+const enabledCount = computed(() =>
+  props.toolGroups.filter((group) => props.enabledToolGroups[group.id]).length
+  + props.standaloneTools.filter((tool) => props.enabledStandaloneTools[tool.name]).length
+);
+const allDisabled = computed(() => visibleToolCount.value > 0 && enabledCount.value === 0);
 
 const selectedSkill = computed(() => props.skills.find((skill) => skill.id === props.selectedSkillId));
 // "No skill" is an unselected state, not a pseudo-skill (§4.3, §15).
@@ -54,9 +62,9 @@ function selectSkill(id: string | undefined) {
   skillsOpen.value = false;
 }
 
-function handleToggleTool(name: string) {
+function handleToggleStandaloneTool(name: string) {
   if (requiredToolNames.value.has(name)) return;
-  emit('toggleTool', name);
+  emit('toggleStandaloneTool', name);
 }
 </script>
 
@@ -119,12 +127,12 @@ function handleToggleTool(name: string) {
           </Collapsible>
         </div>
 
-        <div v-if="tools.length" ref="toolsMenu" class="relative">
+        <div v-if="visibleToolCount" ref="toolsMenu" class="relative">
           <Collapsible v-model:open="toolsOpen">
             <CollapsibleTrigger as-child>
               <Button type="button" variant="ghost" size="sm" class="gap-1.5" :disabled="loading" :aria-expanded="toolsOpen">
                 <PhWrench :size="14" weight="bold" aria-hidden="true" />
-                工具 {{ enabledCount }}/{{ tools.length }}
+                工具 {{ enabledCount }}/{{ visibleToolCount }}
                 <PhCaretDown :size="13" class="transition-transform" :class="toolsOpen ? 'rotate-180' : ''" aria-hidden="true" />
               </Button>
             </CollapsibleTrigger>
@@ -134,18 +142,35 @@ function handleToggleTool(name: string) {
             >
               <p class="px-2 py-1 text-[11px] font-medium text-muted-foreground">工具</p>
               <button
-                v-for="tool in tools"
+                v-for="group in toolGroups"
+                :key="group.id"
+                type="button"
+                :disabled="loading || lockedToolGroupIds.has(group.id)"
+                :aria-pressed="Boolean(enabledToolGroups[group.id])"
+                class="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                @click="emit('toggleToolGroup', group.id)"
+              >
+                <PhWrench :size="16" class="shrink-0 text-muted-foreground" aria-hidden="true" />
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate font-medium text-foreground">{{ group.label }}</span>
+                  <span class="block truncate text-[11px] text-muted-foreground">{{ group.description }}</span>
+                </span>
+                <span v-if="lockedToolGroupIds.has(group.id)" class="shrink-0 text-[10px] font-medium text-muted-foreground">技能必需</span>
+                <PhCheck v-if="enabledToolGroups[group.id]" :size="15" weight="bold" class="shrink-0 text-primary" aria-hidden="true" />
+              </button>
+              <button
+                v-for="tool in standaloneTools"
                 :key="tool.name"
                 type="button"
                 :disabled="loading || requiredToolNames.has(tool.name)"
-                :aria-pressed="Boolean(enabledTools[tool.name])"
+                :aria-pressed="Boolean(enabledStandaloneTools[tool.name])"
                 class="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
-                @click="handleToggleTool(tool.name)"
+                @click="handleToggleStandaloneTool(tool.name)"
               >
                 <PhWrench :size="16" class="shrink-0 text-muted-foreground" aria-hidden="true" />
                 <span class="min-w-0 flex-1 truncate font-medium text-foreground">{{ tool.label || tool.name }}</span>
                 <span v-if="requiredToolNames.has(tool.name)" class="shrink-0 text-[10px] font-medium text-muted-foreground">技能必需</span>
-                <PhCheck v-if="enabledTools[tool.name]" :size="15" weight="bold" class="shrink-0 text-primary" aria-hidden="true" />
+                <PhCheck v-if="enabledStandaloneTools[tool.name]" :size="15" weight="bold" class="shrink-0 text-primary" aria-hidden="true" />
               </button>
             </CollapsibleContent>
           </Collapsible>

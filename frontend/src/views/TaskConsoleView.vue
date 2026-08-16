@@ -40,7 +40,8 @@ import type {
   PlanStepDraft,
   ToolExecution
 } from '../types/tasks';
-import { listResearchTools } from '../api/research';
+import { listResearchTools, type ResearchToolGroupInfo, type ResearchToolInfo } from '../api/research';
+import { buildSelectedToolPolicy, standaloneTools } from '../tools/selection';
 import MarkdownMessage from '../components/conversation/MarkdownMessage.vue';
 import PanelResizeHandle from '../components/common/PanelResizeHandle.vue';
 import TaskCreateForm from '../components/tasks/TaskCreateForm.vue';
@@ -92,7 +93,7 @@ const error = ref('');
 const goal = ref('');
 const maxSteps = ref(5);
 const maxTokens = ref(24000);
-const selectedTools = ref(['search_knowledge', 'search_docs', 'read_document', 'retrieve_web_evidence']);
+const selectedTools = ref<string[]>([]);
 type EditablePlanDraft = PlanStepDraft & { key: string };
 const planDrafts = ref<EditablePlanDraft[]>([]);
 let pollTimer: ReturnType<typeof window.setInterval> | undefined;
@@ -103,19 +104,29 @@ let viewSequence = 0;
 let runSequence = 0;
 
 // Fallback list; replaced on mount by the live registry so new tools show up automatically.
-const availableTools = ref<Array<{ name: string; label: string }>>([
+const availableTools = ref<ResearchToolInfo[]>([
   { name: 'search_knowledge', label: '知识库检索' },
-  { name: 'search_docs', label: '文档关键词搜索' },
-  { name: 'read_document', label: '文档全文阅读' },
+  { name: 'read_document', label: '文档定向阅读' },
   { name: 'retrieve_web_evidence', label: '受控联网检索' }
+] as ResearchToolInfo[]);
+const availableToolGroups = ref<ResearchToolGroupInfo[]>([{
+  id: 'knowledge',
+  label: '知识库',
+  description: '检索知识库，并在需要时阅读相关文档。',
+  toolNames: ['search_knowledge', 'read_document']
+}]);
+const availableToolItems = computed(() => [
+  ...availableToolGroups.value.map((group) => ({ name: group.id, label: group.label })),
+  ...standaloneTools(availableTools.value, availableToolGroups.value).map((tool) => ({ name: tool.name, label: tool.label }))
 ]);
 
 async function loadAvailableTools() {
   try {
-    const { tools } = await listResearchTools();
-    availableTools.value = tools.map((tool) => ({ name: tool.name, label: tool.label || tool.name }));
-    // Default to everything the registry currently offers; the user deselects per task as needed.
-    selectedTools.value = availableTools.value.map((tool) => tool.name);
+    const { tools, groups } = await listResearchTools();
+    availableTools.value = tools;
+    availableToolGroups.value = groups;
+    // Tool groups and standalone tools start disabled; each task grants explicit capabilities.
+    selectedTools.value = [];
   } catch {
     // Keep the fallback list when the registry endpoint is unavailable.
   }
@@ -294,11 +305,12 @@ async function submitTask() {
       goal: normalizedGoal,
       maxSteps: maxSteps.value,
       maxTokens: maxTokens.value,
-      toolPolicy: selectedTools.value.length === availableTools.value.length
-        ? { mode: 'all' }
-        : selectedTools.value.length
-          ? { mode: 'selected', names: selectedTools.value }
-          : { mode: 'none' }
+      toolPolicy: buildSelectedToolPolicy(
+        availableToolGroups.value,
+        Object.fromEntries(availableToolGroups.value.map((group) => [group.id, selectedTools.value.includes(group.id)])),
+        Object.fromEntries(standaloneTools(availableTools.value, availableToolGroups.value)
+          .map((tool) => [tool.name, selectedTools.value.includes(tool.name)]))
+      )
     });
     const sequence = ++viewSequence;
     activeTaskId.value = created.task.id;
@@ -1008,7 +1020,7 @@ function getErrorMessage(value: unknown) {
           v-model:max-steps="maxSteps"
           v-model:max-tokens="maxTokens"
           v-model:selected-tools="selectedTools"
-          :available-tools="availableTools"
+          :available-tools="availableToolItems"
           :busy="busyAction === 'create'"
           :error="error"
           @submit="submitTask"

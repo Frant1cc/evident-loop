@@ -647,7 +647,7 @@ function hasRetrievalTool(policy: ToolPolicy) {
   if (policy.mode === 'all') return true;
   if (policy.mode === 'none') return false;
   return policy.names.some((tool) =>
-    ['search_knowledge', 'search_docs', 'read_document', 'retrieve_web_evidence', 'web_search', 'fetch_page'].includes(tool)
+    ['search_knowledge', 'read_document', 'retrieve_web_evidence', 'web_search', 'fetch_page'].includes(tool)
   );
 }
 

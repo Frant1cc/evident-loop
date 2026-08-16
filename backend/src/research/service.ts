@@ -60,8 +60,9 @@ Rules:
   - sufficient: use the returned sources as evidence.
   - weak: if rewriteTriggered=true, the automatic rewrite budget is already exhausted; do not search the same intent again and state the evidence limitation. If rewriteTriggered=false, reformulate once with more specific terminology.
   - empty: do not use or cite the returned candidates as evidence; state that the local knowledge base does not cover the question.
-- Use read_document only when search_knowledge snippets are not enough.
-- Use search_docs only to locate text in a document already identified by a sufficient or weak retrieval; do not use it to override an empty verdict.
+- search_knowledge already combines semantic and keyword retrieval; use its optional file filter to search within an identified document.
+- Use read_document only when search_knowledge snippets are not enough, and read the smallest relevant line range.
+- After an empty knowledge search, do not guess a file name or scan documents with read_document.
 - For external facts the local knowledge base cannot answer (library comparisons, versions, releases, current events), call retrieve_web_evidence.
 - Call retrieve_web_evidence at most once per user request. It already performs query rewriting and progressive search internally; a second call would incorrectly reset the quality budget.
 - Treat retrieve_web_evidence.verdict as authoritative: sufficient may support an answer; exhausted may only support a qualified partial answer; empty must not be presented as evidence. Do not simulate lower-level web_search or fetch_page calls.

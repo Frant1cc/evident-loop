@@ -164,10 +164,16 @@ export async function deleteChunksByFile(file: string, collectionName = getColle
   });
 }
 
-export async function searchChunks(vector: number[], limit: number, collectionName = getCollectionName()): Promise<RagSource[]> {
+export async function searchChunks(
+  vector: number[],
+  limit: number,
+  collectionName = getCollectionName(),
+  file?: string
+): Promise<RagSource[]> {
   const points = await client.search(collectionName, {
     vector,
     limit,
+    ...(file ? { filter: { must: [{ key: 'file', match: { value: file } }] } } : {}),
     with_payload: true
   });
 

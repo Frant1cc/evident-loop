@@ -17,7 +17,7 @@ export function createResearchRouter(research: ResearchApplication) {
   const router = Router();
 
   router.get('/research/tools', (_req, res) => {
-    res.json(success({ tools: research.listTools() }));
+    res.json(success({ tools: research.listTools(), groups: research.listToolGroups() }));
   });
 
   router.get('/research/skills', (_req, res) => {

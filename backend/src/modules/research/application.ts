@@ -22,8 +22,9 @@ import {
   updateResearchNote
 } from '../../research/store.js';
 import type { ToolPolicy, ToolRuntime } from '../../tools/contracts.js';
-import { normalizeToolPolicy, restrictToolPolicyToRegistered } from '../../tools/policy.js';
+import { normalizeToolPolicy } from '../../tools/policy.js';
 import type { ResearchSkillRuntime } from '../../skills/runtime.js';
+import { builtInToolGroups, validateToolGroups, type ToolGroupDefinition } from '../../tools/groups.js';
 import type { ResolvedResearchSkill } from '../../skills/contracts.js';
 import { getMaxSequence, listStreamEventsAfter } from '../../streaming/eventStore.js';
 
@@ -32,10 +33,12 @@ export type ResearchApplicationDependencies = {
   model: string;
   toolRuntime: ToolRuntime;
   skillRuntime: ResearchSkillRuntime;
+  toolGroups?: ToolGroupDefinition[];
 };
 
 /** Use-case boundary for research conversations and durable background runs. */
 export function createResearchApplication(dependencies: ResearchApplicationDependencies) {
+  const toolGroups = validateToolGroups(dependencies.toolGroups ?? builtInToolGroups, dependencies.toolRuntime.listModules());
   const requireLlm = () => {
     if (!dependencies.llm) throw new LlmNotConfiguredError();
     return dependencies.llm;
@@ -49,13 +52,17 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
         label: tool.label,
         description: tool.definition.function.description
       })),
+    listToolGroups: () => toolGroups.map((group) => ({ ...group, toolNames: [...group.toolNames] })),
     listSkills: () => dependencies.skillRuntime.list(),
     normalizeToolPolicy: (value: unknown): ToolPolicy => {
       const registered = new Set(
         dependencies.toolRuntime.getDefinitions().map((tool) => tool.function.name)
       );
-      const policy = restrictToolPolicyToRegistered(normalizeToolPolicy(value), registered);
-      if (policy.mode === 'selected' && !policy.names.length) return { mode: 'none' };
+      const policy = normalizeToolPolicy(value);
+      if (policy.mode === 'selected') {
+        const unknown = policy.names.filter((name) => !registered.has(name));
+        if (unknown.length) throw new Error(`Unknown tools in toolPolicy: ${unknown.join(', ')}`);
+      }
       return policy;
     },
     listConversations: listResearchConversations,

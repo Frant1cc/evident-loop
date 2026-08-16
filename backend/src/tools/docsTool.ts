@@ -1,76 +1,37 @@
-import { listKnowledgeDocuments, readKnowledgeDocument } from '../rag/knowledgeFiles.js';
-
-type SearchDocsArgs = {
-  query?: unknown;
-  limit?: unknown;
-};
+import { readKnowledgeDocument } from '../rag/knowledgeFiles.js';
 
 type ReadDocumentArgs = {
   file?: unknown;
+  startLine?: unknown;
+  endLine?: unknown;
   maxChars?: unknown;
-};
-
-type SearchResult = {
-  file: string;
-  line: number;
-  preview: string;
 };
 
 const maxDocumentChars = 12000;
 
-export function searchDocs(args: unknown) {
-  const { query, limit } = parseSearchDocsArgs(args);
-  const results: SearchResult[] = [];
-  const normalizedQuery = query.toLowerCase();
-
-  for (const document of listKnowledgeDocuments()) {
-    const lines = document.content.split(/\r?\n/);
-
-    for (const [index, line] of lines.entries()) {
-      if (!line.toLowerCase().includes(normalizedQuery)) continue;
-
-      results.push({
-        file: document.file,
-        line: index + 1,
-        preview: line.trim().slice(0, 240)
-      });
-
-      if (results.length >= limit) {
-        return { query, results };
-      }
-    }
-  }
-
-  return { query, results };
-}
-
 export function readDocument(args: unknown) {
-  const { file, maxChars } = parseReadDocumentArgs(args);
+  const { file, startLine, endLine, maxChars } = parseReadDocumentArgs(args);
   const document = readKnowledgeDocument(file);
-  const truncated = document.content.length > maxChars;
+  const lines = document.content.split(/\r?\n/);
+  if (startLine > lines.length) throw new Error(`read_document startLine exceeds document length (${lines.length})`);
+
+  const requestedEndLine = Math.min(endLine ?? lines.length, lines.length);
+  const requestedContent = lines.slice(startLine - 1, requestedEndLine).join('\n');
+  const content = requestedContent.slice(0, maxChars);
+  const truncated = content.length < requestedContent.length;
+  const includedLineCount = content ? content.split('\n').length : 0;
+  const actualEndLine = includedLineCount ? startLine + includedLineCount - 1 : startLine;
 
   return {
     file: document.file,
-    content: document.content.slice(0, maxChars),
+    content,
+    startLine,
+    endLine: actualEndLine,
+    totalLines: lines.length,
     truncated,
+    ...(truncated ? { nextStartLine: actualEndLine + 1 } : {}),
+    // Kept for historical consumers of read_document results.
     totalChars: document.content.length
-  };
-}
-
-function parseSearchDocsArgs(args: unknown) {
-  if (!args || typeof args !== 'object') {
-    throw new Error('search_docs requires a query string');
-  }
-
-  const { query, limit } = args as SearchDocsArgs;
-
-  if (typeof query !== 'string' || !query.trim()) {
-    throw new Error('search_docs requires a query string');
-  }
-
-  return {
-    query: query.trim(),
-    limit: typeof limit === 'number' && Number.isInteger(limit) && limit > 0 ? Math.min(limit, 20) : 5
   };
 }
 
@@ -79,14 +40,30 @@ function parseReadDocumentArgs(args: unknown) {
     throw new Error('read_document requires a file string');
   }
 
-  const { file, maxChars } = args as ReadDocumentArgs;
+  const { file, startLine, endLine, maxChars } = args as ReadDocumentArgs;
 
   if (typeof file !== 'string' || !file.trim()) {
     throw new Error('read_document requires a file string');
   }
 
+  const parsedStartLine = parseOptionalLine(startLine, 'startLine') ?? 1;
+  const parsedEndLine = parseOptionalLine(endLine, 'endLine');
+  if (parsedEndLine !== undefined && parsedEndLine < parsedStartLine) {
+    throw new Error('read_document endLine must be greater than or equal to startLine');
+  }
+
   return {
     file: file.trim(),
+    startLine: parsedStartLine,
+    endLine: parsedEndLine,
     maxChars: typeof maxChars === 'number' && Number.isInteger(maxChars) && maxChars > 0 ? Math.min(maxChars, maxDocumentChars) : maxDocumentChars
   };
+}
+
+function parseOptionalLine(value: unknown, name: 'startLine' | 'endLine') {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    throw new Error(`read_document ${name} must be a positive integer`);
+  }
+  return value;
 }

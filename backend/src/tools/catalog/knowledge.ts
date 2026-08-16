@@ -1,5 +1,5 @@
 import { searchKnowledge } from '../../rag/index.js';
-import { readDocument, searchDocs } from '../docsTool.js';
+import { readDocument } from '../docsTool.js';
 import type { ToolModule } from '../contracts.js';
 
 export const knowledgeToolModules: ToolModule[] = [
@@ -18,6 +18,10 @@ export const knowledgeToolModules: ToolModule[] = [
               type: 'string',
               description: 'Question or search query.'
             },
+            file: {
+              type: 'string',
+              description: 'Optional knowledge-relative document path. When set, both semantic and keyword retrieval are restricted to this document.'
+            },
             limit: {
               type: 'integer',
               minimum: 1,
@@ -32,43 +36,28 @@ export const knowledgeToolModules: ToolModule[] = [
     execute: (args, context) => searchKnowledge(args, { signal: context?.signal })
   },
   {
-    label: '文档关键词搜索',
-    definition: {
-      type: 'function',
-      function: {
-        name: 'search_docs',
-        description: 'Search Markdown documentation files in the fixed docs directory and return matching lines.',
-        parameters: {
-          type: 'object',
-          properties: {
-            query: {
-              type: 'string',
-              description: 'Text to search for in Markdown documentation.'
-            },
-            limit: {
-              type: 'number',
-              description: 'Maximum number of matches to return. Defaults to 5 and is capped at 20.'
-            }
-          },
-          required: ['query']
-        }
-      }
-    },
-    execute: searchDocs
-  },
-  {
-    label: '文档全文阅读',
+    label: '文档定向阅读',
     definition: {
       type: 'function',
       function: {
         name: 'read_document',
-        description: 'Read a Markdown document from the fixed docs directory. Use this after search_docs when matching lines are not enough.',
+        description: 'Read a selected range from a knowledge document when search_knowledge snippets are insufficient. Read the smallest relevant range.',
         parameters: {
           type: 'object',
           properties: {
             file: {
               type: 'string',
-              description: 'Docs-relative Markdown file path returned by search_docs, such as "backend-guide.md".'
+              description: 'Knowledge-relative file path returned by search_knowledge.'
+            },
+            startLine: {
+              type: 'integer',
+              minimum: 1,
+              description: 'Optional 1-based first line. Defaults to 1.'
+            },
+            endLine: {
+              type: 'integer',
+              minimum: 1,
+              description: 'Optional 1-based inclusive last line. Defaults to the document end.'
             },
             maxChars: {
               type: 'number',
