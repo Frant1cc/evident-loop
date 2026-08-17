@@ -28,6 +28,7 @@ An evidence-first durable research agent.
 - 多格式知识库（Markdown / TXT / DOCX / 文本型 PDF）、结构感知分块、页码或原文行号引用，以及 Dense/Hybrid RAG 和查询改写
 - Recall@K、MRR、拒答能力等 RAG 评测
 - 可断线重连、支持显式停止的后台研究工作台，以及任务控制台和 Word 报告生成
+- 面向研究工作台和 Durable Agent Task 的动态 ToolRuntime Snapshot 与 MCP 连接，支持 Streamable HTTP/stdio、OAuth、持久化工具 Schema 和调用审批
 
 正在开发或尚未完成：
 
@@ -103,6 +104,21 @@ EMBEDDING_API_KEY=你的_Embedding_Key
 ```dotenv
 TAVILY_API_KEY=你的_Tavily_Key
 ```
+
+### MCP 连接
+
+在“设置 → MCP 服务器”中管理 MCP 连接。新连接会先保存为停用草稿，测试连接和工具清单成功后才能启用。当前 UI 支持本机 `stdio`、MCP Streamable HTTP、静态 headers 和 OAuth。生命周期、审批、管理 API 与安全边界见[动态工具与 MCP 说明](./docs/development/dynamic-tools-and-mcp.md)。
+
+本地部署边界配置在 `backend/.env`：
+
+```dotenv
+HOST=127.0.0.1
+APP_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+MCP_CREDENTIALS_KEY=<32-byte-base64-secret>
+MCP_OAUTH_REDIRECT_URI=
+```
+
+保存 MCP 环境变量、静态 headers 或 OAuth 状态时必须配置 `MCP_CREDENTIALS_KEY`；它必须是 Base64 编码的 32 字节密钥，请在本地生成并绝不要提交。`MCP_OAUTH_REDIRECT_URI` 可选，未设置时使用当前 `PORT` 下的回环回调地址。`stdio` MCP 只允许在 `HOST` 为回环地址时使用。开发时请把 `HOST` 和 `APP_ORIGINS` 限制在可信的本地来源。
 
 访问地址：
 
@@ -219,6 +235,7 @@ pnpm audit --registry=https://registry.npmjs.org/ --prod
 - `.env`、数据库、构建产物和本地配置禁止提交。
 - 示例配置只能保留空值或无效占位值，禁止放入真实密钥。
 - 当前 API 没有认证和限流，请不要把开发服务器直接暴露到公网。
+- 当前 MCP 配置和凭证是实例级资源，没有用户或租户隔离。多用户生产部署仍需要外部认证、租户隔离以及凭证/策略边界；这些能力尚未实现。
 - 提交日志、截图或 Issue 前，请检查是否包含对话数据、文档内容、Token 或内部地址。
 
 ## 常用命令
