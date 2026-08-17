@@ -194,4 +194,5 @@ export type AgentTaskDetail = {
   toolExecutions: ToolExecution[];
   artifacts: AgentArtifact[];
   latestCheckpoint?: AgentCheckpoint;
+  approvals?: import('./approvals').ToolApproval[];
 };

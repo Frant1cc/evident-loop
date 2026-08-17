@@ -19,6 +19,7 @@ import {
   type ResearchToolGroupInfo,
   type ResearchToolInfo
 } from '../api/research';
+import { ApprovalApiError, decideToolApproval } from '../api/approvals';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import PanelResizeHandle from '../components/common/PanelResizeHandle.vue';
@@ -43,6 +44,8 @@ import type {
 } from '../types/research';
 import type { StreamConnectionState } from '../types/streaming';
 import { buildSelectedToolPolicy, requiredGroupIds, standaloneTools } from '../tools/selection';
+import type { ToolApproval, ToolApprovalDecision } from '../types/approvals';
+import { upsertToolApproval } from '../types/approvals';
 
 defineOptions({ name: 'ResearchWorkbench' });
 
@@ -74,6 +77,8 @@ const enabledStandaloneTools = ref<Record<string, boolean>>({});
 const availableSkills = ref<ResearchSkillInfo[]>([]);
 const selectedSkillId = ref<string>();
 const previewArtifact = ref<WordArtifact>();
+const approvals = ref<ToolApproval[]>([]);
+const approvalBusyId = ref<string>();
 let requestController: AbortController | undefined;
 let subscriptionSequence = 0;
 
@@ -350,6 +355,9 @@ function handleStreamEvent(event: ResearchStreamEvent) {
     applyRun(event.run);
   }
   if (event.type === 'run_updated' || event.type === 'done') applyRun(event.run);
+  if (event.type === 'tool_approval_requested' || event.type === 'tool_approval_resolved') {
+    approvals.value = upsertToolApproval(approvals.value, event.approval);
+  }
   if (event.type === 'done') void loadConversations();
   if (event.type === 'error') {
     if (event.assistantMessage) messageRenderer.upsert(event.assistantMessage);
@@ -388,6 +396,26 @@ async function reloadActiveConversation() {
     }
   } catch {
     // Preserve already-rendered stream state when recovery cannot load the conversation.
+  }
+}
+
+async function decideApproval(approval: ToolApproval, decision: ToolApprovalDecision) {
+  if (approvalBusyId.value || approval.status !== 'pending') return;
+  approvalBusyId.value = approval.id;
+  error.value = '';
+  try {
+    const result = await decideToolApproval(approval.id, decision);
+    approvals.value = upsertToolApproval(approvals.value, result.approval);
+  } catch (err) {
+    if (err instanceof ApprovalApiError && err.status === 409) {
+      // Another tab/operator may have decided it. The server snapshot is authoritative.
+      await reloadActiveConversation();
+      error.value = '审批状态已变化，已重新同步。';
+    } else {
+      error.value = err instanceof Error ? err.message : '审批操作失败';
+    }
+  } finally {
+    approvalBusyId.value = undefined;
   }
 }
 
@@ -440,6 +468,8 @@ function clearConversationDetail() {
   activeRailTab.value = 'timeline';
   activeDetailsTab.value = 'notes';
   activeRun.value = undefined;
+  approvals.value = [];
+  approvalBusyId.value = undefined;
   loading.value = false;
   stopping.value = false;
 }
@@ -450,6 +480,7 @@ function applyConversationDetail(detail: ResearchConversationDetail) {
   sources.value = detail.sources;
   notes.value = detail.notes;
   promptPreview.value = detail.promptPreview;
+  approvals.value = detail.approvals ? [...detail.approvals] : [];
 }
 
 function applyRun(run: ResearchRun) {
@@ -526,6 +557,8 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
         :locked-tool-group-ids="lockedToolGroupIds"
         :skills="availableSkills"
         :selected-skill-id="selectedSkillId"
+        :approvals="approvals"
+        :approval-busy-id="approvalBusyId"
         @send="send"
         @stop="stopResearch"
         @toggle-tool-group="toggleToolGroup"
@@ -533,6 +566,7 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
         @select-skill="selectSkill"
         @citation="selectCitation"
         @preview="previewArtifact = $event"
+        @approval-decision="decideApproval"
       />
     </WorkspaceSidebarLayout>
 

@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { PhCaretDown, PhPaperclip } from '@phosphor-icons/vue';
 import { computed } from 'vue';
 
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
   Message,
   MessageContent,
@@ -18,8 +20,12 @@ const props = withDefaults(defineProps<{
     createdAt?: string;
   };
   streamingPlaceholder?: string;
+  auxiliaryLabel?: string;
+  auxiliaryCount?: number;
 }>(), {
-  streamingPlaceholder: ''
+  streamingPlaceholder: '',
+  auxiliaryLabel: '附件',
+  auxiliaryCount: 0
 });
 
 const emit = defineEmits<{
@@ -36,6 +42,12 @@ const time = computed(() => {
     hour: '2-digit',
     minute: '2-digit'
   }).format(new Date(props.message.createdAt));
+});
+
+const hasAuxiliary = computed(() => props.auxiliaryCount > 0);
+const auxiliaryCountLabel = computed(() => {
+  const count = props.auxiliaryCount;
+  return count > 99 ? '99+' : String(count);
 });
 </script>
 
@@ -62,7 +74,34 @@ const time = computed(() => {
           :streaming="message.status === 'streaming' && Boolean(message.content)"
           @citation="emit('citation', $event)"
         />
-        <slot />
+
+        <Collapsible
+          v-if="hasAuxiliary"
+          :default-open="false"
+          class="agent-auxiliary group/auxiliary mt-3 rounded-lg border border-dashed border-border/70 bg-muted/30 transition-colors hover:border-border data-[state=open]:border-border data-[state=open]:bg-muted/40"
+        >
+          <CollapsibleTrigger
+            class="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            :aria-label="`${auxiliaryLabel}（${auxiliaryCount} 项，默认折叠，点击展开）`"
+          >
+            <PhPaperclip :size="14" weight="bold" aria-hidden="true" />
+            <span class="font-medium">{{ auxiliaryLabel }}</span>
+            <span
+              class="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-background px-1.5 font-mono text-[10px] font-semibold tabular-nums text-muted-foreground ring-1 ring-inset ring-border"
+            >
+              {{ auxiliaryCountLabel }}
+            </span>
+            <PhCaretDown
+              :size="12"
+              weight="bold"
+              class="ml-auto transition-transform duration-200 group-data-[state=open]/auxiliary:rotate-180"
+              aria-hidden="true"
+            />
+          </CollapsibleTrigger>
+          <CollapsibleContent class="agent-auxiliary__content px-2 pb-2 pt-1">
+            <slot name="auxiliary" />
+          </CollapsibleContent>
+        </Collapsible>
       </MessageContent>
 
       <MessageFooter v-if="message.status !== 'complete'" class="gap-1.5 px-0" :class="message.status === 'error' ? 'text-destructive' : ''">
@@ -75,3 +114,13 @@ const time = computed(() => {
     </MessageGroup>
   </Message>
 </template>
+
+<style scoped>
+.agent-auxiliary :deep(.word-artifact-card) {
+  margin-top: 0.5rem;
+}
+
+.agent-auxiliary :deep(.word-artifact-card:first-child) {
+  margin-top: 0;
+}
+</style>
