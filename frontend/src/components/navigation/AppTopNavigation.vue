@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import {
   PhBooks,
-  PhChatCircleText,
   PhFlask,
   PhFlowArrow,
   PhGauge,
@@ -26,7 +25,6 @@ const emit = defineEmits<{
 }>();
 
 const tabs = [
-  { key: 'chat', label: '对话', icon: PhChatCircleText },
   { key: 'research', label: '研究工作台', icon: PhFlask },
   { key: 'tasks', label: 'Agent 运行时', icon: PhFlowArrow },
   { key: 'evaluations', label: '质量评测', icon: PhGauge },

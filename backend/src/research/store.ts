@@ -4,6 +4,7 @@ import { sqlite } from '../db.js';
 import type { RagSource } from '../rag/types.js';
 import { parseLocator } from '../knowledge/locator.js';
 import type { KnowledgeFormat } from '../knowledge/types.js';
+import type { ContextState } from '../context/index.js';
 import type {
   ResearchConversation,
   ResearchConversationDetail,
@@ -25,6 +26,7 @@ type ConversationRow = {
   title: string;
   topic: string | null;
   summary: string | null;
+  context_state_json: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -48,6 +50,8 @@ type StepRow = {
   title: string;
   input_json: string | null;
   output_json: string | null;
+  parent_step_id: string | null;
+  tool_call_id: string | null;
   error: string | null;
   started_at: string;
   completed_at: string | null;
@@ -132,6 +136,17 @@ export function updateResearchConversation(id: string, changes: Pick<ResearchCon
     .prepare('UPDATE research_conversations SET title = ?, topic = ?, summary = ?, updated_at = ? WHERE id = ?')
     .run(next.title, next.topic ?? null, next.summary ?? null, next.updatedAt, id);
   return next;
+}
+
+/** Saves only the current context work state; original messages and tool audit records stay append-only. */
+export function updateResearchContextState(id: string, contextState: ContextState) {
+  const current = getResearchConversation(id);
+  if (!current) return undefined;
+  const updatedAt = new Date().toISOString();
+  sqlite
+    .prepare('UPDATE research_conversations SET context_state_json = ?, updated_at = ? WHERE id = ?')
+    .run(JSON.stringify(contextState), updatedAt, id);
+  return getResearchConversation(id);
 }
 
 export function createResearchMessage(input: Omit<ResearchMessage, 'id' | 'createdAt'>) {
@@ -247,8 +262,8 @@ export function createResearchStep(input: Omit<ResearchStep, 'id' | 'startedAt' 
   };
   sqlite
     .prepare(`INSERT INTO research_steps
-      (id, conversation_id, message_id, sequence, type, status, title, input_json, output_json, error, started_at, completed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      (id, conversation_id, message_id, sequence, type, status, title, input_json, output_json, parent_step_id, tool_call_id, error, started_at, completed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(
       step.id,
       step.conversationId,
@@ -259,6 +274,8 @@ export function createResearchStep(input: Omit<ResearchStep, 'id' | 'startedAt' 
       step.title,
       serializeJson(step.input),
       serializeJson(step.output),
+      step.parentStepId ?? null,
+      step.toolCallId ?? null,
       step.error ?? null,
       step.startedAt,
       step.completedAt ?? null
@@ -400,6 +417,7 @@ function toConversation(row: ConversationRow): ResearchConversation {
     title: row.title,
     ...(row.topic ? { topic: row.topic } : {}),
     ...(row.summary ? { summary: row.summary } : {}),
+    ...(parseContextState(row.context_state_json) ? { contextState: parseContextState(row.context_state_json) } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -427,10 +445,17 @@ function toStep(row: StepRow): ResearchStep {
     title: row.title,
     ...(parseJson(row.input_json) === undefined ? {} : { input: parseJson(row.input_json) }),
     ...(parseJson(row.output_json) === undefined ? {} : { output: parseJson(row.output_json) }),
+    ...(row.parent_step_id ? { parentStepId: row.parent_step_id } : {}),
+    ...(row.tool_call_id ? { toolCallId: row.tool_call_id } : {}),
     ...(row.error ? { error: row.error } : {}),
     startedAt: row.started_at,
     ...(row.completed_at ? { completedAt: row.completed_at } : {})
   };
+}
+
+function parseContextState(value: string | null): ContextState | undefined {
+  const parsed = parseJson(value);
+  return parsed && typeof parsed === 'object' ? parsed as ContextState : undefined;
 }
 
 function toSource(row: SourceRow): ResearchSource {

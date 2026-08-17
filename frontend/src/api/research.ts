@@ -36,6 +36,13 @@ export type ResearchToolInfo = {
   description: string;
 };
 
+export type ResearchToolGroupInfo = {
+  id: string;
+  label: string;
+  description: string;
+  toolNames: string[];
+};
+
 export type ResearchSkillInfo = {
   id: string;
   version: string;
@@ -46,7 +53,7 @@ export type ResearchSkillInfo = {
 };
 
 export function listResearchTools() {
-  return request<{ tools: ResearchToolInfo[] }>('/api/research/tools');
+  return request<{ tools: ResearchToolInfo[]; groups: ResearchToolGroupInfo[] }>('/api/research/tools');
 }
 
 export function listResearchSkills() {

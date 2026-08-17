@@ -16,6 +16,7 @@ import {
   streamResearchRun,
   type ResearchSkillInfo,
   type ResearchStreamEvent,
+  type ResearchToolGroupInfo,
   type ResearchToolInfo
 } from '../api/research';
 import { Button } from '@/components/ui/button';
@@ -41,6 +42,7 @@ import type {
   ResearchStep
 } from '../types/research';
 import type { StreamConnectionState } from '../types/streaming';
+import { buildSelectedToolPolicy, requiredGroupIds, standaloneTools } from '../tools/selection';
 
 defineOptions({ name: 'ResearchWorkbench' });
 
@@ -58,7 +60,7 @@ const stopping = ref(false);
 const activeRun = ref<ResearchRun>();
 const error = ref('');
 const collapsed = useCollapsiblePanel('research:sidebar-collapsed');
-const inspectorCollapsed = useCollapsiblePanel('research:inspector-collapsed');
+const inspectorCollapsed = useCollapsiblePanel('research:inspector-collapsed', true);
 const selectedSourceId = ref<string>();
 const selectedStep = ref<ResearchStep>();
 const activeRailTab = ref<'timeline' | 'sources' | 'details'>('timeline');
@@ -66,7 +68,9 @@ const activeDetailsTab = ref<'notes' | 'memory' | 'tool' | 'prompt'>('notes');
 const deleteTarget = ref<ResearchConversation>();
 const deleting = ref(false);
 const availableTools = ref<ResearchToolInfo[]>([]);
-const enabledTools = ref<Record<string, boolean>>({});
+const availableToolGroups = ref<ResearchToolGroupInfo[]>([]);
+const enabledToolGroups = ref<Record<string, boolean>>({});
+const enabledStandaloneTools = ref<Record<string, boolean>>({});
 const availableSkills = ref<ResearchSkillInfo[]>([]);
 const selectedSkillId = ref<string>();
 const previewArtifact = ref<WordArtifact>();
@@ -99,9 +103,7 @@ const sidebarCompact = computed(() => collapsed.value || sidebarWidth.value < 12
 
 const activeConversation = computed(() => conversations.value.find((item) => item.id === activeConversationId.value));
 
-const enabledToolNames = computed(() =>
-  availableTools.value.filter((tool) => enabledTools.value[tool.name]).map((tool) => tool.name)
-);
+const standaloneToolList = computed(() => standaloneTools(availableTools.value, availableToolGroups.value));
 
 const artifactsByMessageId = computed(() => {
   const artifacts = new Map<string, WordArtifact[]>();
@@ -130,11 +132,14 @@ onMounted(async () => {
 
 async function loadTools() {
   try {
-    const { tools } = await listResearchTools();
+    const { tools, groups } = await listResearchTools();
     availableTools.value = tools;
-    enabledTools.value = Object.fromEntries(tools.map((tool) => [tool.name, true]));
+    availableToolGroups.value = groups;
+    // Every conversation starts with all tools OFF so the first turn is a quick chat (§4.1, §7).
+    enabledToolGroups.value = Object.fromEntries(groups.map((group) => [group.id, false]));
+    enabledStandaloneTools.value = Object.fromEntries(standaloneTools(tools, groups).map((tool) => [tool.name, false]));
   } catch {
-    // Tool toggles are an enhancement; the workbench still works with all tools when the list fails to load.
+    // Tool toggles are an enhancement; a failed load leaves the workbench in quick-chat mode.
   }
 }
 
@@ -143,13 +148,17 @@ async function loadSkills() {
     const { skills } = await listResearchSkills();
     availableSkills.value = skills;
   } catch {
-    // Skills are optional; a failed load falls back to "通用研究" while research keeps working.
+    // Skills are optional; a failed load leaves the next turn without a selected skill.
     availableSkills.value = [];
     selectedSkillId.value = undefined;
   }
 }
 
 const selectedSkill = computed(() => availableSkills.value.find((skill) => skill.id === selectedSkillId.value));
+const lockedToolGroupIds = computed(() => requiredGroupIds(
+  availableToolGroups.value,
+  selectedSkill.value?.requiredTools ?? []
+));
 
 function selectSkill(id: string | undefined) {
   if (loading.value) return;
@@ -157,14 +166,20 @@ function selectSkill(id: string | undefined) {
   // Selecting a skill auto-enables its required tools; the toggle count updates visibly (§4.4, §12.3).
   const skill = availableSkills.value.find((item) => item.id === id);
   for (const name of skill?.requiredTools ?? []) {
-    if (name in enabledTools.value) enabledTools.value[name] = true;
+    const group = availableToolGroups.value.find((item) => item.toolNames.includes(name));
+    if (group) enabledToolGroups.value[group.id] = true;
+    else if (name in enabledStandaloneTools.value) enabledStandaloneTools.value[name] = true;
   }
 }
 
-function toggleTool(name: string) {
-  // Required tools of the active skill cannot be turned off while the skill is selected.
+function toggleToolGroup(id: string) {
+  if (lockedToolGroupIds.value.has(id)) return;
+  enabledToolGroups.value[id] = !enabledToolGroups.value[id];
+}
+
+function toggleStandaloneTool(name: string) {
   if (selectedSkill.value?.requiredTools.includes(name)) return;
-  enabledTools.value[name] = !enabledTools.value[name];
+  enabledStandaloneTools.value[name] = !enabledStandaloneTools.value[name];
 }
 
 onBeforeUnmount(disconnectResearchStream);
@@ -181,12 +196,21 @@ async function createConversation() {
   await selectConversation(conversation.id);
 }
 
+// §4.1/§7: each conversation opens with no skill and all tools off. Skill/tools belong to the
+// Run, not the conversation, so there is no carry-over between conversations.
+function resetTurnDefaults() {
+  selectedSkillId.value = undefined;
+  for (const id of Object.keys(enabledToolGroups.value)) enabledToolGroups.value[id] = false;
+  for (const name of Object.keys(enabledStandaloneTools.value)) enabledStandaloneTools.value[name] = false;
+}
+
 async function selectConversation(id: string) {
   if (id === activeConversationId.value) return;
   disconnectResearchStream();
   loading.value = false;
   stopping.value = false;
   activeRun.value = undefined;
+  resetTurnDefaults();
   const detail = await getResearchConversation(id);
   activeConversationId.value = id;
   applyConversationDetail(detail);
@@ -209,11 +233,11 @@ async function send() {
   activeRailTab.value = 'timeline';
 
   try {
-    const toolPolicy = enabledToolNames.value.length === availableTools.value.length
-      ? { mode: 'all' as const }
-      : enabledToolNames.value.length
-        ? { mode: 'selected' as const, names: enabledToolNames.value }
-        : { mode: 'none' as const };
+    const toolPolicy = buildSelectedToolPolicy(
+      availableToolGroups.value,
+      enabledToolGroups.value,
+      enabledStandaloneTools.value
+    );
     const started = await startResearchMessage(conversationId, content, toolPolicy, selectedSkillId.value);
     messageRenderer.upsert(started.userMessage);
     messageRenderer.upsert(started.assistantMessage);
@@ -241,7 +265,7 @@ function connectToRun(run: ResearchRun) {
   })
     .catch(async (err) => {
       if ((err as Error).name === 'AbortError' || sequence !== subscriptionSequence) return;
-      error.value = err instanceof Error ? `${err.message}，任务仍在后台运行。` : '研究进度连接已断开，任务仍在后台运行。';
+      error.value = err instanceof Error ? `${err.message}，任务仍在后台运行。` : '生成进度连接已断开，任务仍在后台运行。';
       await reloadActiveConversation();
     })
     .finally(() => {
@@ -345,7 +369,7 @@ async function stopResearch() {
     applyRun(result.run);
     await reloadActiveConversation();
   } catch (err) {
-    error.value = err instanceof Error ? err.message : '停止研究失败';
+    error.value = err instanceof Error ? err.message : '停止生成失败';
   } finally {
     stopping.value = false;
   }
@@ -495,13 +519,17 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
         :error="error"
         :connection-hint="connectionHint"
         :connection-state="connectionState"
-        :tools="availableTools"
-        :enabled-tools="enabledTools"
+        :tool-groups="availableToolGroups"
+        :standalone-tools="standaloneToolList"
+        :enabled-tool-groups="enabledToolGroups"
+        :enabled-standalone-tools="enabledStandaloneTools"
+        :locked-tool-group-ids="lockedToolGroupIds"
         :skills="availableSkills"
         :selected-skill-id="selectedSkillId"
         @send="send"
         @stop="stopResearch"
-        @toggle-tool="toggleTool"
+        @toggle-tool-group="toggleToolGroup"
+        @toggle-standalone-tool="toggleStandaloneTool"
         @select-skill="selectSkill"
         @citation="selectCitation"
         @preview="previewArtifact = $event"

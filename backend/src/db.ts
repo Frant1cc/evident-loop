@@ -5,6 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { migrateKnowledgeSchema } from './knowledge/migrate.js';
+import { migrateChatConversationsToResearch } from './research/migrateChat.js';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const evidentLoopDbPath = resolve(currentDir, '../data/evident-loop.sqlite');
@@ -138,6 +139,7 @@ export const initDb = () => {
       title TEXT NOT NULL,
       topic TEXT,
       summary TEXT,
+      context_state_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -192,6 +194,8 @@ export const initDb = () => {
       title TEXT NOT NULL,
       input_json TEXT,
       output_json TEXT,
+      parent_step_id TEXT,
+      tool_call_id TEXT,
       error TEXT,
       started_at TEXT NOT NULL,
       completed_at TEXT,
@@ -445,11 +449,21 @@ export const initDb = () => {
     ON agent_artifacts(task_id, updated_at DESC);
   `);
 
+// Existing local databases predate durable context state and native tool-call replay.
+  // SQLite has no ADD COLUMN IF NOT EXISTS, so keep this tiny, idempotent migration here.
+  ensureColumn('research_conversations', 'context_state_json', 'TEXT');
+  ensureColumn('research_steps', 'parent_step_id', 'TEXT');
+  ensureColumn('research_steps', 'tool_call_id', 'TEXT');
   // Existing installations created before the local-library metadata field.
-  const columns = sqlite.prepare('PRAGMA table_info(web_evaluation_cases)').all() as Array<{ name: string }>;
-  if (!columns.some((column) => column.name === 'metadata_json')) {
-    sqlite.exec('ALTER TABLE web_evaluation_cases ADD COLUMN metadata_json TEXT');
-  }
+  ensureColumn('web_evaluation_cases', 'metadata_json', 'TEXT');
 
   migrateKnowledgeSchema(sqlite);
+  migrateChatConversationsToResearch(sqlite);
 };
+
+function ensureColumn(table: string, column: string, definition: string) {
+  const columns = sqlite.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!columns.some((entry) => entry.name === column)) {
+    sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}

@@ -7,7 +7,7 @@ import {
   MessageFooter,
   MessageGroup
 } from '@/components/ui/message';
-import MarkdownMessage from '../chat/MarkdownMessage.vue';
+import MarkdownMessage from '../conversation/MarkdownMessage.vue';
 
 const props = withDefaults(defineProps<{
   message: {

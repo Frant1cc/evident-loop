@@ -1,5 +1,6 @@
 import { getRagSourcesFromToolTraces } from '../rag/index.js';
 import type { LlmProvider } from '../llm/contracts.js';
+import type { ContextManager } from '../context/index.js';
 import type { ToolDefinition, ToolRuntime } from '../tools/contracts.js';
 import type { RagSource } from '../rag/types.js';
 import type {
@@ -13,13 +14,14 @@ import type {
 
 export type AgentLoopEvent =
   | { type: 'llm'; title: string; model: string; tools?: string[] }
+  | { type: 'llm_response'; assistantMessage: ChatMessage }
   | { type: 'tool_started'; toolCall: Pick<ParsedToolCall, 'id' | 'name' | 'arguments'> }
   | { type: 'tool_completed'; toolCall: ToolTrace }
   | { type: 'source_found'; source: RagSource };
 
 export type AgentToolExecutor = (
   toolCall: Pick<ParsedToolCall, 'id' | 'name' | 'arguments'>,
-  context?: { signal?: AbortSignal }
+  context?: { signal?: AbortSignal; conversationId?: string }
 ) => Promise<unknown>;
 
 type ExecuteToolRoundOptions = {
@@ -37,6 +39,9 @@ type ExecuteToolRoundOptions = {
   toolRuntime: ToolRuntime;
   searchToolCalls: Set<string>;
   requiredSingleToolName?: string;
+  contextManager?: ContextManager;
+  /** Forwarded to ToolContext so conversation-scoped tools (e.g. read_evidence) can resolve sources. */
+  conversationId?: string;
 };
 
 export type ToolRoundResult = {
@@ -66,12 +71,17 @@ export async function executeToolRound({
   executeTool,
   toolRuntime,
   searchToolCalls,
-  requiredSingleToolName
+  requiredSingleToolName,
+  contextManager,
+  conversationId
 }: ExecuteToolRoundOptions): Promise<ToolRoundResult> {
   throwIfAborted(signal);
+  const preparedMessages = contextManager
+    ? await contextManager.prepare({ messages, tools, model, signal })
+    : messages;
   const completion = await llm.complete({
     model,
-    messages,
+    messages: preparedMessages,
     tools: tools.length ? tools : undefined,
     toolChoice: tools.length ? 'auto' : undefined,
     temperature,
@@ -82,6 +92,14 @@ export async function executeToolRound({
   if (!assistantMessage) {
     throw new Error(describeEmptyCompletion(completion));
   }
+  await contextManager?.recordMainPromptUsage?.({
+    messages,
+    tools,
+    model,
+    signal,
+    promptTokens: completion.usage?.prompt_tokens
+  });
+  await onEvent?.({ type: 'llm_response', assistantMessage });
 
   const rawToolCalls = assistantMessage.tool_calls ?? [];
   const reply = assistantMessage.content?.trim();
@@ -126,7 +144,7 @@ export async function executeToolRound({
     });
     const toolTrace = isRepeatedSearch(toolCall, searchToolCalls)
       ? createRepeatedSearchTrace(toolCall)
-      : await executeParsedToolCall(toolCall, toolRuntime, signal, executeTool);
+      : await executeParsedToolCall(toolCall, toolRuntime, signal, executeTool, conversationId);
     toolTraces.push(toolTrace);
     await onEvent?.({ type: 'tool_completed', toolCall: toolTrace });
 
@@ -156,7 +174,8 @@ async function executeParsedToolCall(
   toolCall: ParsedToolCall,
   toolRuntime: ToolRuntime,
   signal?: AbortSignal,
-  executeTool?: AgentToolExecutor
+  executeTool?: AgentToolExecutor,
+  conversationId?: string
 ): Promise<ToolTrace> {
   throwIfAborted(signal);
 
@@ -169,13 +188,14 @@ async function executeParsedToolCall(
     };
   }
 
+  const toolContext = conversationId ? { signal, conversationId } : { signal };
   try {
     const result = executeTool
       ? await executeTool(
           { id: toolCall.id, name: toolCall.name, arguments: toolCall.arguments },
-          { signal }
+          toolContext
         )
-      : await toolRuntime.execute(toolCall.name, toolCall.arguments, { signal });
+      : await toolRuntime.execute(toolCall.name, toolCall.arguments, toolContext);
     throwIfAborted(signal);
     return {
       id: toolCall.id,
@@ -196,7 +216,6 @@ async function executeParsedToolCall(
 
 const dedupedSearchToolNames = new Set([
   'search_knowledge',
-  'search_docs',
   'retrieve_web_evidence',
   'web_search',
   'fetch_page'

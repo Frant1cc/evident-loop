@@ -7,7 +7,6 @@ import { createResearchApplication } from './modules/research/index.js';
 import { createTaskApplication } from './modules/tasks/index.js';
 import { createAgentRouter } from './routes/agent.js';
 import { artifactsRouter } from './routes/artifacts.js';
-import { chatRouter } from './routes/chat.js';
 import { dbTestRouter } from './routes/dbTest.js';
 import { deepseekRouter } from './routes/deepseek.js';
 import { evaluationsRouter } from './routes/evaluations.js';
@@ -42,7 +41,6 @@ export function createApp(dependencies: AppDependencies = {}) {
 
   app.use('/api', healthRouter);
   app.use('/api', knowledgeRouter);
-  app.use('/api', chatRouter);
   app.use('/api', deepseekRouter);
   app.use('/api', evaluationsRouter);
   app.use('/api', createAgentRouter(toolRuntime));

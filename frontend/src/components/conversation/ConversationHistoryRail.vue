@@ -1,10 +1,17 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 
-import type { ChatMessage } from '../../types/chat';
+// Neutral history rail: depends only on the shared message shape (id/role/content/status),
+// so it works for research and quick-chat turns alike (§7).
+type RailMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  status: 'streaming' | 'complete' | 'error';
+};
 
 const props = defineProps<{
-  messages: ChatMessage[];
+  messages: RailMessage[];
   activeMessageId?: string;
 }>();
 
@@ -14,8 +21,8 @@ const emit = defineEmits<{
 
 type ConversationTurn = {
   id: string;
-  user?: ChatMessage;
-  assistant?: ChatMessage;
+  user?: RailMessage;
+  assistant?: RailMessage;
 };
 
 const turns = computed<ConversationTurn[]>(() => {

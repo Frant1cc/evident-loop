@@ -12,9 +12,11 @@ import {
 } from './queryRewrite.js';
 import type { RagSource } from './types.js';
 import { getCollectionName, searchChunks, vectorCollectionExists } from './vectorStore.js';
+import { resolveKnowledgePath } from './knowledgeFiles.js';
 
 type SearchKnowledgeArgs = {
   query?: unknown;
+  file?: unknown;
   limit?: unknown;
 };
 
@@ -53,6 +55,7 @@ export function getDefaultRetrievalMode(): RetrievalMode {
 
 export type RetrieveKnowledgeOptions = {
   collection?: string;
+  file?: string;
   mode?: RetrievalMode;
   /** Explicit override; otherwise controlled by RAG_QUERY_REWRITE. */
   queryRewrite?: boolean;
@@ -76,10 +79,11 @@ export async function retrieveKnowledge(
   options: RetrieveKnowledgeOptions = {}
 ): Promise<RetrieveKnowledgeResult> {
   const collection = options.collection ?? getCollectionName();
+  const file = options.file;
   const mode = options.mode ?? getDefaultRetrievalMode();
   const queryRewrite = options.queryRewrite ?? getDefaultQueryRewriteEnabled();
   const candidateLimit = queryRewrite ? Math.max(8, limit * 2) : limit;
-  const original = await retrieveSingleQuery(query, candidateLimit, collection, mode);
+  const original = await retrieveSingleQuery(query, candidateLimit, collection, mode, file);
   const baseDiagnostics = {
     retrievalQueries: [query],
     queryCount: 1,
@@ -101,7 +105,7 @@ export async function retrieveKnowledge(
     return { ...assessRetrievalConfidence(results), results, ...baseDiagnostics };
   }
 
-  const topics = (await getKeywordStore()).listDocumentTopics(collection)
+  const topics = (await getKeywordStore()).listDocumentTopics(collection, file)
     .map((topic) => `${topic.file}：${topic.title}`);
   const rewrite = await (options.rewriteQuery ?? rewriteRetrievalQuery)(
     query,
@@ -123,7 +127,7 @@ export async function retrieveKnowledge(
   }
 
   const rewritten = await Promise.all(rewrite.queries.map((rewrittenQuery) =>
-    retrieveSingleQuery(rewrittenQuery, candidateLimit, collection, mode)
+    retrieveSingleQuery(rewrittenQuery, candidateLimit, collection, mode, file)
   ));
   const results = mergeRewriteFallback(
     original.results,
@@ -146,18 +150,19 @@ async function retrieveSingleQuery(
   query: string,
   limit: number,
   collection: string,
-  mode: RetrievalMode
+  mode: RetrievalMode,
+  file?: string
 ): Promise<RetrievalConfidence & { results: RagSource[] }> {
   const queryEmbedding = await createEmbedding(query);
 
   if (mode === 'dense') {
-    const candidates = await searchChunks(queryEmbedding, Math.max(denseCandidateCount, limit * 3), collection);
+    const candidates = await searchChunks(queryEmbedding, Math.max(denseCandidateCount, limit * 3), collection, file);
     const results = mergeAdjacentChunks(candidates, adjacentContextLimits).slice(0, limit);
     return { ...assessRetrievalConfidence(results), results };
   }
 
-  const dense = await searchChunks(queryEmbedding, denseCandidateCount, collection);
-  const keyword = (await getKeywordStore()).searchKeyword(query, keywordCandidateCount, collection);
+  const dense = await searchChunks(queryEmbedding, denseCandidateCount, collection, file);
+  const keyword = (await getKeywordStore()).searchKeyword(query, keywordCandidateCount, collection, file);
   const fused = rrfFuse(dense, keyword);
   const assembled = mergeAdjacentChunks(fused, adjacentContextLimits);
   const results = limitChunksPerFile(assembled, defaultMaxChunksPerFile).slice(0, limit);
@@ -168,10 +173,10 @@ export async function searchKnowledge(
   args: unknown,
   options: Pick<RetrieveKnowledgeOptions, 'signal'> = {}
 ): Promise<{ query: string } & RetrieveKnowledgeResult> {
-  const { query, limit } = parseSearchKnowledgeArgs(args);
-  const retrieval = await retrieveKnowledge(query, limit, options);
+  const { query, file, limit } = parseSearchKnowledgeArgs(args);
+  const retrieval = await retrieveKnowledge(query, limit, { ...options, file });
 
-  return { query, ...retrieval };
+  return { query, ...(file ? { file } : {}), ...retrieval };
 }
 
 export function getRagSourcesFromToolTraces(toolCalls: ToolTrace[]): RagSource[] {
@@ -209,7 +214,7 @@ function parseSearchKnowledgeArgs(args: unknown) {
     throw new Error('search_knowledge requires a query string');
   }
 
-  const { query, limit } = args as SearchKnowledgeArgs;
+  const { query, file, limit } = args as SearchKnowledgeArgs;
 
   if (typeof query !== 'string' || !query.trim()) {
     throw new Error('search_knowledge requires a query string');
@@ -217,8 +222,15 @@ function parseSearchKnowledgeArgs(args: unknown) {
 
   return {
     query: query.trim(),
+    ...(file === undefined ? {} : {
+      file: typeof file === 'string' ? resolveKnowledgePath(file.trim()) : invalidFileFilter()
+    }),
     limit: typeof limit === 'number' && Number.isInteger(limit) && limit > 0 ? Math.min(limit, 10) : 5
   };
+}
+
+function invalidFileFilter(): never {
+  throw new Error('search_knowledge file must be a relative knowledge path');
 }
 
 function isSearchKnowledgeResult(value: unknown): value is { results: RagSource[]; verdict?: RetrievalVerdict } {

@@ -185,7 +185,11 @@ export function buildEvidenceFromToolExecutions(
         content,
         locator: {
           truncated: Boolean(result.truncated),
-          totalChars: numberValue(result.totalChars)
+          totalChars: numberValue(result.totalChars),
+          startLine: numberValue(result.startLine),
+          endLine: numberValue(result.endLine),
+          totalLines: numberValue(result.totalLines),
+          nextStartLine: numberValue(result.nextStartLine)
         }
       });
       continue;

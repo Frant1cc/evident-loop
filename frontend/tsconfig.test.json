@@ -4,6 +4,6 @@
     "types": ["node"],
     "lib": ["ES2020"]
   },
-  "include": ["src/**/*.test.ts", "src/streaming/**/*.ts"],
+  "include": ["src/**/*.test.ts", "src/streaming/**/*.ts", "src/tools/**/*.ts"],
   "exclude": []
 }

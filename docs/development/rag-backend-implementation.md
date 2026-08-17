@@ -22,7 +22,7 @@
 - `backend/src/agent/agentLoop.ts`：多轮 function calling AgentLoop。
 - `backend/src/agent/types.ts`：AgentLoop 类型。
 - `backend/src/tools/registry.ts`：工具注册表。
-- `backend/src/tools/docsTool.ts`：当前 `search_docs` / `read_document` 工具。
+- `backend/src/tools/docsTool.ts`：文档定向读取工具；旧版 `search_docs` 已收敛进混合检索链路。
 - `backend/src/index.ts`：后端启动入口。
 - `docs/`：固定 Markdown 文档目录。
 
@@ -284,7 +284,7 @@ search_knowledge: {
 }
 ```
 
-可以保留旧的 `search_docs`，但 system prompt 应优先引导使用 `search_knowledge`。
+> 历史说明：初版允许保留 `search_docs`；当前实现已将其移除并并入 `search_knowledge`。
 
 ## AgentLoop 返回 sources
 
@@ -330,7 +330,7 @@ return {
 - When answering from retrieved sources, mention the relevant document name when useful.
 ```
 
-可保留 `search_docs` 作为 fallback，但优先 `search_knowledge`。
+> 历史说明：这里的 `search_docs` fallback 已由 `search_knowledge` 的关键词召回与文件过滤取代。
 
 ## 验收标准
 

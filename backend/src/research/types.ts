@@ -1,7 +1,9 @@
 import type { RagSource } from '../rag/types.js';
 import type { ChatMessage } from '../agent/types.js';
+import type { ContextState } from '../context/index.js';
 import type { ToolPolicy } from '../tools/contracts.js';
 import type { ResearchSkillSnapshot } from '../skills/contracts.js';
+import type { ResearchExecutionMode } from './executionMode.js';
 
 export type ResearchMessageStatus = 'streaming' | 'complete' | 'error';
 export type ResearchStepStatus = 'running' | 'complete' | 'error';
@@ -13,6 +15,7 @@ export type ResearchConversation = {
   title: string;
   topic?: string;
   summary?: string;
+  contextState?: ContextState;
   createdAt: string;
   updatedAt: string;
 };
@@ -36,6 +39,8 @@ export type ResearchStep = {
   title: string;
   input?: unknown;
   output?: unknown;
+  parentStepId?: string;
+  toolCallId?: string;
   error?: string;
   startedAt: string;
   completedAt?: string;
@@ -69,6 +74,11 @@ export type ResearchRunInput = {
   toolPolicy: ToolPolicy;
   /** Selected official skill. Absent means "通用研究" (general research). */
   skill?: ResearchSkillSnapshot;
+  /**
+   * Derived server-side after skill resolution and tool-policy normalization (§6.1).
+   * Absent on runs created before this field existed; those are interpreted as 'research'.
+   */
+  executionMode?: ResearchExecutionMode;
 };
 
 export type ResearchRun = {
