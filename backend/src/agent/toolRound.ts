@@ -302,7 +302,7 @@ function throwIfAborted(signal?: AbortSignal) {
  * Builds a diagnosable message when the completion parsed as JSON but carried no assistant message.
  * Surfaces choices count and a truncated raw payload so an empty/malformed choice can be identified.
  */
-function describeEmptyCompletion(completion: DeepSeekChatResponse): string {
+export function describeEmptyCompletion(completion: DeepSeekChatResponse): string {
   const choiceCount = completion.choices?.length ?? 0;
   let raw: string;
   try {

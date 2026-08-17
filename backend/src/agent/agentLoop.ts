@@ -7,6 +7,7 @@ import { normalizeToolPolicy } from '../tools/policy.js';
 import { builtInToolRuntime } from '../tools/runtime.js';
 import { DEFAULT_MAX_TOOL_ROUNDS } from './config.js';
 import {
+  describeEmptyCompletion,
   executeToolRound,
   type AgentLoopEvent,
   type AgentToolExecutor
@@ -15,7 +16,6 @@ import type {
   AgentLoopResult,
   AgentTraceStep,
   ChatMessage,
-  DeepSeekChatResponse,
   ToolTrace
 } from './types.js';
 
@@ -42,8 +42,6 @@ export type RunAgentLoopOptions = {
   signal?: AbortSignal;
   onEvent?: (event: AgentLoopEvent) => void | Promise<void>;
   toolPolicy?: ToolPolicy;
-  /** @deprecated Use toolPolicy. */
-  allowedToolNames?: string[];
   /** Retry once with an explicit instruction when a required tool was not called. */
   requiredToolName?: string;
   executeTool?: AgentToolExecutor;
@@ -67,7 +65,6 @@ export async function runAgentLoop({
   signal,
   onEvent,
   toolPolicy,
-  allowedToolNames,
   requiredToolName,
   executeTool,
   toolRuntime = builtInToolRuntime,
@@ -80,9 +77,7 @@ export async function runAgentLoop({
     ...contextMessages,
     { role: 'user', content: message }
   ];
-  const effectivePolicy = normalizeLegacyToolAliases(
-    normalizeToolPolicy(toolPolicy ?? legacyAllowedNamesToPolicy(allowedToolNames))
-  );
+  const effectivePolicy = normalizeLegacyToolAliases(normalizeToolPolicy(toolPolicy));
   const tools = toolRuntime.getDefinitions(effectivePolicy);
   const toolNames = tools.map((tool) => tool.function.name);
   const trace: AgentTraceStep[] = [
@@ -311,28 +306,6 @@ export async function runAgentLoop({
     trace,
     sources: getRagSourcesFromToolTraces(toolTraces)
   };
-}
-
-/**
- * Builds a diagnosable message when the completion parsed as JSON but carried no assistant message.
- * Surfaces choices count and a truncated raw payload so an empty/malformed choice can be identified.
- */
-function describeEmptyCompletion(completion: DeepSeekChatResponse): string {
-  const choiceCount = completion.choices?.length ?? 0;
-  let raw: string;
-  try {
-    raw = JSON.stringify(completion).slice(0, 500);
-  } catch {
-    raw = '<unserializable completion>';
-  }
-  return `DeepSeek returned an empty response (choices: ${choiceCount}): ${raw}`;
-}
-
-function legacyAllowedNamesToPolicy(allowedToolNames?: string[]): ToolPolicy {
-  if (allowedToolNames === undefined) return { mode: 'all' };
-  return allowedToolNames.length
-    ? { mode: 'selected', names: allowedToolNames }
-    : { mode: 'none' };
 }
 
 function normalizeLegacyToolAliases(policy: ToolPolicy): ToolPolicy {
