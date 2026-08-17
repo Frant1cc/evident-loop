@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { sqlite } from '../db.js';
+import { redactToolArguments } from '../approvals/manager.js';
 import { normalizeToolPolicy } from '../tools/policy.js';
 import type {
   AgentCheckpoint,
@@ -821,7 +822,7 @@ function toToolExecution(row: ToolExecutionRow): ToolExecution {
     executionKey: row.execution_key,
     toolName: row.tool_name,
     status: row.status,
-    arguments: parseJson(row.arguments_json),
+    arguments: redactToolArguments(parseJson(row.arguments_json)),
     ...(parseJson(row.result_json) === undefined ? {} : { result: parseJson(row.result_json) }),
     ...(row.error ? { error: row.error } : {}),
     startedAt: row.started_at,

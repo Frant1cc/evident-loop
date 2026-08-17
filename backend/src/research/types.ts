@@ -2,6 +2,7 @@ import type { RagSource } from '../rag/types.js';
 import type { ChatMessage } from '../agent/types.js';
 import type { ContextState } from '../context/index.js';
 import type { ToolPolicy } from '../tools/contracts.js';
+import type { ToolApprovalDto } from '../approvals/contracts.js';
 import type { ResearchSkillSnapshot } from '../skills/contracts.js';
 import type { ResearchExecutionMode } from './executionMode.js';
 
@@ -102,4 +103,6 @@ export type ResearchConversationDetail = {
   notes: ResearchNote[];
   promptPreview: ResearchPromptPreview;
   activeRun?: ResearchRun;
+  /** Pending and recently-decided approvals for the active run, if enabled. */
+  approvals?: ToolApprovalDto[];
 };

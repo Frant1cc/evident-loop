@@ -232,6 +232,7 @@ export type AgentTaskDetail = {
   claimEvidence: ClaimEvidence[];
   toolExecutions: ToolExecution[];
   artifacts: AgentArtifact[];
+  approvals?: import('../approvals/contracts.js').ToolApprovalDto[];
   latestCheckpoint?: AgentCheckpoint;
 };
 import type { ToolPolicy } from '../tools/contracts.js';

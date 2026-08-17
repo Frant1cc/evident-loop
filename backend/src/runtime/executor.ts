@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import { runAgentLoop } from '../agent/agentLoop.js';
+import type { ApprovalManager, ToolApprovalScope } from '../approvals/contracts.js';
+import { redactToolArguments } from '../approvals/manager.js';
 import type { LlmProvider } from '../llm/contracts.js';
 import { resolveLlmProvider } from '../llm/provider.js';
-import type { ToolRuntime } from '../tools/contracts.js';
+import { ToolExecutionError, type ToolRuntime, type ToolSnapshot } from '../tools/contracts.js';
 import { builtInToolRuntime } from '../tools/runtime.js';
 import {
   completeToolExecution,
@@ -50,6 +52,7 @@ export async function executeAgentTask(options: {
   reviewStep?: AgentStepReviewer;
   writeArtifact?: AgentArtifactWriter;
   toolRuntime?: ToolRuntime;
+  approvalManager?: ApprovalManager;
 }): Promise<AgentTaskDetail | undefined> {
   markAgentTaskInProcess(options.id);
   try {
@@ -68,6 +71,7 @@ export async function finalizeAgentTask(options: {
   reviewStep?: AgentStepReviewer;
   writeArtifact?: AgentArtifactWriter;
   toolRuntime?: ToolRuntime;
+  approvalManager?: ApprovalManager;
 }) {
   let detail = getAgentTaskDetail(options.id);
   if (!detail) return undefined;
@@ -111,6 +115,7 @@ async function executeAgentTaskInternal(options: {
   reviewStep?: AgentStepReviewer;
   writeArtifact?: AgentArtifactWriter;
   toolRuntime?: ToolRuntime;
+  approvalManager?: ApprovalManager;
 }): Promise<AgentTaskDetail | undefined> {
   let detail = getAgentTaskDetail(options.id);
   if (!detail) return undefined;
@@ -195,7 +200,8 @@ async function executeAgentTaskInternal(options: {
       const runStep = options.runStep ?? createDefaultStepRunner(
         resolveLlmProvider(options),
         options.model,
-        options.toolRuntime ?? builtInToolRuntime
+        options.toolRuntime ?? builtInToolRuntime,
+        options.approvalManager
       );
       const output = await runStep({
         task: detail.task,
@@ -237,7 +243,12 @@ async function executeAgentTaskInternal(options: {
   return detail;
 }
 
-function createDefaultStepRunner(llm: LlmProvider, model: string, toolRuntime: ToolRuntime): AgentStepRunner {
+function createDefaultStepRunner(
+  llm: LlmProvider,
+  model: string,
+  toolRuntime: ToolRuntime,
+  approvalManager?: ApprovalManager
+): AgentStepRunner {
   return async ({ task, step, completedSteps, signal }) => {
     const result = await runAgentLoop({
       llm,
@@ -247,9 +258,24 @@ function createDefaultStepRunner(llm: LlmProvider, model: string, toolRuntime: T
       toolPolicy: task.toolPolicy,
       toolRuntime,
       signal,
+      toolScope: { kind: 'agent_task', taskId: task.id },
       executeTool: (toolCall, context) => executeAuditedTool(
-        { task, step, toolCall },
-        (name, args) => toolRuntime.execute(name, args, context)
+        {
+          task,
+          step,
+          toolCall,
+          snapshot: context?.snapshot,
+          toolRuntime,
+          approvalManager,
+          approvalScope: { type: 'agent_task', id: task.id },
+          context
+        },
+        (name, args, executionContext) => {
+          const runtimeCall = { id: toolCall.id, name, arguments: args };
+          return context?.snapshot
+            ? toolRuntime.execute(context.snapshot, runtimeCall, executionContext)
+            : toolRuntime.execute(name, args, executionContext);
+        }
       )
     });
     return {
@@ -264,9 +290,32 @@ export async function executeAuditedTool(input: {
   task: AgentTask;
   step: AgentPlanStep;
   toolCall: { id: string; name: string; arguments: unknown };
-}, execute: (name: string, args: unknown) => Promise<unknown> = (name, args) => builtInToolRuntime.execute(name, args)) {
-  const executionKey = createExecutionKey(input.task.id, input.step, input.toolCall.name, input.toolCall.arguments);
-  const existing = getToolExecutionByKey(executionKey);
+  snapshot?: ToolSnapshot;
+  toolRuntime?: ToolRuntime;
+  approvalManager?: ApprovalManager;
+  approvalScope?: ToolApprovalScope;
+  context?: { signal?: AbortSignal; conversationId?: string; toolScope?: import('../tools/contracts.js').ToolScope };
+}, execute: (name: string, args: unknown, context?: { signal?: AbortSignal; conversationId?: string; toolScope?: import('../tools/contracts.js').ToolScope }) => Promise<unknown> = (name, args) => builtInToolRuntime.execute(name, args)) {
+  // Keep the durable cache key stable across process versions and model call
+  // ids: a completed side-effecting execution must be replayed directly. If
+  // that semantic execution was rejected/failed, a fresh tool_call_id gets a
+  // scoped retry row so it can request approval again without erasing history.
+  const baseExecutionKey = createExecutionKey(input.task.id, input.step, input.toolCall.name, input.toolCall.arguments);
+  const callScopedKey = `${baseExecutionKey}:${input.toolCall.id}`;
+  let executionKey = baseExecutionKey;
+  let existing = getToolExecutionByKey(baseExecutionKey);
+  if (existing?.status === 'failed') {
+    executionKey = callScopedKey;
+    existing = getToolExecutionByKey(callScopedKey);
+  } else if (!existing) {
+    // A scoped retry may already exist when a previous call failed before its
+    // base row was committed; otherwise the first call owns the stable key.
+    const scoped = getToolExecutionByKey(callScopedKey);
+    if (scoped) {
+      executionKey = callScopedKey;
+      existing = scoped;
+    }
+  }
 
   if (existing?.status === 'completed') {
     appendEvent(input.task.id, 'tool_result_reused', {
@@ -278,6 +327,14 @@ export async function executeAuditedTool(input: {
     return existing.result;
   }
   if (existing?.status === 'failed') throw new Error(existing.error ?? `${existing.toolName} previously failed`);
+  if (existing?.status === 'running') {
+    throw new ToolExecutionError({
+      code: 'execution_failed',
+      message: `Tool execution is incomplete and cannot be replayed: ${existing.toolName}`,
+      retryable: true,
+      reason: 'The previous process may have reached the remote tool before interruption.'
+    });
+  }
 
   const execution = existing ?? createRunningToolExecution(input, executionKey);
   if (!existing) {
@@ -286,12 +343,27 @@ export async function executeAuditedTool(input: {
       stepId: input.step.id,
       executionId: execution.id,
       toolName: execution.toolName,
-      arguments: execution.arguments
+      arguments: redactToolArguments(execution.arguments)
     }, execution.startedAt);
   }
 
   try {
-    const result = await execute(input.toolCall.name, input.toolCall.arguments);
+    if (input.approvalManager && input.snapshot && input.toolRuntime && input.approvalScope) {
+      await input.approvalManager.authorize({
+        runtime: input.toolRuntime,
+        snapshot: input.snapshot,
+        toolCall: input.toolCall,
+        scope: input.approvalScope,
+        context: input.context,
+        onRequested: (approval) => {
+          appendEvent(input.task.id, 'tool_approval_requested', { approval }, new Date().toISOString());
+        },
+        onResolved: (approval) => {
+          appendEvent(input.task.id, 'tool_approval_resolved', { approval }, new Date().toISOString());
+        }
+      });
+    }
+    const result = await execute(input.toolCall.name, input.toolCall.arguments, input.context);
     const completedAt = new Date().toISOString();
     completeToolExecution(execution.id, result, completedAt);
     appendEvent(input.task.id, 'tool_completed', {

@@ -6,3 +6,4 @@ export {
   type EvidenceChainDraft,
   type PlanStepDraft
 } from '../../runtime/types.js';
+export type { ToolApprovalDto, ToolApprovalScope, ToolApprovalStatus } from '../../approvals/contracts.js';

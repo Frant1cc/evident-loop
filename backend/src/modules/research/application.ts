@@ -22,7 +22,8 @@ import {
   updateResearchNote
 } from '../../research/store.js';
 import type { ToolPolicy, ToolRuntime } from '../../tools/contracts.js';
-import { normalizeToolPolicy } from '../../tools/policy.js';
+import type { ApprovalManager } from '../../approvals/contracts.js';
+import { normalizeToolPolicy, restrictToolPolicyToRegistered } from '../../tools/policy.js';
 import type { ResearchSkillRuntime } from '../../skills/runtime.js';
 import { builtInToolGroups, validateToolGroups, type ToolGroupDefinition } from '../../tools/groups.js';
 import type { ResolvedResearchSkill } from '../../skills/contracts.js';
@@ -34,6 +35,7 @@ export type ResearchApplicationDependencies = {
   toolRuntime: ToolRuntime;
   skillRuntime: ResearchSkillRuntime;
   toolGroups?: ToolGroupDefinition[];
+  approvalManager?: ApprovalManager;
 };
 
 /** Use-case boundary for research conversations and durable background runs. */
@@ -58,12 +60,7 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
       const registered = new Set(
         dependencies.toolRuntime.getDefinitions().map((tool) => tool.function.name)
       );
-      const policy = normalizeToolPolicy(value);
-      if (policy.mode === 'selected') {
-        const unknown = policy.names.filter((name) => !registered.has(name));
-        if (unknown.length) throw new Error(`Unknown tools in toolPolicy: ${unknown.join(', ')}`);
-      }
-      return policy;
+      return restrictToolPolicyToRegistered(normalizeToolPolicy(value), registered);
     },
     listConversations: listResearchConversations,
     createConversation: createResearchConversation,
@@ -71,7 +68,14 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
       const conversation = getResearchConversation(id);
       if (!conversation) return undefined;
       const { promptPreview } = buildResearchContext(conversation, listResearchMessages(id), '', listResearchSteps(id));
-      return getResearchConversationDetail(id, promptPreview);
+       const detail = getResearchConversationDetail(id, promptPreview);
+       if (!detail || !dependencies.approvalManager) return detail;
+       return {
+         ...detail,
+         approvals: detail.activeRun
+           ? dependencies.approvalManager.list({ type: 'research_run', id: detail.activeRun.id })
+           : []
+       };
     },
     deleteConversation: (id: string) => {
       if (getActiveResearchRun(id)) throw new Error('Stop the active research task before deleting this conversation');
@@ -103,11 +107,12 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
         skill: skill?.snapshot,
         skillRuntime: dependencies.skillRuntime,
         llm: requireLlm(),
-        model: dependencies.model
+        model: dependencies.model,
+        approvalManager: dependencies.approvalManager
       });
     },
     getRun: getResearchRun,
-    getRunSnapshot: getResearchRunSnapshot,
+    getRunSnapshot: (id: string) => getResearchRunSnapshot(id, dependencies.approvalManager),
     subscribeToRun: subscribeToResearchRun,
     getStreamEventsAfter: listStreamEventsAfter,
     getStreamMaxSequence: getMaxSequence,
