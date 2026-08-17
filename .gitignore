@@ -20,7 +20,7 @@ reports/
 
 # Local tools and operating-system files
 .internal/
-.claude/
+.claude/settings.local.json
 .vscode/
 .idea/
 .DS_Store
