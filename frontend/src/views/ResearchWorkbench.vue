@@ -43,6 +43,7 @@ import type {
   ResearchStep
 } from '../types/research';
 import type { StreamConnectionState } from '../types/streaming';
+import { buildAuxiliaryState, type AuxiliaryState } from '../lib/auxiliaryState';
 import { buildSelectedToolPolicy, requiredGroupIds, standaloneTools } from '../tools/selection';
 import type { ToolApproval, ToolApprovalDecision } from '../types/approvals';
 import { upsertToolApproval } from '../types/approvals';
@@ -128,6 +129,10 @@ const artifactsByMessageId = computed(() => {
 
   return artifacts;
 });
+
+const auxiliaryStateByMessageId = computed(() =>
+  buildAuxiliaryState(steps.value, artifactsByMessageId.value)
+);
 
 onMounted(async () => {
   await Promise.all([loadConversations(), loadTools(), loadSkills()]);
@@ -545,6 +550,7 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
         :conversation-id="activeConversationId"
         :messages="messages"
         :artifacts-by-message-id="artifactsByMessageId"
+        :auxiliary-state-by-message-id="auxiliaryStateByMessageId"
         :loading="loading"
         :stopping="stopping"
         :error="error"

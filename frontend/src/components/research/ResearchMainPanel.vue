@@ -10,12 +10,14 @@ import type { ToolApproval, ToolApprovalDecision } from '../../types/approvals';
 import type { WordArtifact } from '../../types/artifacts';
 import type { ResearchMessage } from '../../types/research';
 import type { StreamConnectionState } from '../../types/streaming';
+import type { AuxiliaryState } from '../../lib/auxiliaryState';
 
 defineProps<{
   title?: string;
   conversationId?: string;
   messages: ResearchMessage[];
   artifactsByMessageId: Map<string, WordArtifact[]>;
+  auxiliaryStateByMessageId?: Map<string, AuxiliaryState>;
   loading: boolean;
   stopping: boolean;
   error: string;
@@ -71,6 +73,7 @@ const emit = defineEmits<{
       :conversation-id="conversationId"
       :messages="messages"
       :artifacts-by-message-id="artifactsByMessageId"
+      :auxiliary-state-by-message-id="auxiliaryStateByMessageId"
       @citation="emit('citation', $event)"
       @preview="emit('preview', $event)"
     />

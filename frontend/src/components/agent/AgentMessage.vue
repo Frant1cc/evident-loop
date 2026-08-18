@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { PhCaretDown, PhPaperclip } from '@phosphor-icons/vue';
+import { PhCaretDown, PhCircleNotch, PhPaperclip, PhWarning } from '@phosphor-icons/vue';
 import { computed } from 'vue';
 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
@@ -11,6 +11,8 @@ import {
 } from '@/components/ui/message';
 import MarkdownMessage from '../conversation/MarkdownMessage.vue';
 
+type AuxiliaryStatus = 'idle' | 'running' | 'complete' | 'error';
+
 const props = withDefaults(defineProps<{
   message: {
     id: string;
@@ -21,11 +23,15 @@ const props = withDefaults(defineProps<{
   };
   streamingPlaceholder?: string;
   auxiliaryLabel?: string;
+  auxiliaryActivity?: string;
   auxiliaryCount?: number;
+  auxiliaryStatus?: AuxiliaryStatus;
 }>(), {
   streamingPlaceholder: '',
   auxiliaryLabel: '附件',
-  auxiliaryCount: 0
+  auxiliaryActivity: '',
+  auxiliaryCount: 0,
+  auxiliaryStatus: 'idle'
 });
 
 const emit = defineEmits<{
@@ -44,11 +50,47 @@ const time = computed(() => {
   }).format(new Date(props.message.createdAt));
 });
 
-const hasAuxiliary = computed(() => props.auxiliaryCount > 0);
+const effectiveAuxiliaryStatus = computed<AuxiliaryStatus>(() => props.auxiliaryStatus);
+
+const hasAuxiliary = computed(() => {
+  if (props.auxiliaryCount > 0) return true;
+  const status = effectiveAuxiliaryStatus.value;
+  return status === 'running' || status === 'error';
+});
+
+const isAuxiliaryRunning = computed(() => effectiveAuxiliaryStatus.value === 'running');
+const isAuxiliaryError = computed(() => effectiveAuxiliaryStatus.value === 'error');
+
+const auxiliaryPrimaryText = computed(() => {
+  if (isAuxiliaryRunning.value && props.auxiliaryActivity) return props.auxiliaryActivity;
+  return props.auxiliaryLabel;
+});
+
 const auxiliaryCountLabel = computed(() => {
   const count = props.auxiliaryCount;
   return count > 99 ? '99+' : String(count);
 });
+
+const auxiliaryAriaLabel = computed(() => {
+  const text = auxiliaryPrimaryText.value;
+  const count = props.auxiliaryCount;
+  const status = effectiveAuxiliaryStatus.value;
+  const stateLabel =
+    status === 'running' ? '处理中' :
+    status === 'error' ? '出错' :
+    '已折叠';
+  const countSuffix = count > 0 ? `（${count} 项）` : '';
+  return `${text} ${countSuffix}，${stateLabel}，点击展开`;
+});
+
+const triggerClass = computed(() => [
+  'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+  isAuxiliaryRunning.value
+    ? 'text-foreground'
+    : isAuxiliaryError.value
+      ? 'text-destructive'
+      : 'text-muted-foreground hover:text-foreground'
+]);
 </script>
 
 <template>
@@ -78,23 +120,47 @@ const auxiliaryCountLabel = computed(() => {
         <Collapsible
           v-if="hasAuxiliary"
           :default-open="false"
-          class="agent-auxiliary group/auxiliary mt-3 rounded-lg border border-dashed border-border/70 bg-muted/30 transition-colors hover:border-border data-[state=open]:border-border data-[state=open]:bg-muted/40"
+          class="agent-auxiliary group/auxiliary mt-3 rounded-lg border border-dashed bg-muted/30 transition-colors"
+          :class="isAuxiliaryRunning
+            ? 'border-primary/30 data-[state=open]:border-primary/40 data-[state=open]:bg-primary/[0.04]'
+            : isAuxiliaryError
+              ? 'border-destructive/40 data-[state=open]:border-destructive/50 data-[state=open]:bg-destructive/[0.04]'
+              : 'border-border/70 hover:border-border data-[state=open]:border-border data-[state=open]:bg-muted/40'"
         >
           <CollapsibleTrigger
-            class="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            :aria-label="`${auxiliaryLabel}（${auxiliaryCount} 项，默认折叠，点击展开）`"
+            :class="triggerClass"
+            :aria-label="auxiliaryAriaLabel"
           >
-            <PhPaperclip :size="14" weight="bold" aria-hidden="true" />
-            <span class="font-medium">{{ auxiliaryLabel }}</span>
+            <span class="grid size-[14px] shrink-0 place-items-center" aria-hidden="true">
+              <PhCircleNotch
+                v-if="isAuxiliaryRunning"
+                :size="14"
+                weight="bold"
+                class="animate-spin"
+              />
+              <PhWarning
+                v-else-if="isAuxiliaryError"
+                :size="14"
+                weight="fill"
+              />
+              <PhPaperclip
+                v-else
+                :size="14"
+                weight="bold"
+              />
+            </span>
+            <span class="truncate font-medium" :title="auxiliaryPrimaryText">{{ auxiliaryPrimaryText }}</span>
             <span
-              class="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-background px-1.5 font-mono text-[10px] font-semibold tabular-nums text-muted-foreground ring-1 ring-inset ring-border"
+              v-if="auxiliaryCount > 0"
+              class="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-background px-1.5 font-mono text-[10px] font-semibold tabular-nums ring-1 ring-inset"
+              :class="isAuxiliaryError ? 'text-destructive ring-destructive/30' : 'text-muted-foreground ring-border'"
             >
               {{ auxiliaryCountLabel }}
             </span>
             <PhCaretDown
               :size="12"
               weight="bold"
-              class="ml-auto transition-transform duration-200 group-data-[state=open]/auxiliary:rotate-180"
+              class="ml-auto shrink-0 transition-transform duration-200 group-data-[state=open]/auxiliary:rotate-180"
               aria-hidden="true"
             />
           </CollapsibleTrigger>
@@ -122,5 +188,11 @@ const auxiliaryCountLabel = computed(() => {
 
 .agent-auxiliary :deep(.word-artifact-card:first-child) {
   margin-top: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-auxiliary :deep(.animate-spin) {
+    animation: none;
+  }
 }
 </style>
