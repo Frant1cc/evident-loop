@@ -32,11 +32,7 @@ export function createResearchSkillRuntime(registry: ResearchSkillRegistry): Res
 
   return {
     list: () => registry.list().map(toInfo),
-    resolveLatest: (id) => {
-      const definition = registry.getLatest(id);
-      if (!definition) throw new Error(`Unknown research skill: ${id}`);
-      return resolve(definition);
-    },
+    resolveLatest: (id) => resolve(mustGetLatest(registry, id)),
     resolveSnapshot: (snapshot) => {
       const definition = registry.getVersion(snapshot.id, snapshot.version);
       if (!definition) throw new Error(`Research skill version not found: ${skillKey(snapshot.id, snapshot.version)}`);

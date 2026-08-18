@@ -11,14 +11,14 @@ const allowedTransitions: Record<AgentTaskStatus, readonly AgentTaskStatus[]> = 
   cancelled: []
 };
 
-export function canTransitionTask(from: AgentTaskStatus, to: AgentTaskStatus) {
-  return allowedTransitions[from].includes(to);
-}
-
 export function assertTaskTransition(from: AgentTaskStatus, to: AgentTaskStatus) {
   if (!canTransitionTask(from, to)) {
     throw new InvalidTaskTransitionError(from, to);
   }
+}
+
+function canTransitionTask(from: AgentTaskStatus, to: AgentTaskStatus) {
+  return allowedTransitions[from].includes(to);
 }
 
 export class InvalidTaskTransitionError extends Error {

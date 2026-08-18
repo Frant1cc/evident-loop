@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import test from 'node:test';
 
-import { webSearch } from '../tools/webSearchTool.js';
+import { webSearch } from './webSearchTool.js';
 
 test('passes progressive search depth, freshness and domain filters to Tavily', async () => {
   let observedBody: Record<string, unknown> | undefined;

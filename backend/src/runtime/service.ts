@@ -127,10 +127,6 @@ export function unmarkAgentTaskInProcess(id: string) {
   inProcessTaskIds.delete(id);
 }
 
-export function isAgentTaskInProcess(id: string) {
-  return inProcessTaskIds.has(id);
-}
-
 export function failOrphanedAgentTasks() {
   for (const task of listTasks()) {
     if (task.status !== 'planning' && task.status !== 'running') continue;

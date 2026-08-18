@@ -71,8 +71,4 @@ export const webEvalCases: WebEvalCase[] = [
 ];
 
 export const webEvalSuiteVersion = 2;
-export const webEvalSuites: Array<{ id: WebEvalSuite; label: string; description: string }> = [
-  { id:'smoke', label:'冒烟集', description:'10 道代表题，适合日常调试与低成本回归。' },
-  { id:'regression', label:'完整回归集', description:'36 道深度题，覆盖 API、时效、多事实点、反干扰与不可回答问题。' }
-];
 export function getWebEvalCases(ids?: string[]) { if (!ids?.length) return webEvalCases.filter((item) => item.suites.includes('smoke')); const selected = new Set(ids); return webEvalCases.filter((item) => selected.has(item.id)); }

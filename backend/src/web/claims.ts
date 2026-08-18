@@ -187,7 +187,7 @@ function scoreClaimEvidence(claim: WebClaim, item: ClaimEvidence) {
   };
 }
 
-export function inferPrimarySubject(question: string): string[] {
+function inferPrimarySubject(question: string): string[] {
   const lower = question.toLowerCase();
   if (/server-sent events|server sent events|\bsse\b|eventsource/.test(lower)) {
     return ['server-sent events', 'server sent events', 'sse', 'eventsource'];

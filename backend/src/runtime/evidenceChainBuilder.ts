@@ -137,32 +137,6 @@ export function buildEvidenceFromToolExecutions(
       continue;
     }
 
-    if (execution.toolName === 'search_docs') {
-      for (const result of resultItems(execution.result)) {
-        const file = textValue(result.file);
-        const preview = textValue(result.preview);
-        if (!file || !preview) continue;
-        const line = numberValue(result.line);
-        const sourceKey = `document:${file}`;
-        sources.set(sourceKey, {
-          sourceKey,
-          type: 'document',
-          title: file,
-          uri: `document://${file}`,
-          toolExecutionId: execution.id,
-          metadata: { file }
-        });
-        const evidenceKey = `docs:${file}:${line ?? 'unknown'}:${fingerprint(preview)}`;
-        evidence.set(evidenceKey, {
-          evidenceKey,
-          sourceKey,
-          content: preview,
-          locator: { line }
-        });
-      }
-      continue;
-    }
-
     if (execution.toolName === 'read_document') {
       const result = recordValue(execution.result);
       if (!result) continue;
