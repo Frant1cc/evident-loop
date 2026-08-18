@@ -1,8 +1,8 @@
 import type { ChatMessage } from '../llm/contracts.js';
 
 /** The research models are configured for a 256K context window. */
-export const CONTEXT_WINDOW_TOKENS = 256_000;
-export const RESERVED_OUTPUT_TOKENS = 16_000;
+const CONTEXT_WINDOW_TOKENS = 256_000;
+const RESERVED_OUTPUT_TOKENS = 16_000;
 export const MAX_INPUT_TOKENS = CONTEXT_WINDOW_TOKENS - RESERVED_OUTPUT_TOKENS;
 export const MICRO_COMPRESSION_TOKENS = Math.floor(MAX_INPUT_TOKENS * 0.65);
 export const SUMMARY_COMPRESSION_TOKENS = Math.floor(MAX_INPUT_TOKENS * 0.9);
@@ -33,7 +33,7 @@ export type ContextState = {
   manifestInjectedSummaryCheckpoint?: number;
 };
 
-export type ContextUnit = {
+type ContextUnit = {
   /** Stable only within an assembled context; it is used to preserve sequence and dedupe tails. */
   id: string;
   messages: ChatMessage[];
@@ -105,12 +105,12 @@ export function estimateTokens(value: unknown): number {
   return Math.ceil(serialized.length * 0.5);
 }
 
-export function estimateContextTokens(messages: ChatMessage[], tools?: unknown[]): number {
+function estimateContextTokens(messages: ChatMessage[], tools?: unknown[]): number {
   return estimateTokens({ messages, ...(tools?.length ? { tools } : {}) });
 }
 
 /** Groups tool messages with the assistant tool-call message that authorizes them. */
-export function toLogicalUnits(messages: ChatMessage[]): ContextUnit[] {
+function toLogicalUnits(messages: ChatMessage[]): ContextUnit[] {
   const units: ContextUnit[] = [];
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index]!;
@@ -211,7 +211,7 @@ export function buildSummarySource(messages: ChatMessage[], sessionMemory?: stri
   return injectSessionMemory(messages, sessionMemory);
 }
 
-export function applyMicroCompression(messages: ChatMessage[]): ChatMessage[] {
+function applyMicroCompression(messages: ChatMessage[]): ChatMessage[] {
   const system = messages.filter((message) => message.role === 'system');
   const conversation = messages.filter((message) => message.role !== 'system');
   const units = toLogicalUnits(conversation);
@@ -225,14 +225,14 @@ export function applyMicroCompression(messages: ChatMessage[]): ChatMessage[] {
   ];
 }
 
-export function truncateToolContent(content: string): string {
+function truncateToolContent(content: string): string {
   return content.length > TOOL_RESULT_MICRO_LIMIT_CHARS
     ? `${content.slice(0, TOOL_RESULT_MICRO_LIMIT_CHARS)}\n${TRUNCATED_TOOL_RESULT_MARKER}`
     : content;
 }
 
 /** Inserts generated memory after durable system instructions, never as a fake user request. */
-export function injectSessionMemory(messages: ChatMessage[], memory?: string): ChatMessage[] {
+function injectSessionMemory(messages: ChatMessage[], memory?: string): ChatMessage[] {
   if (!memory) return [...messages];
   const firstNonSystem = messages.findIndex((message) => message.role !== 'system');
   const insertionIndex = firstNonSystem === -1 ? messages.length : firstNonSystem;

@@ -83,7 +83,7 @@ const commonDocumentShape = {
   format: formatSchema.optional()
 };
 
-export const documentSpecSchema = z
+const documentSpecSchema = z
   .object({
     ...commonDocumentShape,
     blocks: z.array(blockSchema).min(1).max(120)

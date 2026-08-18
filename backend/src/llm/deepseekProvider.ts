@@ -1,4 +1,4 @@
-import type { ChatCompletion, ChatCompletionRequest, LlmProvider } from './contracts.js';
+import type { ChatCompletionRequest, LlmProvider } from './contracts.js';
 import {
   createOpenAiCompatibleClient,
   LlmProviderApiError
@@ -33,17 +33,6 @@ export function createDeepSeekProvider(options: CreateDeepSeekProviderOptions): 
       : { thinking: { type: request.reasoning ? 'enabled' : 'disabled' } },
     createError: (message, details) => new DeepSeekApiError(message, details)
   });
-}
-
-export type CreateChatCompletionOptions = ChatCompletionRequest & {
-  apiKey: string;
-  baseUrl?: string;
-};
-
-/** Compatibility function for older call sites; new code should inject LlmProvider. */
-export function createDeepSeekChatCompletion(options: CreateChatCompletionOptions): Promise<ChatCompletion> {
-  const { apiKey, baseUrl, timeoutMs, maxRetries, ...request } = options;
-  return createDeepSeekProvider({ apiKey, baseUrl, timeoutMs, maxRetries }).complete(request);
 }
 
 function getDefaultTimeoutMs() {

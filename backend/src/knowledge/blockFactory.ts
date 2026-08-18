@@ -35,10 +35,6 @@ export function locatorForLines(
   };
 }
 
-export function countCharacters(value: string) {
-  return [...value].length;
-}
-
 function blockId(order: number, type: string, text: string, headingPath: string[]) {
   return createHash('sha256')
     .update(`${order}:${type}:${headingPath.join('\u001f')}:${text.slice(0, 120)}`)

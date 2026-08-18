@@ -15,7 +15,3 @@ export function resolveParser(input: KnowledgeUpload): KnowledgeParser {
   if (!parser) throw unsupportedFormatError();
   return parser;
 }
-
-export function getParserByName(name: string) {
-  return parsers.find((parser) => parser.name === name);
-}

@@ -4,16 +4,9 @@ import test from 'node:test';
 import { resolveDocumentSpec } from './presets.js';
 import { renderWordDocument } from './renderer.js';
 import { parseDocumentSpec } from './schema.js';
-import type { DocumentPresetName } from './types.js';
+import { documentPresetNames } from './types.js';
 
-const presets: DocumentPresetName[] = [
-  'research-report',
-  'technical-report',
-  'business-report',
-  'simple'
-];
-
-for (const preset of presets) {
+for (const preset of documentPresetNames) {
   test(`renders the ${preset} preset as a DOCX package`, async () => {
     const buffer = await renderWordDocument(
       resolveDocumentSpec({

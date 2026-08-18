@@ -1,10 +1,9 @@
 import { createHash } from 'node:crypto';
 
 import { chunkKnowledgeDocument, getChunkerVersion } from './chunker.js';
-import { loadMarkdownDocuments } from './documentLoader.js';
 import { createEmbeddings, getEmbeddingModel, isEmbeddingConfigured } from './embeddingClient.js';
 import { getKeywordStore } from './keywordStore.js';
-import { readKnowledgeDocument, type KnowledgeDocument } from './knowledgeFiles.js';
+import { listKnowledgeDocuments, readKnowledgeDocument, type KnowledgeDocument } from './knowledgeFiles.js';
 import type { DocumentChunk, RagDocument } from './types.js';
 import { formatSourceLocator } from '../knowledge/locator.js';
 import {
@@ -79,7 +78,7 @@ async function syncAllDocuments(options: RagSyncOptions): Promise<RagSyncResult>
   ensureEmbeddingConfigured();
 
   const startedAt = Date.now();
-  const documents = options.documents ?? loadMarkdownDocuments();
+  const documents = options.documents ?? listKnowledgeDocuments();
   const collection = options.collection ?? getCollectionName();
   const hasCollection = await vectorCollectionExists(collection);
 

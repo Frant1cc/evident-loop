@@ -2,6 +2,7 @@ import {
   buildSummarySource,
   estimateTokens,
   prepareContext,
+  SESSION_MEMORY_INTERVAL_TOKENS,
   SESSION_MEMORY_MAX_TOKENS,
   SUMMARY_COMPRESSION_TOKENS,
   SUMMARY_MAX_TOKENS,
@@ -65,7 +66,7 @@ export function createResearchContextManager(input: {
       persist();
     }
     const checkpointTokens = state.sessionMemoryCheckpointTokens ?? 0;
-    if (canonicalTokens - checkpointTokens < 10_000) return;
+    if (canonicalTokens - checkpointTokens < SESSION_MEMORY_INTERVAL_TOKENS) return;
     const conversation = canonicalMessages.filter((message) => message.role !== 'system');
     const checkpointMessageCount = state.sessionMemoryCheckpointMessageCount ?? 0;
     const delta = conversation.slice(checkpointMessageCount);
