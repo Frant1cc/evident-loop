@@ -1,8 +1,9 @@
 import { getRagSourcesFromToolTraces } from '../rag/index.js';
+import type { ApprovalManager, ToolApprovalScope } from '../approvals/contracts.js';
 import type { LlmProvider } from '../llm/contracts.js';
 import { resolveLlmProvider } from '../llm/provider.js';
 import type { ContextManager } from '../context/index.js';
-import type { ToolPolicy, ToolRuntime } from '../tools/contracts.js';
+import type { ToolPolicy, ToolRuntime, ToolScope } from '../tools/contracts.js';
 import { normalizeToolPolicy } from '../tools/policy.js';
 import { builtInToolRuntime } from '../tools/runtime.js';
 import { DEFAULT_MAX_TOOL_ROUNDS } from './config.js';
@@ -50,6 +51,10 @@ export type RunAgentLoopOptions = {
   contextManager?: ContextManager;
   /** Conversation id propagated to ToolContext so conversation-scoped tools can resolve sources. */
   conversationId?: string;
+  /** Explicit caller scope; never inferred from conversationId. */
+  toolScope?: ToolScope;
+  approvalManager?: ApprovalManager;
+  approvalScope?: ToolApprovalScope;
 };
 
 export async function runAgentLoop({
@@ -69,7 +74,10 @@ export async function runAgentLoop({
   executeTool,
   toolRuntime = builtInToolRuntime,
   contextManager,
-  conversationId
+  conversationId,
+  toolScope,
+  approvalManager,
+  approvalScope
 }: RunAgentLoopOptions): Promise<AgentLoopResult> {
   const llm = resolveLlmProvider({ llm: providedLlm, apiKey });
   const messages: ChatMessage[] = [
@@ -78,8 +86,13 @@ export async function runAgentLoop({
     { role: 'user', content: message }
   ];
   const effectivePolicy = normalizeLegacyToolAliases(normalizeToolPolicy(toolPolicy));
-  const tools = toolRuntime.getDefinitions(effectivePolicy);
-  const toolNames = tools.map((tool) => tool.function.name);
+  const snapshotScope = toolScope ?? {
+    kind: 'agent',
+    ...(conversationId ? { conversationId } : {})
+  };
+  let snapshot = toolRuntime.getSnapshot(effectivePolicy, snapshotScope);
+  let tools = [...snapshot.definitions];
+  let toolNames = tools.map((tool) => tool.function.name);
   const trace: AgentTraceStep[] = [
     {
       type: 'llm_call',
@@ -99,11 +112,12 @@ export async function runAgentLoop({
   await onEvent?.({ type: 'llm', title: '模型判断是否需要工具', model, tools: toolNames });
 
   for (let round = 0; round < maxToolRounds + bonusToolRounds; round += 1) {
-    // The controlled web tool already owns its query-rewrite loop; once the model
-    // has called it, stop offering it so the quality budget is not reset by a second call.
-    const roundTools = searchToolCalls.has('retrieve_web_evidence')
-      ? tools.filter((tool) => tool.function.name !== 'retrieve_web_evidence')
-      : tools;
+    // Refresh only the in-memory registry between model turns. The snapshot is
+    // stable for this turn and execution is gated against the same definitions.
+    snapshot = toolRuntime.getSnapshot(effectivePolicy, snapshotScope);
+    tools = [...snapshot.definitions];
+    toolNames = tools.map((tool) => tool.function.name);
+    const roundTools = tools;
     const roundResult = await executeToolRound({
       llm,
       model,
@@ -116,9 +130,13 @@ export async function runAgentLoop({
       onEvent,
       executeTool,
       toolRuntime,
+      snapshot,
       searchToolCalls,
       contextManager,
-      conversationId
+      conversationId,
+      toolScope,
+      approvalManager,
+      approvalScope
     });
     const { assistantMessage, parsedToolCalls, reply } = roundResult;
 
@@ -215,7 +233,11 @@ export async function runAgentLoop({
 
   if (requiredTool && !requiredToolSucceeded) {
     throwIfAborted(signal);
-    const reservedTools = [requiredTool];
+    const reservedSnapshot = toolRuntime.getSnapshot(
+      { mode: 'selected', names: [requiredToolName!] },
+      snapshotScope
+    );
+    const reservedTools = [...reservedSnapshot.definitions];
     const reservedToolNames = [requiredToolName!];
     const reservedRoundPrompt =
       `The normal tool rounds are exhausted, but the user explicitly requested an artifact and ${requiredToolName} has not succeeded. ` +
@@ -249,10 +271,14 @@ export async function runAgentLoop({
       onEvent,
       executeTool,
       toolRuntime,
+      snapshot: reservedSnapshot,
       searchToolCalls,
       requiredSingleToolName: requiredToolName,
       contextManager,
-      conversationId
+      conversationId,
+      toolScope,
+      approvalManager,
+      approvalScope
     });
     toolTraces.push(...reservedRound.toolTraces);
     trace.push(...reservedRound.trace);

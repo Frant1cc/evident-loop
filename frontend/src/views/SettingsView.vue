@@ -11,6 +11,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
+import McpSettingsPanel from '../components/mcp/McpSettingsPanel.vue';
 
 import {
   defaultTabVisibility,
@@ -123,6 +124,8 @@ function restoreDefaults() {
           <p class="m-0 border-t border-border bg-muted/30 px-5 py-3 text-xs leading-5 text-muted-foreground">固定顺序：研究工作台、Agent 运行时、质量评测、知识库、设置。</p>
         </div>
       </section>
+
+      <McpSettingsPanel />
     </div>
   </section>
 </template>

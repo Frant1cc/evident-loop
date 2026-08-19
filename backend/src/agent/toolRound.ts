@@ -1,7 +1,14 @@
 import { getRagSourcesFromToolTraces } from '../rag/index.js';
+import type { ApprovalManager, ToolApprovalScope } from '../approvals/contracts.js';
 import type { LlmProvider } from '../llm/contracts.js';
 import type { ContextManager } from '../context/index.js';
-import type { ToolDefinition, ToolRuntime } from '../tools/contracts.js';
+import {
+  ToolExecutionError,
+  type ToolCall as RuntimeToolCall,
+  type ToolDefinition,
+  type ToolRuntime,
+  type ToolSnapshot
+} from '../tools/contracts.js';
 import type { RagSource } from '../rag/types.js';
 import type {
   AgentTraceStep,
@@ -17,11 +24,18 @@ export type AgentLoopEvent =
   | { type: 'llm_response'; assistantMessage: ChatMessage }
   | { type: 'tool_started'; toolCall: Pick<ParsedToolCall, 'id' | 'name' | 'arguments'> }
   | { type: 'tool_completed'; toolCall: ToolTrace }
+  | { type: 'tool_approval_requested'; approval: import('../approvals/contracts.js').ToolApprovalDto }
+  | { type: 'tool_approval_resolved'; approval: import('../approvals/contracts.js').ToolApprovalDto }
   | { type: 'source_found'; source: RagSource };
 
 export type AgentToolExecutor = (
   toolCall: Pick<ParsedToolCall, 'id' | 'name' | 'arguments'>,
-  context?: { signal?: AbortSignal; conversationId?: string }
+  context?: {
+    signal?: AbortSignal;
+    conversationId?: string;
+    toolScope?: import('../tools/contracts.js').ToolScope;
+    snapshot?: ToolSnapshot;
+  }
 ) => Promise<unknown>;
 
 type ExecuteToolRoundOptions = {
@@ -29,6 +43,7 @@ type ExecuteToolRoundOptions = {
   model: string;
   messages: ChatMessage[];
   tools: ToolDefinition[];
+  snapshot: ToolSnapshot;
   temperature: number;
   maxToolResultChars: number;
   decisionLabel: string;
@@ -42,6 +57,9 @@ type ExecuteToolRoundOptions = {
   contextManager?: ContextManager;
   /** Forwarded to ToolContext so conversation-scoped tools (e.g. read_evidence) can resolve sources. */
   conversationId?: string;
+  toolScope?: import('../tools/contracts.js').ToolScope;
+  approvalManager?: ApprovalManager;
+  approvalScope?: ToolApprovalScope;
 };
 
 export type ToolRoundResult = {
@@ -70,10 +88,14 @@ export async function executeToolRound({
   onEvent,
   executeTool,
   toolRuntime,
+  snapshot,
   searchToolCalls,
   requiredSingleToolName,
   contextManager,
-  conversationId
+  conversationId,
+  toolScope,
+  approvalManager,
+  approvalScope
 }: ExecuteToolRoundOptions): Promise<ToolRoundResult> {
   throwIfAborted(signal);
   const preparedMessages = contextManager
@@ -144,7 +166,18 @@ export async function executeToolRound({
     });
     const toolTrace = isRepeatedSearch(toolCall, searchToolCalls)
       ? createRepeatedSearchTrace(toolCall)
-      : await executeParsedToolCall(toolCall, toolRuntime, signal, executeTool, conversationId);
+      : await executeParsedToolCall(
+          toolCall,
+          toolRuntime,
+          snapshot,
+          signal,
+          executeTool,
+          conversationId,
+          toolScope,
+          approvalManager,
+          approvalScope,
+          onEvent
+        );
     toolTraces.push(toolTrace);
     await onEvent?.({ type: 'tool_completed', toolCall: toolTrace });
 
@@ -161,7 +194,9 @@ export async function executeToolRound({
       role: 'tool',
       tool_call_id: toolCall.id,
       content: serializeToolResultForModel(
-        toolTrace.error ? { error: toolTrace.error } : toolTrace.result,
+        toolTrace.error
+          ? { error: toolTrace.error, ...(toolTrace.errorDetails ? { details: toolTrace.errorDetails } : {}) }
+          : toolTrace.result,
         maxToolResultChars
       )
     });
@@ -173,9 +208,14 @@ export async function executeToolRound({
 async function executeParsedToolCall(
   toolCall: ParsedToolCall,
   toolRuntime: ToolRuntime,
+  snapshot: ToolSnapshot,
   signal?: AbortSignal,
   executeTool?: AgentToolExecutor,
-  conversationId?: string
+  conversationId?: string,
+  toolScope?: import('../tools/contracts.js').ToolScope,
+  approvalManager?: ApprovalManager,
+  approvalScope?: ToolApprovalScope,
+  onEvent?: (event: AgentLoopEvent) => void | Promise<void>
 ): Promise<ToolTrace> {
   throwIfAborted(signal);
 
@@ -184,18 +224,50 @@ async function executeParsedToolCall(
       id: toolCall.id,
       name: toolCall.name,
       arguments: toolCall.arguments,
-      error: toolCall.parseError
+      error: toolCall.parseError,
+      errorDetails: {
+        code: 'invalid_arguments',
+        message: toolCall.parseError,
+        retryable: true,
+        reason: 'The model emitted malformed JSON for the tool arguments.'
+      }
     };
   }
 
-  const toolContext = conversationId ? { signal, conversationId } : { signal };
+  const toolContext = {
+    signal,
+    ...(conversationId ? { conversationId } : {}),
+    ...(toolScope ? { toolScope } : {})
+  };
   try {
+    const runtimeCall: RuntimeToolCall = {
+      id: toolCall.id,
+      name: toolCall.name,
+      arguments: toolCall.arguments
+    };
+    if (approvalManager && approvalScope) {
+      await approvalManager.authorize({
+        runtime: toolRuntime,
+        snapshot,
+        toolCall: runtimeCall,
+        scope: approvalScope,
+        context: toolContext,
+        onRequested: (approval) => onEvent?.({ type: 'tool_approval_requested', approval }),
+        onResolved: (approval) => onEvent?.({ type: 'tool_approval_resolved', approval })
+      });
+    }
     const result = executeTool
       ? await executeTool(
-          { id: toolCall.id, name: toolCall.name, arguments: toolCall.arguments },
-          toolContext
+          {
+            id: toolCall.id,
+            name: toolCall.name,
+            arguments: toolRuntime.validate
+              ? toolRuntime.validate(snapshot, runtimeCall)
+              : runtimeCall.arguments
+          },
+          { ...toolContext, snapshot }
         )
-      : await toolRuntime.execute(toolCall.name, toolCall.arguments, toolContext);
+      : await toolRuntime.execute(snapshot, runtimeCall, toolContext);
     throwIfAborted(signal);
     return {
       id: toolCall.id,
@@ -205,11 +277,19 @@ async function executeParsedToolCall(
     };
   } catch (error) {
     if (signal?.aborted) throw error;
+    const details = error instanceof ToolExecutionError
+      ? error.toDetails()
+      : {
+          code: 'execution_failed' as const,
+          message: error instanceof Error ? error.message : 'Tool call failed',
+          retryable: false
+        };
     return {
       id: toolCall.id,
       name: toolCall.name,
       arguments: toolCall.arguments,
-      error: error instanceof Error ? error.message : 'Tool call failed'
+      error: error instanceof Error ? error.message : 'Tool call failed',
+      ...(details ? { errorDetails: details } : {})
     };
   }
 }
@@ -233,13 +313,20 @@ function isRepeatedSearch(toolCall: ParsedToolCall, searchToolCalls: Set<string>
 }
 
 function createRepeatedSearchTrace(toolCall: ParsedToolCall): ToolTrace {
+  const message = toolCall.name === 'retrieve_web_evidence'
+    ? 'retrieve_web_evidence already completed its controlled search loop for this research request; use its existing verdict and sources'
+    : `${toolCall.name} has already been called with the same arguments for this research request`;
   return {
     id: toolCall.id,
     name: toolCall.name,
     arguments: toolCall.arguments,
-    error: toolCall.name === 'retrieve_web_evidence'
-      ? 'retrieve_web_evidence already completed its controlled search loop for this research request; use its existing verdict and sources'
-      : `${toolCall.name} has already been called with the same arguments for this research request`
+    error: message,
+    errorDetails: {
+      code: toolCall.name === 'retrieve_web_evidence' ? 'tool_limit_reached' : 'tool_rejected',
+      message,
+      retryable: false,
+      reason: 'This tool call has already consumed the current research request budget.'
+    }
   };
 }
 

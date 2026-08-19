@@ -11,6 +11,8 @@ import type {
 import { consumeResumableSse } from './resumableSse';
 import type { StreamConnectionState } from '../types/streaming';
 import type { ToolPolicy } from '../types/tasks';
+import type { ToolApproval } from '../types/approvals';
+import { parseToolApprovalEvent } from '../types/approvals';
 
 type ApiResponse<T> = {
   code: 0 | 1;
@@ -27,6 +29,8 @@ export type ResearchStreamEvent =
   | { type: 'assistant_delta'; messageId: string; content: string }
   | { type: 'research_message_completed'; message: ResearchMessage; sources: ResearchSource[]; promptPreview: ResearchPromptPreview; run: ResearchRun }
   | { type: 'run_updated'; run: ResearchRun }
+  | { type: 'tool_approval_requested'; approval: ToolApproval }
+  | { type: 'tool_approval_resolved'; approval: ToolApproval }
   | { type: 'error'; message: string; assistantMessage?: ResearchMessage; run: ResearchRun }
   | { type: 'done'; run: ResearchRun };
 
@@ -34,6 +38,12 @@ export type ResearchToolInfo = {
   name: string;
   label: string;
   description: string;
+  source?: string;
+  serverId?: string;
+  serverName?: string;
+  remoteName?: string;
+  status?: string;
+  annotations?: Record<string, unknown>;
 };
 
 export type ResearchToolGroupInfo = {
@@ -160,6 +170,11 @@ function toResearchStreamEvent(eventName: string, parsed: Record<string, unknown
     };
   }
   if (eventName === 'run_updated') return { type: eventName, run: parsed.run as ResearchRun };
+  if (eventName === 'tool_approval_requested' || eventName === 'tool_approval_resolved') {
+    const approvalEvent = parseToolApprovalEvent({ type: eventName, payload: parsed });
+    if (!approvalEvent) return undefined;
+    return { type: approvalEvent.type, approval: approvalEvent.approval };
+  }
   if (eventName === 'error') {
     return {
       type: eventName,

@@ -247,8 +247,11 @@ test('grants one corrective retry when required document tool arguments are inva
 test('runs the controlled web quality loop only once even when the model changes arguments', async () => {
   let requestCount = 0;
   let executionCount = 0;
+  const observedToolNames: string[][] = [];
   const server = createServer(async (_req, res) => {
     requestCount += 1;
+    // The test server receives OpenAI-compatible requests from the default client;
+    // the runtime assertion below uses the injected LLM wrapper instead.
     const message = requestCount <= 2
       ? {
           role: 'assistant',
@@ -275,7 +278,21 @@ test('runs the controlled web quality loop only once even when the model changes
 
   try {
     const result = await runAgentLoop({
-      apiKey: 'test-key',
+      llm: {
+        complete: async (request) => {
+          observedToolNames.push(
+            ((request.tools ?? []) as Array<{ function?: { name?: string } }>)
+              .map((tool) => tool.function?.name ?? '')
+          );
+          const response = await fetch(`http://127.0.0.1:${address.port}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+          });
+          return response.json() as Promise<never>;
+        },
+        stream: async () => undefined
+      },
       model: 'test-model',
       message: 'Find one official fact',
       systemPrompt: 'Use the controlled web tool once.',
@@ -290,6 +307,8 @@ test('runs the controlled web quality loop only once even when the model changes
     assert.equal(executionCount, 1);
     assert.equal(result.toolCalls.length, 2);
     assert.match(result.toolCalls[1]?.error ?? '', /already completed its controlled search loop/);
+    assert.ok(observedToolNames.length >= 2);
+    assert.ok(observedToolNames.every((names) => names.includes('retrieve_web_evidence')));
   } finally {
     if (previousBaseUrl === undefined) delete process.env.DEEPSEEK_BASE_URL;
     else process.env.DEEPSEEK_BASE_URL = previousBaseUrl;

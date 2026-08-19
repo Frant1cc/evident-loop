@@ -9,11 +9,13 @@ import WordArtifactCard from '../documents/WordArtifactCard.vue';
 import { useMessageAutoScroll } from '../../composables/useMessageAutoScroll';
 import type { WordArtifact } from '../../types/artifacts';
 import type { ResearchMessage } from '../../types/research';
+import type { AuxiliaryState } from '../../lib/auxiliaryState';
 
 const props = defineProps<{
   conversationId?: string;
   messages: ResearchMessage[];
   artifactsByMessageId: Map<string, WordArtifact[]>;
+  auxiliaryStateByMessageId?: Map<string, AuxiliaryState>;
 }>();
 
 const emit = defineEmits<{
@@ -27,6 +29,20 @@ const messageSignature = computed(() => {
     ? `${props.messages.length}:${lastMessage.id}:${lastMessage.content.length}:${lastMessage.status}`
     : 'empty';
 });
+
+const auxiliarySummaryLabel = '生成的文档';
+const auxiliarySummaryActivity = '正在生成文档…';
+
+const EMPTY_AUXILIARY_STATE: AuxiliaryState = {
+  status: 'idle',
+  label: auxiliarySummaryLabel,
+  activity: auxiliarySummaryActivity,
+  count: 0
+};
+
+function auxiliaryStateFor(messageId: string): AuxiliaryState {
+  return props.auxiliaryStateByMessageId?.get(messageId) ?? EMPTY_AUXILIARY_STATE;
+}
 
 const { handleScroll, scrollContainer, scrollToLatest, shouldAutoScroll } = useMessageAutoScroll(
   () => props.conversationId,
@@ -131,13 +147,23 @@ defineExpose({ scrollContainer });
           :data-research-message-id="message.id"
           class="min-w-0 shrink-0 [contain-intrinsic-size:auto_10rem] [content-visibility:auto]"
         >
-          <AgentMessage :message="message" streaming-placeholder="正在生成回复…" @citation="emit('citation', $event)">
-            <WordArtifactCard
-              v-for="artifact in artifactsByMessageId.get(message.id) ?? []"
-              :key="artifact.artifactId"
-              :artifact="artifact"
-              @preview="emit('preview', $event)"
-            />
+          <AgentMessage
+            :message="message"
+            streaming-placeholder="正在生成回复…"
+            :auxiliary-status="auxiliaryStateFor(message.id).status"
+            :auxiliary-label="auxiliaryStateFor(message.id).label"
+            :auxiliary-activity="auxiliaryStateFor(message.id).activity"
+            :auxiliary-count="auxiliaryStateFor(message.id).count"
+            @citation="emit('citation', $event)"
+          >
+            <template #auxiliary>
+              <WordArtifactCard
+                v-for="artifact in artifactsByMessageId.get(message.id) ?? []"
+                :key="artifact.artifactId"
+                :artifact="artifact"
+                @preview="emit('preview', $event)"
+              />
+            </template>
           </AgentMessage>
         </div>
       </div>

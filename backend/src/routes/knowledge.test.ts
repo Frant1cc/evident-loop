@@ -14,7 +14,7 @@ process.env.SQLITE_DB_PATH = join(dataDir, 'test.sqlite');
 process.env.KNOWLEDGE_FILES_DIR = join(dataDir, 'files');
 process.env.KNOWLEDGE_MAX_UPLOAD_BYTES = '20000000';
 
-const { initDb } = await import('../db.js');
+const { initDb, sqlite } = await import('../db.js');
 const { createApp } = await import('../app.js');
 
 initDb();
@@ -31,6 +31,7 @@ before(async () => {
 
 after(async () => {
   await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  sqlite.close();
   rmSync(dataDir, { recursive: true, force: true });
 });
 

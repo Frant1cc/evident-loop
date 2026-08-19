@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { sqlite } from '../db.js';
+import { redactToolArguments } from '../approvals/manager.js';
 import type { RagSource } from '../rag/types.js';
 import { parseLocator } from '../knowledge/locator.js';
 import type { KnowledgeFormat } from '../knowledge/types.js';
@@ -435,6 +436,7 @@ function toMessage(row: MessageRow): ResearchMessage {
 }
 
 function toStep(row: StepRow): ResearchStep {
+  const parsedInput = parseJson(row.input_json);
   return {
     id: row.id,
     conversationId: row.conversation_id,
@@ -443,7 +445,9 @@ function toStep(row: StepRow): ResearchStep {
     type: row.type,
     status: row.status,
     title: row.title,
-    ...(parseJson(row.input_json) === undefined ? {} : { input: parseJson(row.input_json) }),
+    ...(parsedInput === undefined ? {} : {
+      input: row.type === 'tool' ? redactToolArguments(parsedInput) : parsedInput
+    }),
     ...(parseJson(row.output_json) === undefined ? {} : { output: parseJson(row.output_json) }),
     ...(row.parent_step_id ? { parentStepId: row.parent_step_id } : {}),
     ...(row.tool_call_id ? { toolCallId: row.tool_call_id } : {}),

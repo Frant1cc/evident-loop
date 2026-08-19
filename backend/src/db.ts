@@ -36,6 +36,35 @@ export const initDb = () => {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS mcp_servers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      config_json TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'disabled',
+      last_error TEXT,
+      last_refreshed_at TEXT,
+      authorization_url TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS mcp_tools (
+      server_id TEXT NOT NULL,
+      remote_name TEXT NOT NULL,
+      model_name TEXT NOT NULL,
+      ordinal INTEGER NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      input_schema_json TEXT NOT NULL,
+      definition_hash TEXT NOT NULL DEFAULT '',
+      annotations_json TEXT,
+      tombstone INTEGER NOT NULL DEFAULT 0,
+      last_seen_at TEXT,
+      PRIMARY KEY (server_id, remote_name),
+      FOREIGN KEY (server_id) REFERENCES mcp_servers(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS mcp_tools_server_ordinal_idx ON mcp_tools(server_id, ordinal);
+
     CREATE TABLE IF NOT EXISTS knowledge_documents (
       path TEXT PRIMARY KEY,
       content TEXT NOT NULL,
@@ -445,6 +474,29 @@ export const initDb = () => {
     ON agent_checkpoints(task_id, version DESC);
     CREATE INDEX IF NOT EXISTS tool_executions_task_id_idx
     ON tool_executions(task_id);
+    CREATE TABLE IF NOT EXISTS tool_approvals (
+      id TEXT PRIMARY KEY,
+      scope_type TEXT NOT NULL CHECK (scope_type IN ('research_run', 'agent_task')),
+      scope_id TEXT NOT NULL,
+      tool_call_id TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      model_name TEXT NOT NULL,
+      label TEXT NOT NULL,
+      source TEXT NOT NULL,
+      server_id TEXT,
+      server_name TEXT,
+      remote_name TEXT,
+      read_only INTEGER NOT NULL DEFAULT 0,
+      arguments_json TEXT NOT NULL,
+      definition_hash TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'cancelled', 'invalidated')),
+      requested_at TEXT NOT NULL,
+      decided_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS tool_approvals_scope_idx
+      ON tool_approvals(scope_type, scope_id, requested_at);
+    CREATE INDEX IF NOT EXISTS tool_approvals_pending_idx
+      ON tool_approvals(status, scope_type, scope_id);
     CREATE INDEX IF NOT EXISTS agent_artifacts_task_updated_at_idx
     ON agent_artifacts(task_id, updated_at DESC);
   `);
@@ -454,11 +506,17 @@ export const initDb = () => {
   ensureColumn('research_conversations', 'context_state_json', 'TEXT');
   ensureColumn('research_steps', 'parent_step_id', 'TEXT');
   ensureColumn('research_steps', 'tool_call_id', 'TEXT');
+  ensureColumn('tool_approvals', 'remote_name', 'TEXT');
+  ensureColumn('mcp_tools', 'definition_hash', "TEXT NOT NULL DEFAULT ''");
   // Existing installations created before the local-library metadata field.
   ensureColumn('web_evaluation_cases', 'metadata_json', 'TEXT');
 
   migrateKnowledgeSchema(sqlite);
   migrateChatConversationsToResearch(sqlite);
+  // A pending approval represents an in-process waiter and cannot safely
+  // survive a process restart. Expire every old waiter atomically at startup.
+  sqlite.prepare("UPDATE tool_approvals SET status = 'expired', decided_at = ? WHERE status = 'pending'")
+    .run(new Date().toISOString());
 };
 
 function ensureColumn(table: string, column: string, definition: string) {

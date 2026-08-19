@@ -85,4 +85,5 @@ export type ResearchConversationDetail = {
   notes: ResearchNote[];
   promptPreview: ResearchPromptPreview;
   activeRun?: ResearchRun;
+  approvals?: import('./approvals').ToolApproval[];
 };

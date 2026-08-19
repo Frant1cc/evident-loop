@@ -29,6 +29,7 @@ import {
   runAgentTask,
   updateAgentTaskPlan
 } from '../api/tasks';
+import { ApprovalApiError, decideToolApproval } from '../api/approvals';
 import type {
   AgentEvent,
   AgentClaim,
@@ -42,6 +43,8 @@ import type {
 } from '../types/tasks';
 import { listResearchTools, type ResearchToolGroupInfo, type ResearchToolInfo } from '../api/research';
 import { buildSelectedToolPolicy, standaloneTools } from '../tools/selection';
+import type { ToolApproval, ToolApprovalDecision } from '../types/approvals';
+import { parseToolApprovalEvent, upsertToolApproval } from '../types/approvals';
 import MarkdownMessage from '../components/conversation/MarkdownMessage.vue';
 import PanelResizeHandle from '../components/common/PanelResizeHandle.vue';
 import TaskCreateForm from '../components/tasks/TaskCreateForm.vue';
@@ -49,6 +52,7 @@ import TaskHistorySidebar from '../components/tasks/TaskHistorySidebar.vue';
 import TaskInspector, { type TaskInspectorTab } from '../components/tasks/TaskInspector.vue';
 import TaskRuntimeHeader from '../components/tasks/TaskRuntimeHeader.vue';
 import TaskStatusBadge from '../components/tasks/TaskStatusBadge.vue';
+import ToolApprovalCard from '../components/approvals/ToolApprovalCard.vue';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -90,6 +94,7 @@ const deleteTargetSummary = computed(() => {
   return characters.length > 72 ? `${characters.slice(0, 72).join('')}…` : normalizedGoal;
 });
 const error = ref('');
+const approvalBusyId = ref<string>();
 const goal = ref('');
 const maxSteps = ref(5);
 const maxTokens = ref(24000);
@@ -225,6 +230,7 @@ async function selectTask(id: string) {
   creating.value = false;
   activeTaskId.value = id;
   detail.value = undefined;
+  approvalBusyId.value = undefined;
   planDrafts.value = [];
   events.value = [];
   try {
@@ -243,6 +249,7 @@ function openCreate() {
   creating.value = true;
   activeTaskId.value = undefined;
   detail.value = undefined;
+  approvalBusyId.value = undefined;
   planDrafts.value = [];
   events.value = [];
   error.value = '';
@@ -281,6 +288,7 @@ async function confirmTaskDelete() {
     if (wasActive) {
       activeTaskId.value = undefined;
       detail.value = undefined;
+      approvalBusyId.value = undefined;
       planDrafts.value = [];
       events.value = [];
       creating.value = !tasks.value.length;
@@ -555,6 +563,42 @@ function applyVisibleEvents(id: string, next: AgentEvent[]) {
   const currentSequence = events.value[events.value.length - 1]?.sequence ?? 0;
   const nextSequence = next[next.length - 1]?.sequence ?? 0;
   if (nextSequence >= currentSequence) events.value = next;
+  if (activeTaskId.value !== id || !detail.value) return;
+  const approvalEvents = next
+    .map((event) => parseToolApprovalEvent(event))
+    .filter((event): event is NonNullable<ReturnType<typeof parseToolApprovalEvent>> => Boolean(event));
+  if (approvalEvents.length) {
+    const merged = approvalEvents.reduce(
+      (items, event) => upsertToolApproval(items, event.approval),
+      [...(detail.value.approvals ?? [])]
+    );
+    detail.value = { ...detail.value, approvals: merged };
+  }
+}
+
+async function decideApproval(approval: ToolApproval, decision: ToolApprovalDecision) {
+  const id = activeTaskId.value;
+  if (!id || approvalBusyId.value || approval.status !== 'pending') return;
+  approvalBusyId.value = approval.id;
+  error.value = '';
+  try {
+    const result = await decideToolApproval(approval.id, decision);
+    if (detail.value?.approvals) {
+      detail.value = { ...detail.value, approvals: upsertToolApproval(detail.value.approvals, result.approval) };
+    }
+    // Keep the long-running /run request and 900ms poll independent from the
+    // decision action so this remains usable while the executor is waiting.
+    await refreshActive(id, viewSequence);
+  } catch (err) {
+    if (err instanceof ApprovalApiError && err.status === 409) {
+      await refreshActive(id, viewSequence).catch(() => undefined);
+      error.value = '审批状态已变化，已重新同步。';
+    } else {
+      error.value = getErrorMessage(err);
+    }
+  } finally {
+    approvalBusyId.value = undefined;
+  }
 }
 
 function statusLabel(status: AgentTaskStatus) {
@@ -1049,6 +1093,33 @@ function getErrorMessage(value: unknown) {
 
           <p v-if="error" class="m-0 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2.5 text-sm font-medium text-destructive" role="alert">{{ error }}</p>
 
+          <section
+            v-if="detail.approvals?.some((approval) => approval.status === 'pending')"
+            class="grid gap-2.5 rounded-xl border border-amber-500/25 bg-amber-500/[0.035] p-4"
+            aria-live="polite"
+            aria-label="待处理的工具审批"
+          >
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p class="m-0 text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-800 dark:text-amber-200">执行暂停 · 需要确认</p>
+                <p class="m-0 mt-1 text-xs leading-5 text-muted-foreground">运行请求会保持等待，批准或拒绝后将继续同步。</p>
+              </div>
+              <span class="rounded border border-amber-500/25 bg-amber-500/10 px-2 py-1 font-mono text-[10px] font-semibold text-amber-800 dark:text-amber-200">
+                {{ detail.approvals?.filter((approval) => approval.status === 'pending').length }} 项待处理
+              </span>
+            </div>
+            <div class="grid gap-2.5">
+              <ToolApprovalCard
+                v-for="approval in detail.approvals?.filter((item) => item.status === 'pending')"
+                :key="approval.id"
+                :approval="approval"
+                compact
+                :busy="approvalBusyId === approval.id"
+                @decision="decideApproval(approval, $event)"
+              />
+            </div>
+          </section>
+
           <section v-if="finalArtifact" class="overflow-hidden rounded-xl border border-border bg-card">
             <header class="flex items-start justify-between gap-5 border-b border-border bg-muted/40 px-5 py-4">
               <div>
@@ -1123,7 +1194,7 @@ function getErrorMessage(value: unknown) {
       :event-count="events.length"
       :review-count="detail?.reviews.length ?? 0"
       :claim-count="detail?.claims.length ?? 0"
-      :tool-count="detail?.toolExecutions.length ?? 0"
+      :tool-count="(detail?.toolExecutions.length ?? 0) + (detail?.approvals?.length ?? 0)"
       @toggle="inspectorCollapsed = !inspectorCollapsed"
     >
       <template #events>
@@ -1225,6 +1296,20 @@ function getErrorMessage(value: unknown) {
 
       <template #tools>
         <div class="grid gap-3">
+          <section v-if="detail?.approvals?.length" class="grid gap-2.5" aria-label="工具审批历史">
+            <div class="flex items-center justify-between gap-2">
+              <h3 class="m-0 text-xs font-bold text-[var(--agent-text)]">审批请求</h3>
+              <span class="font-mono text-[10px] text-[var(--agent-text-muted)]">{{ detail.approvals.length }}</span>
+            </div>
+            <ToolApprovalCard
+              v-for="approval in [...(detail.approvals ?? [])].reverse()"
+              :key="`approval-${approval.id}`"
+              :approval="approval"
+              compact
+              :busy="approvalBusyId === approval.id"
+              @decision="decideApproval(approval, $event)"
+            />
+          </section>
           <article v-for="execution in [...(detail?.toolExecutions ?? [])].reverse()" :key="execution.id" class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] p-3.5">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0"><span class="flex items-center gap-2 text-sm font-bold text-[var(--agent-text)]"><PhWrench :size="15" class="shrink-0" />{{ toolDisplayName(execution.toolName) }}</span><span class="mt-1 block font-mono text-[10px] text-[var(--agent-text-muted)]">{{ execution.toolName }}</span></div>

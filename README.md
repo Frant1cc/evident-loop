@@ -28,6 +28,7 @@ Implemented:
 - Multi-format knowledge base for Markdown, TXT, DOCX, and text-based PDF, with structure-aware chunking, page or source-line citations, Dense/Hybrid RAG, and query rewriting
 - RAG evaluation with Recall@K, MRR, and abstention metrics
 - Disconnect-resilient background research with explicit cancellation, a task console, and Word report generation
+- Dynamic ToolRuntime snapshots and MCP connections for the Research Workbench and durable Agent Tasks, with Streamable HTTP/stdio, OAuth, persistent tool schemas, and approval gates
 
 In progress or not yet implemented:
 
@@ -103,6 +104,21 @@ To use web search tools, also configure:
 ```dotenv
 TAVILY_API_KEY=your_tavily_key
 ```
+
+### MCP connections
+
+Configure MCP servers from **Settings → MCP Servers**. New connections are saved disabled; test the connection and tool list before enabling it. The UI supports local `stdio` servers and MCP Streamable HTTP with static headers or OAuth. See the [dynamic tools and MCP guide](./docs/development/dynamic-tools-and-mcp.md) for lifecycle, approval, API, and security details.
+
+The local deployment boundary is configured in `backend/.env`:
+
+```dotenv
+HOST=127.0.0.1
+APP_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+MCP_CREDENTIALS_KEY=<32-byte-base64-secret>
+MCP_OAUTH_REDIRECT_URI=
+```
+
+`MCP_CREDENTIALS_KEY` is required to save MCP environment variables, static headers, or OAuth state. It must be a Base64-encoded 32-byte key; generate one locally and never commit it. `MCP_OAUTH_REDIRECT_URI` is optional and defaults to the loopback callback under the configured `PORT`. `stdio` MCP is allowed only when `HOST` is loopback. Keep `HOST` and `APP_ORIGINS` restricted to trusted local origins when developing.
 
 Local endpoints:
 
@@ -219,6 +235,7 @@ You can prefix issue titles with module labels such as `[Runtime]`, `[RAG]`, `[F
 - Never commit `.env` files, databases, build artifacts, or local configuration.
 - Example configuration files must contain only empty or invalid placeholder values.
 - The API currently has no authentication or rate limiting. Do not expose the development server directly to the public internet.
+- MCP configuration and credentials are currently instance-wide, not user- or tenant-scoped. A multi-user production deployment still requires external authentication, tenant isolation, and credential/policy boundaries; these are not implemented here.
 - Before sharing logs, screenshots, or issues, check for conversations, document content, tokens, and internal addresses.
 
 ## Common Commands

@@ -2,6 +2,8 @@ import type { StreamEventEnvelope } from '@evident-loop/stream-protocol';
 
 import { DEFAULT_MAX_TOOL_ROUNDS } from '../agent/config.js';
 import { runAgentLoop, type AgentLoopEvent, type RunAgentLoopOptions } from '../agent/agentLoop.js';
+import type { ApprovalManager } from '../approvals/contracts.js';
+import { redactToolArguments } from '../approvals/manager.js';
 import type { LlmProvider } from '../llm/contracts.js';
 import { resolveLlmProvider } from '../llm/provider.js';
 import { appendStreamEvent } from '../streaming/eventStore.js';
@@ -47,6 +49,7 @@ const DEFAULT_MODEL = 'deepseek-v4-flash';
 const STOPPED_MESSAGE = '研究任务已停止，未能生成最终回答。';
 const RESTARTED_MESSAGE = '研究服务已重启，先前的后台任务未能继续。请重新发起研究。';
 const activeControllers = new Map<string, AbortController>();
+const activeApprovalManagers = new Map<string, ApprovalManager>();
 
 const AGENT_SYSTEM_PROMPT = `You are EvidentLoop, an evidence-first durable research agent.
 
@@ -93,6 +96,8 @@ export type ResearchRunEvent =
   | { type: 'research_step'; step: ResearchStep }
   | { type: 'tool_call_started'; step: ResearchStep }
   | { type: 'tool_call_completed'; step: ResearchStep }
+  | { type: 'tool_approval_requested'; approval: import('../approvals/contracts.js').ToolApprovalDto }
+  | { type: 'tool_approval_resolved'; approval: import('../approvals/contracts.js').ToolApprovalDto }
   | { type: 'research_source_found'; messageId: string; source: ResearchSource }
   | { type: 'assistant_delta'; messageId: string; content: string }
   | {
@@ -119,6 +124,7 @@ export function createAndStartResearchRun(options: {
   llm?: LlmProvider;
   model?: string;
   runAgent?: ResearchAgentRunner;
+  approvalManager?: ApprovalManager;
   schedule?: (callback: () => void) => void;
 }) {
   let conversation = getResearchConversation(options.conversationId);
@@ -176,7 +182,8 @@ export function createAndStartResearchRun(options: {
       model: options.model ?? DEFAULT_MODEL,
       runAgent: options.runAgent ?? runAgentLoop,
       toolRuntime: options.toolRuntime,
-      skillRuntime: options.skillRuntime
+      skillRuntime: options.skillRuntime,
+      approvalManager: options.approvalManager
     });
   });
 
@@ -190,7 +197,7 @@ export function subscribeToResearchRun(
   return subscribeToStream(id, listener as (envelope: StreamEventEnvelope) => void);
 }
 
-export function getResearchRunSnapshot(id: string): {
+export function getResearchRunSnapshot(id: string, approvalManager?: ApprovalManager): {
   run: ResearchRun;
   detail: ResearchConversationDetail;
 } | undefined {
@@ -202,7 +209,12 @@ export function getResearchRunSnapshot(id: string): {
   const promptPreview = runInput?.promptPreview
     ?? buildResearchContext(conversation, listResearchMessages(conversation.id), '', listResearchSteps(conversation.id)).promptPreview;
   const detail = getResearchConversationDetail(conversation.id, promptPreview);
-  return detail ? { run, detail } : undefined;
+  if (!detail) return undefined;
+  const approvals = approvalManager?.list({ type: 'research_run', id });
+  return {
+    run,
+    detail: approvals ? { ...detail, approvals } : detail
+  };
 }
 
 export function cancelResearchRun(id: string) {
@@ -211,6 +223,10 @@ export function cancelResearchRun(id: string) {
   if (isTerminal(run.status)) return run;
 
   activeControllers.get(id)?.abort(new Error('Research task was explicitly stopped'));
+  // Abort listeners on the approval interceptor also cancel the row. This
+  // explicit call covers a queued/just-created approval before its waiter is
+  // attached and keeps cancellation durable.
+  activeApprovalManagers.get(id)?.cancelScope({ type: 'research_run', id });
   const assistantMessage = updateResearchMessage(run.assistantMessageId, {
     content: STOPPED_MESSAGE,
     status: 'error'
@@ -248,6 +264,7 @@ async function executePersistedResearchRun(options: {
   runAgent: ResearchAgentRunner;
   toolRuntime: ToolRuntime;
   skillRuntime?: ResearchSkillRuntime;
+  approvalManager?: ApprovalManager;
 }) {
   let run = getResearchRun(options.runId);
   const runInput = getResearchRunInput(options.runId);
@@ -260,11 +277,13 @@ async function executePersistedResearchRun(options: {
 
   const abortController = new AbortController();
   activeControllers.set(run.id, abortController);
+  if (options.approvalManager) activeApprovalManagers.set(run.id, options.approvalManager);
   run = updateResearchRun(run.id, { status: 'running', startedAt: new Date().toISOString() }) ?? run;
   emit(run.id, { type: 'run_updated', run });
 
   if (executionMode === 'quick') {
     await runQuickConversation({ run, runInput, llm: options.llm, model: options.model, abortController });
+    activeApprovalManagers.delete(run.id);
     return;
   }
 
@@ -311,6 +330,9 @@ async function executePersistedResearchRun(options: {
         : undefined,
       signal: abortController.signal,
       conversationId: run.conversationId,
+      toolScope: { kind: 'research', runId: run.id, conversationId: run.conversationId },
+      approvalManager: options.approvalManager,
+      approvalScope: { type: 'research_run', id: run.id },
       onEvent: async (event) => handleAgentEvent({
         event,
         run: run!,
@@ -372,6 +394,7 @@ async function executePersistedResearchRun(options: {
     if (failedRun) emit(run.id, { type: 'error', message, assistantMessage: failedMessage, run: failedRun });
   } finally {
     activeControllers.delete(run.id);
+    activeApprovalManagers.delete(run.id);
   }
 }
 
@@ -447,6 +470,7 @@ async function runQuickConversation(options: {
     if (failedRun) emit(run.id, { type: 'error', message, assistantMessage: failedMessage, run: failedRun });
   } finally {
     activeControllers.delete(run.id);
+    activeApprovalManagers.delete(run.id);
   }
 }
 
@@ -463,7 +487,10 @@ async function handleAgentEvent(options: {
   nextCitation: () => string;
 }) {
   const { event, run } = options;
-  if (getResearchRun(run.id)?.status === 'cancelled') return;
+  // A cancellation may settle an approval on the next microtask after the run
+  // status is persisted. Keep the terminal approval resolution durable even
+  // though ordinary agent/tool events are no longer accepted for the run.
+  if (getResearchRun(run.id)?.status === 'cancelled' && event.type !== 'tool_approval_resolved') return;
 
   if (event.type === 'llm') {
     const step = createResearchStep({
@@ -507,13 +534,18 @@ async function handleAgentEvent(options: {
       type: 'tool',
       status: 'running',
       title: event.toolCall.name,
-      input: event.toolCall.arguments,
+       input: redactToolArguments(event.toolCall.arguments),
       parentStepId: options.toolParentStepIds.get(event.toolCall.id),
       toolCallId: event.toolCall.id
     });
     options.activeToolSteps.set(event.toolCall.id, step);
     emit(run.id, { type: 'research_step', step });
     emit(run.id, { type: 'tool_call_started', step });
+    return;
+  }
+
+  if (event.type === 'tool_approval_requested' || event.type === 'tool_approval_resolved') {
+    emit(run.id, { type: event.type, approval: event.approval });
     return;
   }
 

@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
+    "dev": "vite --host 127.0.0.1",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",
-    "test": "tsx --test src/streaming/*.test.ts src/markdown/*.test.ts src/tools/*.test.ts",
+    "test": "tsx --test src/streaming/*.test.ts src/markdown/*.test.ts src/tools/*.test.ts src/api/*.test.ts src/types/*.test.ts src/lib/*.test.ts",
     "typecheck": "vue-tsc -b --noEmit && tsc -p tsconfig.test.json --noEmit"
   },
   "dependencies": {
