@@ -31,6 +31,7 @@ import {
 import type { McpAuthMode, McpServer, McpServerDraft, McpServerStatus, McpTransport } from '../../types/mcp';
 import { isMcpToolReadOnly } from '../../types/mcp';
 import { getMcpOAuthPollMessage, getMcpOAuthPollState, getMcpSaveNotice } from '../../lib/mcpPresentation';
+import type { McpPreset } from '../../mcp/presets';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -118,6 +119,23 @@ function openNew() {
   form.value = createForm();
   error.value = '';
   notice.value = '';
+  advancedOAuthOpen.value = false;
+}
+
+function openPreset(preset: McpPreset) {
+  editing.value = true;
+  form.value = {
+    ...createForm(),
+    name: preset.draft.name,
+    transport: preset.draft.transport,
+    command: preset.draft.command ?? '',
+    argsText: preset.draft.args?.join('\n') ?? '',
+    cwd: preset.draft.cwd ?? '',
+    url: preset.draft.url ?? '',
+    authMode: preset.draft.authMode
+  };
+  error.value = '';
+  notice.value = `已载入 ${preset.name} 预置。请保存、测试后再启用。`;
   advancedOAuthOpen.value = false;
 }
 
@@ -442,6 +460,8 @@ function getErrorMessage(value: unknown, fallback: string) {
   }
   return value instanceof Error ? value.message : fallback;
 }
+
+defineExpose({ openPreset });
 </script>
 
 <template>
