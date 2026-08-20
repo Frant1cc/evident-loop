@@ -6,3 +6,4 @@ export {
 } from './application.js';
 export type { ResearchRunStatus } from '../../research/types.js';
 export type { ToolApprovalDto, ToolApprovalScope, ToolApprovalStatus } from '../../approvals/contracts.js';
+export { getActiveResearchRun } from '../../research/store.js';

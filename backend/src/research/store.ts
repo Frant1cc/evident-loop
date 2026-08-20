@@ -173,7 +173,11 @@ export function updateResearchMessage(id: string, changes: Pick<ResearchMessage,
 
 export function listResearchMessages(conversationId: string) {
   return sqlite
-    .prepare('SELECT * FROM research_messages WHERE conversation_id = ? ORDER BY created_at ASC')
+    // created_at has millisecond precision and concurrent inserts can share a
+    // timestamp. rowid preserves the append order at that boundary so a
+    // completed assistant message cannot move ahead of the user message when
+    // the artifact snapshot is frozen.
+    .prepare('SELECT * FROM research_messages WHERE conversation_id = ? ORDER BY created_at ASC, rowid ASC')
     .all(conversationId)
     .map((row) => toMessage(row as MessageRow));
 }

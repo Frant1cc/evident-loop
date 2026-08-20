@@ -3,10 +3,12 @@ import express from 'express';
 
 import { createConfiguredLlm } from './llm/config.js';
 import type { LlmProvider } from './llm/contracts.js';
-import { createResearchApplication } from './modules/research/index.js';
+import { createArtifactApplication, type ArtifactApplication } from './modules/artifacts/index.js';
+import { createResearchApplication, getActiveResearchRun } from './modules/research/index.js';
 import { createTaskApplication } from './modules/tasks/index.js';
 import { createAgentRouter } from './routes/agent.js';
-import { artifactsRouter } from './routes/artifacts.js';
+import { artifactStore } from './artifacts/store.js';
+import { createArtifactsRouter } from './routes/artifacts.js';
 import { dbTestRouter } from './routes/dbTest.js';
 import { deepseekRouter } from './routes/deepseek.js';
 import { evaluationsRouter } from './routes/evaluations.js';
@@ -15,8 +17,10 @@ import { knowledgeRouter } from './routes/knowledge.js';
 import { createResearchRouter } from './routes/research.js';
 import { createTasksRouter } from './routes/tasks.js';
 import type { ToolCatalog } from './tools/contracts.js';
-import { toolCatalog } from './tools/registry.js';
+import { createToolCatalog, toolCatalog } from './tools/registry.js';
 import { createToolRuntime } from './tools/runtime.js';
+import { createStartArtifactGenerationTool } from './tools/artifactGenerationTool.js';
+import { createArtifactImageTools } from './tools/artifactImageTools.js';
 import { createDefaultResearchSkillRuntime } from './skills/runtime.js';
 import type { McpManager } from './mcp/contracts.js';
 import { createMcpManager } from './mcp/manager.js';
@@ -32,19 +36,30 @@ export type AppDependencies = {
   toolRuntime?: ToolRuntime;
   mcpManager?: McpManager;
   approvalManager?: ApprovalManager;
+  artifactApplication?: ArtifactApplication;
 };
 
 export function createApp(dependencies: AppDependencies = {}) {
   const app = express();
   const configuredLlm = createConfiguredLlm();
   const model = dependencies.model ?? configuredLlm.model;
-  const tools = dependencies.tools ?? toolCatalog;
+  const llm = dependencies.llm ?? configuredLlm.llm;
+  const artifactApplication = dependencies.artifactApplication ?? createArtifactApplication({
+    llm,
+    model,
+    artifactModel: process.env.ARTIFACT_MODEL?.trim() || undefined,
+    isResearchConversationActive: (conversationId) => Boolean(getActiveResearchRun(conversationId))
+  });
+  const tools = dependencies.tools ?? createToolCatalog([
+    ...toolCatalog.values(),
+    createStartArtifactGenerationTool(artifactApplication),
+    ...createArtifactImageTools(artifactApplication)
+  ]);
   const toolRuntime = dependencies.toolRuntime ?? createToolRuntime(tools);
   const approvalManager = dependencies.approvalManager ?? createApprovalManager();
   const skillRuntime = createDefaultResearchSkillRuntime({
     knownToolNames: new Set(toolRuntime.getDefinitions().map((tool) => tool.function.name))
   });
-  const llm = dependencies.llm ?? configuredLlm.llm;
 
   // Every browser-facing API shares the same local-deployment trust boundary.
   // Applying the guard here also protects approval decisions and legacy routes,
@@ -62,8 +77,15 @@ export function createApp(dependencies: AppDependencies = {}) {
   // callers and receive the approval interceptor below.
   app.use('/api', createAgentRouter(createLegacyToolRuntime(toolRuntime)));
   app.use('/api', createToolApprovalRouter(approvalManager));
-  app.use('/api', artifactsRouter);
-  app.use('/api', createResearchRouter(createResearchApplication({ llm, model, toolRuntime, skillRuntime, approvalManager })));
+  app.use('/api', createArtifactsRouter(artifactStore, artifactApplication));
+  app.use('/api', createResearchRouter(createResearchApplication({
+    llm,
+    model,
+    toolRuntime,
+    skillRuntime,
+    approvalManager,
+    artifactApplication
+  })));
   app.use('/api', createTasksRouter(createTaskApplication({ llm, model, toolRuntime, approvalManager })));
   app.use('/api', dbTestRouter);
   if (dependencies.mcpManager) app.use('/api/mcp', createMcpRouter(dependencies.mcpManager));
@@ -76,15 +98,32 @@ export function createApp(dependencies: AppDependencies = {}) {
 export function createProductionApp(options: { host?: string; port?: number } = {}) {
   // Keep the production dynamic catalog independent from the compatibility
   // `app` export so MCP upserts cannot leak into a second runtime instance.
-  const runtimeCatalog = new Map(toolCatalog) as ToolCatalog;
-  const runtime = createToolRuntime(runtimeCatalog);
+  const runtimeCatalog = new Map(toolCatalog);
+  const configuredLlm = createConfiguredLlm();
+  const artifactApplication = createArtifactApplication({
+    llm: configuredLlm.llm,
+    model: configuredLlm.model,
+    artifactModel: process.env.ARTIFACT_MODEL?.trim() || undefined,
+    isResearchConversationActive: (conversationId) => Boolean(getActiveResearchRun(conversationId))
+  });
+  // A process restart cannot safely resume an in-flight planning LLM call.
+  // Mark that request terminal and leave queued requests bound to their
+  // originating research run for explicit completion/failure handling.
+  artifactApplication.recoverPendingDrafts();
+  runtimeCatalog.set(
+    'start_artifact_generation',
+    createStartArtifactGenerationTool(artifactApplication)
+  );
+  for (const module of createArtifactImageTools(artifactApplication)) runtimeCatalog.set(module.definition.function.name, module);
+  const runtime = createToolRuntime(runtimeCatalog as ToolCatalog);
   const mcpManager = createMcpManager({ runtime, host: options.host, port: options.port });
   const approvalManager = createApprovalManager();
   return {
-    app: createApp({ toolRuntime: runtime, mcpManager, approvalManager }),
+    app: createApp({ toolRuntime: runtime, artifactApplication, mcpManager, approvalManager }),
     toolRuntime: runtime,
     mcpManager,
-    approvalManager
+    approvalManager,
+    artifactApplication
   };
 }
 
@@ -94,7 +133,14 @@ export function createProductionApp(options: { host?: string; port?: number } = 
 export const app = createApp();
 
 function createLegacyToolRuntime(runtime: ToolRuntime): ToolRuntime {
-  const modules = runtime.listModules().filter((module) => module.source !== 'mcp');
+  const artifactToolNames = new Set([
+    'start_artifact_generation',
+    'fetch_source_image',
+    'generate_image'
+  ]);
+  const modules = runtime.listModules().filter((module) =>
+    module.source !== 'mcp' && !artifactToolNames.has(module.definition.function.name)
+  );
   return createToolRuntime(new Map(
     modules.map((module) => [module.definition.function.name, module] as const)
   ));

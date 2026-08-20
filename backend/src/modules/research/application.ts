@@ -1,4 +1,5 @@
 import type { LlmProvider } from '../../llm/contracts.js';
+import type { ArtifactApplication } from '../artifacts/index.js';
 import { LlmNotConfiguredError } from '../../llm/errors.js';
 import { buildResearchContext } from '../../context/research/history.js';
 import {
@@ -36,6 +37,7 @@ export type ResearchApplicationDependencies = {
   skillRuntime: ResearchSkillRuntime;
   toolGroups?: ToolGroupDefinition[];
   approvalManager?: ApprovalManager;
+  artifactApplication?: Pick<ArtifactApplication, 'deleteConversationArtifacts' | 'flushPendingDrafts' | 'finalizePendingDrafts' | 'listDraftRequests'>;
 };
 
 /** Use-case boundary for research conversations and durable background runs. */
@@ -79,6 +81,14 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
     },
     deleteConversation: (id: string) => {
       if (getActiveResearchRun(id)) throw new Error('Stop the active research task before deleting this conversation');
+      if (!getResearchConversation(id)) return false;
+      // Binary deletion happens first; the generation repository compensates
+      // removed files when the metadata delete fails, preventing orphaned
+      // Docker-volume files after a conversation is removed.
+      if (dependencies.artifactApplication) {
+        return dependencies.artifactApplication.deleteConversationArtifacts(id, () => deleteResearchConversation(id))
+          .then(() => true);
+      }
       return deleteResearchConversation(id);
     },
     createNote: (conversationId: string, content: string) => {
@@ -108,7 +118,8 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
         skillRuntime: dependencies.skillRuntime,
         llm: requireLlm(),
         model: dependencies.model,
-        approvalManager: dependencies.approvalManager
+        approvalManager: dependencies.approvalManager,
+        artifactDraftCoordinator: dependencies.artifactApplication
       });
     },
     getRun: getResearchRun,
@@ -116,7 +127,18 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
     subscribeToRun: subscribeToResearchRun,
     getStreamEventsAfter: listStreamEventsAfter,
     getStreamMaxSequence: getMaxSequence,
-    cancelRun: cancelResearchRun
+    cancelRun: (id: string) => {
+      const run = cancelResearchRun(id);
+      if (run && run.status === 'cancelled') {
+        dependencies.artifactApplication?.finalizePendingDrafts(
+          run.conversationId,
+          'cancelled',
+          run.id,
+          'The research run was cancelled before artifact planning completed'
+        );
+      }
+      return run;
+    }
   };
 }
 

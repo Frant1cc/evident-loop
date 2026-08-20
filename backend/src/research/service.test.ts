@@ -6,20 +6,27 @@ import express from 'express';
 
 import { initDb } from '../db.js';
 import { createResearchApplication } from '../modules/research/index.js';
+import { createArtifactApplication } from '../modules/artifacts/index.js';
+import { createArtifactAgent } from '../artifacts/generation/agent.js';
+import { createArtifactGenerationService } from '../artifacts/generation/service.js';
+import { createStartArtifactGenerationTool } from '../tools/artifactGenerationTool.js';
+import { getActiveResearchRun } from './store.js';
 import { createResearchRouter } from '../routes/research.js';
 import { toolCatalog } from '../tools/registry.js';
 import { createToolRuntime } from '../tools/runtime.js';
 import { createDefaultResearchSkillRuntime } from '../skills/runtime.js';
 import {
   cancelResearchRun,
-  createAndStartResearchRun
+  createAndStartResearchRun,
+  recoverCompletedArtifactDraftRequests
 } from './service.js';
 import {
   createResearchConversation,
   deleteResearchConversation,
   getResearchRun,
   listResearchMessages,
-  listResearchSteps
+  listResearchSteps,
+  updateResearchRun
 } from './store.js';
 
 initDb();
@@ -98,6 +105,119 @@ test('completes a queued background run and persists its final message', async (
     assert.equal(assistant?.status, 'complete');
     assert.equal(assistant?.content, '后台研究已完成。');
   } finally {
+    deleteResearchConversation(conversation.id);
+  }
+});
+
+test('natural-language artifact tool queues during streaming and creates a renderable draft at completion', async () => {
+  const conversation = createResearchConversation();
+  let scheduled: (() => void) | undefined;
+  const generationService = createArtifactGenerationService({
+    model: 'test',
+    agent: createArtifactAgent({ model: 'test' }),
+    isResearchConversationActive: (conversationId) => Boolean(getActiveResearchRun(conversationId)),
+    renderers: {
+      pptx: { render: async () => ({ buffer: Buffer.from('pptx'), fileName: 'research.pptx', contentType: 'application/octet-stream' }) },
+      pdf: { render: async () => ({ buffer: Buffer.from('%PDF-1.7'), fileName: 'research.pdf', contentType: 'application/pdf' }) }
+    },
+    qualityInspector: { inspect: async () => ({ ok: true, diagnostics: [] }) }
+  });
+  const artifactApplication = createArtifactApplication({ model: 'test', generationService });
+  const artifactTool = createStartArtifactGenerationTool(artifactApplication);
+  const artifactRuntime = createToolRuntime(new Map([
+    ...toolCatalog,
+    [artifactTool.definition.function.name, artifactTool]
+  ]));
+  try {
+    const started = createAndStartResearchRun({
+      conversationId: conversation.id,
+      content: '请研究并生成一份 PPT 和 PDF',
+      toolPolicy: allTools,
+      toolRuntime: artifactRuntime,
+      artifactDraftCoordinator: artifactApplication,
+      apiKey: 'test-only',
+      schedule: (callback) => { scheduled = callback; },
+      runAgent: async (options) => {
+        const queued = await artifactRuntime.execute('start_artifact_generation', {}, {
+          conversationId: options.conversationId,
+          toolScope: options.toolScope,
+          signal: options.signal
+        });
+        assert.equal((queued as { status: string }).status, 'queued_until_research_complete');
+        // The assistant message is still streaming here; the draft must not
+        // be planned against that moving boundary.
+        assert.equal(artifactApplication.listGenerations(conversation.id).length, 0);
+        return { reply: '研究完成，已准备可编辑产物大纲。', toolCalls: [], trace: [], sources: [] };
+      }
+    });
+    assert.ok(scheduled);
+    scheduled();
+    await waitFor(() => getResearchRun(started.run.id)?.status === 'completed');
+    const drafts = artifactApplication.listGenerations(conversation.id);
+    assert.equal(drafts.length, 1);
+    assert.equal(drafts[0]?.stale, false);
+    const generation = artifactApplication.startRender(drafts[0]!.id);
+    await artifactApplication.waitForRender(generation.id);
+    assert.equal(artifactApplication.getGeneration(generation.id)?.outputs.every((output) => output.status === 'completed'), true);
+  } finally {
+    deleteResearchConversation(conversation.id);
+  }
+});
+
+test('restart recovery resumes a queued request only when its originating run is completed', async () => {
+  const conversation = createResearchConversation();
+  let scheduled: (() => void) | undefined;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const generationService = createArtifactGenerationService({
+    model: 'test',
+    agent: createArtifactAgent({ model: 'test' }),
+    isResearchConversationActive: (conversationId) => Boolean(getActiveResearchRun(conversationId))
+  });
+  const artifactApplication = createArtifactApplication({ model: 'test', generationService });
+  const artifactTool = createStartArtifactGenerationTool(artifactApplication);
+  const artifactRuntime = createToolRuntime(new Map([
+    ...toolCatalog,
+    [artifactTool.definition.function.name, artifactTool]
+  ]));
+  try {
+    const started = createAndStartResearchRun({
+      conversationId: conversation.id,
+      content: '生成可恢复的大纲',
+      toolPolicy: allTools,
+      toolRuntime: artifactRuntime,
+      artifactDraftCoordinator: artifactApplication,
+      apiKey: 'test-only',
+      schedule: (callback) => { scheduled = callback; },
+      runAgent: async (options) => {
+        await artifactRuntime.execute('start_artifact_generation', {}, {
+          conversationId: options.conversationId,
+          toolScope: options.toolScope,
+          signal: options.signal
+        });
+        await gate;
+        return { reply: '完成', toolCalls: [], trace: [], sources: [] };
+      }
+    });
+    assert.ok(scheduled);
+    scheduled();
+    await waitFor(() => getResearchRun(started.run.id)?.status === 'running');
+    // Simulate a process boundary after the run became terminal but before
+    // its coordinator drained the durable queue.
+    updateResearchRun(started.run.id, { status: 'completed', completedAt: new Date().toISOString() });
+    const recovered = createArtifactApplication({ model: 'test', generationService: createArtifactGenerationService({
+      model: 'test',
+      agent: createArtifactAgent({ model: 'test' }),
+      isResearchConversationActive: (conversationId) => Boolean(getActiveResearchRun(conversationId))
+    }) });
+    await recoverCompletedArtifactDraftRequests(recovered);
+    assert.equal(recovered.listGenerations(conversation.id).length, 1);
+    assert.equal(recovered.listDraftRequests(conversation.id, started.run.id)[0]?.status, 'completed');
+    release();
+    await waitFor(() => getResearchRun(started.run.id)?.status === 'completed');
+    await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    release();
     deleteResearchConversation(conversation.id);
   }
 });

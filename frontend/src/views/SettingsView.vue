@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import {
   PhArrowCounterClockwise,
   PhBooks,
@@ -11,6 +11,12 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
+import {
+  deleteArtifactImageProvider,
+  listArtifactImageProviders,
+  saveArtifactImageProvider,
+  type ImageProvider
+} from '../api/artifacts';
 
 import {
   defaultTabVisibility,
@@ -68,6 +74,19 @@ const isDefault = computed(() =>
   tabOptions.every((tab) => props.tabVisibility[tab.key] === defaultTabVisibility[tab.key])
 );
 
+const imageProviders = ref<ImageProvider[]>([]);
+const imageProviderForm = ref({ name: '', baseUrl: '', model: '', apiKey: '' });
+const imageProviderBusy = ref(false);
+const imageProviderError = ref('');
+
+onMounted(async () => {
+  try {
+    imageProviders.value = (await listArtifactImageProviders()).providers;
+  } catch {
+    imageProviders.value = [];
+  }
+});
+
 function toggleTab(key: ConfigurableTabKey) {
   emit('update:tabVisibility', {
     ...props.tabVisibility,
@@ -77,6 +96,31 @@ function toggleTab(key: ConfigurableTabKey) {
 
 function restoreDefaults() {
   emit('update:tabVisibility', { ...defaultTabVisibility });
+}
+
+async function saveImageProvider() {
+  if (imageProviderBusy.value) return;
+  imageProviderBusy.value = true;
+  imageProviderError.value = '';
+  try {
+    const result = await saveArtifactImageProvider({ ...imageProviderForm.value, apiKey: imageProviderForm.value.apiKey || undefined });
+    imageProviders.value = [result.provider, ...imageProviders.value.filter((provider) => provider.id !== result.provider.id)];
+    imageProviderForm.value.apiKey = '';
+  } catch (error) {
+    imageProviderError.value = error instanceof Error ? error.message : '保存图片服务失败';
+  } finally {
+    imageProviderBusy.value = false;
+  }
+}
+
+async function removeImageProvider(provider: ImageProvider) {
+  if (!window.confirm(`删除图片服务“${provider.name}”？`)) return;
+  try {
+    await deleteArtifactImageProvider(provider.id);
+    imageProviders.value = imageProviders.value.filter((item) => item.id !== provider.id);
+  } catch (error) {
+    imageProviderError.value = error instanceof Error ? error.message : '删除图片服务失败';
+  }
 }
 </script>
 
@@ -121,6 +165,29 @@ function restoreDefaults() {
           </div>
 
           <p class="m-0 border-t border-border bg-muted/30 px-5 py-3 text-xs leading-5 text-muted-foreground">固定顺序：研究工作台、Agent 运行时、质量评测、知识库、设置。</p>
+        </div>
+      </section>
+
+      <section class="grid items-start gap-6 lg:grid-cols-[250px_minmax(0,1fr)]" aria-labelledby="image-provider-title">
+        <aside class="rounded-xl border border-border bg-card p-5">
+          <h2 id="image-provider-title" class="m-0 text-base font-semibold">图片生成服务</h2>
+          <p class="m-0 mt-2 text-sm leading-6 text-muted-foreground">配置 OpenAI Images 兼容服务，用于来源图片不可用时的备用素材。密钥只写入加密存储，不会回显。</p>
+        </aside>
+        <div class="grid gap-4 rounded-xl border border-border bg-card p-5">
+          <div class="grid gap-3 md:grid-cols-2">
+            <input v-model="imageProviderForm.name" class="h-9 rounded-md border border-border bg-background px-3 text-sm" placeholder="名称" aria-label="图片服务名称" />
+            <input v-model="imageProviderForm.baseUrl" class="h-9 rounded-md border border-border bg-background px-3 text-sm" placeholder="https://api.example.com/v1" aria-label="图片服务地址" />
+            <input v-model="imageProviderForm.model" class="h-9 rounded-md border border-border bg-background px-3 text-sm" placeholder="模型名称" aria-label="图片模型名称" />
+            <input v-model="imageProviderForm.apiKey" type="password" autocomplete="new-password" class="h-9 rounded-md border border-border bg-background px-3 text-sm" placeholder="密钥（保存时写入）" aria-label="图片服务密钥" />
+          </div>
+          <p v-if="imageProviderError" class="m-0 text-xs text-destructive" role="alert">{{ imageProviderError }}</p>
+          <div class="flex justify-end"><Button :disabled="imageProviderBusy" @click="saveImageProvider">{{ imageProviderBusy ? '保存中…' : '保存图片服务' }}</Button></div>
+          <div v-if="imageProviders.length" class="divide-y divide-border rounded-md border border-border">
+            <div v-for="provider in imageProviders" :key="provider.id" class="flex items-center gap-3 px-3 py-2.5">
+              <div class="min-w-0 flex-1"><p class="m-0 truncate text-sm font-semibold">{{ provider.name }}</p><p class="m-0 mt-1 truncate text-xs text-muted-foreground">{{ provider.baseUrl }} · {{ provider.model }} · {{ provider.credentialConfigured ? '已配置密钥' : '未配置密钥' }}</p></div>
+              <Button variant="ghost" size="sm" @click="removeImageProvider(provider)">删除</Button>
+            </div>
+          </div>
         </div>
       </section>
 

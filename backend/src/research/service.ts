@@ -27,6 +27,7 @@ import {
   getResearchRun,
   getResearchRunInput,
   listResearchMessages,
+  listResearchConversations,
   listResearchSources,
   listResearchSteps,
   listUnfinishedResearchRuns,
@@ -72,6 +73,7 @@ Rules:
 - When retrieved sources support a claim, cite their provided keys such as [S1].
 - Call generate_word_document only when the user explicitly asks to generate, export, download, or create a Word/DOCX file. Ordinary requests to summarize, analyze, or write content should remain normal chat replies.
 - For generate_word_document, always put the complete body in contentMarkdown. Never construct a blocks array. Use <!-- pagebreak --> for explicit page breaks.
+- When the user explicitly asks to generate/export/create a PPT, PPTX, or PDF from this research conversation, call start_artifact_generation exactly once. The runtime binds the current conversation and research-run scope; do not include conversationId or invent a scope argument. It creates an editable draft only; never render an artifact or claim a file exists before the user confirms the outline.
 - When generate_word_document succeeds, call it only once. The client renders the document card from the structured tool result, so do not include downloadUrl, previewUrl, localhost URLs, Markdown download links, or redundant download instructions in the final answer. Give only a concise content summary when useful.
 - If a tool fails, explain the failure based on the tool error instead of pretending it succeeded.
 - Stop calling tools once you have enough information to answer.`;
@@ -113,6 +115,21 @@ export type ResearchRunEvent =
 
 type ResearchAgentRunner = (options: RunAgentLoopOptions) => ReturnType<typeof runAgentLoop>;
 
+type ArtifactDraftCoordinator = {
+  flushPendingDrafts: (conversationId: string, researchRunId?: string) => Promise<unknown>;
+  listDraftRequests: (conversationId: string, researchRunId?: string) => Array<{
+    conversationId: string;
+    researchRunId?: string;
+    status: string;
+  }>;
+  finalizePendingDrafts?: (
+    conversationId: string,
+    status: 'failed' | 'cancelled',
+    researchRunId?: string,
+    error?: string
+  ) => unknown;
+};
+
 export function createAndStartResearchRun(options: {
   conversationId: string;
   content: string;
@@ -126,6 +143,7 @@ export function createAndStartResearchRun(options: {
   runAgent?: ResearchAgentRunner;
   approvalManager?: ApprovalManager;
   schedule?: (callback: () => void) => void;
+  artifactDraftCoordinator?: ArtifactDraftCoordinator;
 }) {
   let conversation = getResearchConversation(options.conversationId);
   if (!conversation) throw new Error('Research conversation not found');
@@ -183,7 +201,8 @@ export function createAndStartResearchRun(options: {
       runAgent: options.runAgent ?? runAgentLoop,
       toolRuntime: options.toolRuntime,
       skillRuntime: options.skillRuntime,
-      approvalManager: options.approvalManager
+      approvalManager: options.approvalManager,
+      artifactDraftCoordinator: options.artifactDraftCoordinator
     });
   });
 
@@ -241,18 +260,60 @@ export function cancelResearchRun(id: string) {
   return cancelled;
 }
 
-export function failOrphanedResearchRuns() {
+export function failOrphanedResearchRuns(artifactDraftCoordinator?: ArtifactDraftCoordinator) {
   for (const run of listUnfinishedResearchRuns()) {
     updateResearchMessage(run.assistantMessageId, {
       content: RESTARTED_MESSAGE,
       status: 'error'
     });
     failRunningSteps(run, RESTARTED_MESSAGE);
-    updateResearchRun(run.id, {
+    const failed = updateResearchRun(run.id, {
       status: 'failed',
       error: RESTARTED_MESSAGE,
       completedAt: new Date().toISOString()
     });
+    if (failed) {
+      artifactDraftCoordinator?.finalizePendingDrafts?.(
+        run.conversationId,
+        'failed',
+        run.id,
+        RESTARTED_MESSAGE
+      );
+    }
+  }
+}
+
+/**
+ * Resume only requests whose originating run already reached completed before
+ * a backend restart. Queued requests from unfinished runs are finalized by
+ * failOrphanedResearchRuns; no request is ever consumed by a later run.
+ */
+export async function recoverCompletedArtifactDraftRequests(artifactDraftCoordinator: ArtifactDraftCoordinator) {
+  for (const conversation of listResearchConversations()) {
+    const requests = artifactDraftCoordinator.listDraftRequests(conversation.id)
+      .filter((request) => request.status === 'queued' && request.researchRunId);
+    for (const request of requests) {
+      const run = getResearchRun(request.researchRunId!);
+      if (run?.status === 'completed') {
+        if (getActiveResearchRun(conversation.id)) {
+          artifactDraftCoordinator.finalizePendingDrafts?.(
+            conversation.id,
+            'failed',
+            run.id,
+            'A later research run is active; the old deferred artifact request was not replayed'
+          );
+          continue;
+        }
+        await artifactDraftCoordinator.flushPendingDrafts(conversation.id, run.id);
+      } else if (run?.status === 'failed' || run?.status === 'cancelled') {
+        artifactDraftCoordinator.finalizePendingDrafts?.(
+          conversation.id,
+          run.status,
+          run.id,
+          run.error ?? `Research run ${run.status}`
+        );
+      }
+    }
   }
 }
 
@@ -265,6 +326,7 @@ async function executePersistedResearchRun(options: {
   toolRuntime: ToolRuntime;
   skillRuntime?: ResearchSkillRuntime;
   approvalManager?: ApprovalManager;
+  artifactDraftCoordinator?: ArtifactDraftCoordinator;
 }) {
   let run = getResearchRun(options.runId);
   const runInput = getResearchRunInput(options.runId);
@@ -369,6 +431,10 @@ async function executePersistedResearchRun(options: {
       completedAt: new Date().toISOString()
     });
     if (!completedRun) throw new Error('Research task could not be completed');
+    // The artifact tool may have been requested during this run. Create its
+    // plan only after the streaming assistant message is complete so the
+    // frozen snapshot and its later stale check observe the same boundary.
+    await options.artifactDraftCoordinator?.flushPendingDrafts(run.conversationId, run.id);
     emit(run.id, {
       type: 'research_message_completed',
       message: completedMessage,
@@ -391,6 +457,14 @@ async function executePersistedResearchRun(options: {
       error: message,
       completedAt: new Date().toISOString()
     });
+    if (failedRun) {
+      options.artifactDraftCoordinator?.finalizePendingDrafts?.(
+        run.conversationId,
+        'failed',
+        run.id,
+        message
+      );
+    }
     if (failedRun) emit(run.id, { type: 'error', message, assistantMessage: failedMessage, run: failedRun });
   } finally {
     activeControllers.delete(run.id);
