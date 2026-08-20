@@ -11,7 +11,6 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-import McpSettingsPanel from '../components/mcp/McpSettingsPanel.vue';
 
 import {
   defaultTabVisibility,
@@ -125,7 +124,6 @@ function restoreDefaults() {
         </div>
       </section>
 
-      <McpSettingsPanel />
     </div>
   </section>
 </template>
