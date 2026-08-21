@@ -115,3 +115,14 @@ test('falls back to generic labels when the tool name is unknown', () => {
   assert.equal(state?.label, '附件');
   assert.equal(state?.activity, '正在加载附件…');
 });
+
+test('labels start_artifact_generation as a PPT/PDF outline attachment', () => {
+  const result = buildAuxiliaryState(
+    [step({ title: 'start_artifact_generation', status: 'running' })],
+    new Map()
+  );
+  const state = result.get('msg-1');
+  assert.equal(state?.label, 'PPT / PDF 大纲');
+  assert.equal(state?.activity, '正在生成大纲…');
+  assert.equal(state?.status, 'running');
+});

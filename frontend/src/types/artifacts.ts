@@ -45,6 +45,7 @@ export type ArtifactOutput = {
   }>;
   error?: string;
   diagnostics?: string[];
+  progress?: string;
   attempts: number;
   createdAt: string;
   updatedAt: string;

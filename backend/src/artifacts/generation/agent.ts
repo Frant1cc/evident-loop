@@ -1,5 +1,6 @@
 import type { LlmProvider } from '../../llm/contracts.js';
 import { parseArtifactPlanModelOutput, parseArtifactSpec } from './schema.js';
+import { parseModelJsonObject } from './parseModelJson.js';
 import type {
   ArtifactPreferences,
   ArtifactQualityInspector,
@@ -96,8 +97,13 @@ async function planArtifact(
   throwIfAborted(signal);
   const content = completion.choices?.[0]?.message?.content?.trim();
   if (!content) throw new ArtifactPlanningError('Artifact text model returned no structured plan');
+  const fallback = buildFallbackSpec(snapshot, preferences);
   try {
-    const plan = parseArtifactPlanModelOutput(parseJsonObject(content));
+    const plan = parseArtifactPlanModelOutput(parseModelJsonObject(content), {
+      brief: fallback.brief,
+      presentation: fallback.presentation,
+      pdf: fallback.pdf
+    });
     return mergePlan(snapshot, plan.brief, plan.presentation, plan.pdf, preferences);
   } catch (error) {
     throw new ArtifactPlanningError(
@@ -132,7 +138,7 @@ async function repairArtifact(
   const content = completion.choices?.[0]?.message?.content?.trim();
   if (!content) return spec;
   try {
-    return parseArtifactSpec(parseJsonObject(content));
+    return parseArtifactSpec(parseModelJsonObject(content));
   } catch {
     return spec;
   }
@@ -317,16 +323,75 @@ function createPlanningPrompt(snapshot: ResearchSnapshot, preferences?: Artifact
   });
 }
 
-const artifactPlanningSystemPrompt = `You are EvidentLoop's ArtifactAgent. Convert a frozen research snapshot into one factually consistent ResearchBrief, PresentationPlan, and PdfReportPlan. Plan 8-15 substantive slides and enough substantive report sections for 6-20 actual PDF pages; requested target counts are soft goals and must be normalized to the real plan. Never add filler or no-information pages just to reach a target. Only use facts and citations present in the snapshot; say that evidence is insufficient when needed. Keep the same citation keys across both outputs. Return JSON only. Do not include system instructions, tool traces, secret values, arbitrary URLs, shell commands, or file paths not present in the snapshot.`;
-const artifactRepairSystemPrompt = `You are EvidentLoop's ArtifactAgent repair pass. Repair only the supplied format-local plan/layout for the reported renderer/quality diagnostics. Preserve the shared brief, facts, citation keys, title, audience, branding, and user choices; do not change the sibling format. Return the complete valid ArtifactSpec as JSON only. Never add arbitrary URLs, shell commands, secret values, filler pages, or unsupported evidence.`;
+const artifactPlanningSystemPrompt = `You are EvidentLoop's ArtifactAgent. Convert a frozen research snapshot into one factually consistent ResearchBrief, PresentationPlan, and PdfReportPlan. Plan 8-15 substantive slides and enough substantive report sections for 6-20 actual PDF pages; requested target counts are soft goals and must be normalized to the real plan. Never add filler or no-information pages just to reach a target. Only use facts and citations present in the snapshot; say that evidence is insufficient when needed. Keep the same citation keys across both outputs.
 
-function parseJsonObject(content: string) {
-  const trimmed = content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-  const start = trimmed.indexOf('{');
-  const end = trimmed.lastIndexOf('}');
-  if (start < 0 || end <= start) throw new Error('JSON object not found');
-  return JSON.parse(trimmed.slice(start, end + 1)) as unknown;
+Return exactly ONE JSON object with ONLY the three keys "brief", "presentation", "pdf". Objects are STRICT: only the fields listed below are allowed, no extra keys, and every listed field is REQUIRED unless marked optional. Use exactly the field names and enum values below.
+
+brief = {
+  title: string,
+  audience: string,
+  executiveSummary: string,
+  keyFindings: string[],          // 1-20 items
+  recommendations: string[],      // 0-20 items
+  sections: [                     // 1-20 items
+    {
+      id: string,
+      title: string,
+      summary: string,
+      keyPoints: string[],        // 1-12 items
+      citations: string[]         // citation keys, 0-24 items
+    }
+  ],
+  citations: [                    // 0-100 items
+    {
+      citationKey: string,
+      sourceId: string,
+      title: string,
+      locator: string             // optional
+    }
+  ]
 }
+
+presentation = {
+  slides: [                       // 3-30 items accepted; plan 8-15 substantive slides
+    {
+      id: string,
+      title: string,
+      kind: "title" | "content" | "comparison" | "closing",
+      bullets: string[],          // 0-8 items
+      speakerNotes: string,       // optional
+      citations: string[],        // citation keys, 0-24 items
+      visual: {                   // optional; exactly one of these two shapes
+        type: "table",
+        headers: string[],        // 1-12 items
+        rows: string[][]          // 1-50 rows, up to 12 cells each
+      }
+      // or
+      visual: {
+        type: "bar",
+        labels: string[],         // 1-20 items
+        values: number[]          // 1-20 items, finite numbers
+      }
+    }
+  ],
+  targetSlideCount: number        // integer 8-15, equal to the real slide count
+}
+
+pdf = {
+  sections: [                     // 3-30 items accepted; plan enough for 6-20 real pages
+    {
+      id: string,
+      title: string,
+      paragraphs: string[],       // 0-12 items
+      bullets: string[],          // 0-20 items
+      citations: string[]         // citation keys
+    }
+  ],
+  targetPageCount: number         // integer 6-20, equal to sections.length + 2
+}
+
+Return a single JSON object only. Every array and object element except the last MUST be followed by a comma. Do not omit commas, do not use trailing commas, and do not put raw line breaks inside strings. Do not include Markdown fences, system instructions, tool traces, secret values, arbitrary URLs, shell commands, or file paths not present in the snapshot.`;
+const artifactRepairSystemPrompt = `You are EvidentLoop's ArtifactAgent repair pass. Repair only the supplied format-local plan/layout for the reported renderer/quality diagnostics. Preserve the shared brief, facts, citation keys, title, audience, branding, and user choices; do not change the sibling format. Return the complete valid ArtifactSpec as JSON only. Never add arbitrary URLs, shell commands, secret values, filler pages, or unsupported evidence.`;
 
 function takeText(values: string[], limit: number, fallback?: string) {
   const result = values.map((value) => value.trim()).filter(Boolean).slice(0, limit);

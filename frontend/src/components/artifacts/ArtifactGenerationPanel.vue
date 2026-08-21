@@ -53,6 +53,13 @@ let sessionEpoch = 0;
 const selected = computed(() => generations.value.find((generation) => generation.id === selectedId.value));
 const editable = computed(() => selected.value?.status === 'awaiting_confirmation' && !selected.value.stale);
 const canCreate = computed(() => props.enabled && Boolean(props.conversationId) && props.messages.some((message) => message.status === 'complete'));
+
+function outputStatusText(output: { status: string; error?: string; progress?: string }): string {
+  if (output.status === 'completed') return '可下载';
+  if (output.status === 'failed') return output.error ?? '失败';
+  const label = ({ pending: '等待中', rendering: '渲染中', validating: '质检中', cancelled: '已取消' } as Record<string, string>)[output.status] ?? output.status;
+  return output.progress ? `${label} · ${output.progress}` : label;
+}
 const statusLabel = computed(() => {
   const status = selected.value?.status;
   return ({
@@ -410,11 +417,11 @@ function syncConsentForGeneration(generation: ResearchArtifactGeneration | undef
 </script>
 
 <template>
-  <section v-if="canCreate || generations.length" class="mx-auto mb-3 grid w-full max-w-4xl gap-3 rounded-xl border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] p-3.5" aria-label="研究产物生成">
+  <section v-if="canCreate || generations.length" class="grid w-full gap-3 rounded-2xl border border-border bg-card p-3.5 text-card-foreground shadow-xs dark:border-white/[0.06] dark:bg-card/75 dark:shadow-none" aria-label="研究产物生成">
     <header class="flex flex-wrap items-center justify-between gap-2">
       <div>
         <p class="m-0 text-sm font-bold text-[var(--agent-text)]">按需 Artifact Agent</p>
-        <p class="m-0 mt-1 text-xs text-[var(--agent-text-muted)]">逻辑 Agent 按“冻结快照 → 大纲 → 图片策略 → PPT/PDF → 逐页 QA”内部流水线生成</p>
+        <p class="m-0 mt-1 text-xs text-[var(--agent-text-muted)]">逻辑 Agent 按“冻结快照 → 大纲 → 图片策略 → PPT/PDF”内部流水线生成</p>
       </div>
       <button v-if="canCreate" type="button" class="rounded-md bg-[var(--agent-selected-bg)] px-3 py-1.5 text-xs font-bold text-[var(--agent-selected-text)] disabled:opacity-50" :disabled="busy" @click="createDraft">
         {{ busy ? '处理中…' : '生成大纲' }}
@@ -521,13 +528,14 @@ function syncConsentForGeneration(generation: ResearchArtifactGeneration | undef
         <div v-for="output in selected.outputs" :key="output.id" class="grid gap-2">
           <div class="flex flex-wrap items-center gap-2 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] px-2.5 py-2 text-xs">
             <span class="font-bold uppercase text-[var(--agent-text)]">{{ output.format }}</span>
-            <span class="text-[var(--agent-text-muted)]">{{ output.status === 'completed' ? '可下载' : output.status === 'failed' ? output.error : output.status }}</span>
+            <span class="text-[var(--agent-text-muted)]">{{ outputStatusText(output) }}</span>
             <span v-if="output.provenance?.length" class="text-[10px] text-[var(--agent-text-muted)]">{{ output.provenance.map((item) => item.kind === 'authorized_source_asset' ? '授权来源图' : item.kind === 'image_provider' ? '图片提供商' : '内置形状').join(' / ') }}</span>
             <span v-if="output.renderedSpec" class="text-[10px] text-[var(--agent-text-muted)]">有效 {{ output.format === 'pptx' ? output.renderedSpec.presentation.targetSlideCount + ' 页' : output.renderedSpec.pdf.targetPageCount + ' 页' }}</span>
             <a v-if="output.downloadUrl" :href="output.downloadUrl" class="ml-auto font-bold text-[var(--agent-selected-text)] no-underline">下载</a>
             <a v-if="output.format === 'pdf' && output.previewUrl" :href="output.previewUrl" target="_blank" rel="noreferrer" class="font-bold text-[var(--agent-selected-text)] no-underline">预览 PDF</a>
             <button v-if="output.status === 'failed' || output.status === 'cancelled'" type="button" class="rounded border border-[var(--agent-border)] px-2 py-1 font-bold text-[var(--agent-text)]" :disabled="busy" @click="retry(output.id)">重试</button>
           </div>
+          <p v-if="output.diagnostics?.length" class="m-0 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-[11px] leading-5 text-amber-800 dark:text-amber-200">{{ output.diagnostics.join(' · ') }}</p>
           <details v-if="output.renderedSpec" class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] px-2.5 py-2 text-[11px] text-[var(--agent-text-muted)]">
             <summary class="cursor-pointer font-semibold">查看本次有效 rendered spec{{ output.renderedSpecDigest ? `（${output.renderedSpecDigest.slice(0, 12)}…）` : '' }}</summary>
             <pre class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-[10px]">{{ JSON.stringify(output.renderedSpec, null, 2) }}</pre>

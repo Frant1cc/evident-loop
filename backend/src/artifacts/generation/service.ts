@@ -532,6 +532,7 @@ export function createArtifactGenerationService(options: {
   ) {
     let spec = initialSpec;
     let lastDiagnostics: string[] = [];
+    let lastProgress: string | undefined;
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       throwIfAborted(signal);
       updateArtifactOutput(output.id, { status: 'rendering', attempts: attempt, error: undefined });
@@ -557,7 +558,20 @@ export function createArtifactGenerationService(options: {
           snapshot,
           renderer,
           qualityInspector,
-          context: { signal, assets: resolvedAssets.assets, snapshot, visualProvenance: resolvedAssets.provenance }
+          context: {
+            signal,
+            assets: resolvedAssets.assets,
+            snapshot,
+            visualProvenance: resolvedAssets.provenance,
+            // Surface per-step renderer progress to the polled generation
+            // detail so the UI can show a live pipeline, not just statuses.
+            // Only persist when the message changes to avoid hot-path writes.
+            onProgress: (message) => {
+              if (message === lastProgress) return;
+              lastProgress = message;
+              updateArtifactOutput(output.id, { progress: message });
+            }
+          }
         });
         throwIfAborted(signal);
         const result = {

@@ -17,7 +17,8 @@ export type AuxiliaryState = {
  * picks it up automatically.
  */
 export const ARTIFACT_TOOL_LABELS: Record<string, { label: string; activity: string }> = {
-  generate_word_document: { label: '生成的文档', activity: '正在生成文档…' }
+  generate_word_document: { label: '生成的文档', activity: '正在生成文档…' },
+  start_artifact_generation: { label: 'PPT / PDF 大纲', activity: '正在生成大纲…' }
 };
 
 const FALLBACK_LABELS = { label: '附件', activity: '正在加载附件…' };

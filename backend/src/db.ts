@@ -304,6 +304,7 @@ export const initDb = () => {
       rendered_spec_digest TEXT,
       error TEXT,
       diagnostics_json TEXT,
+      progress TEXT,
       attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
@@ -589,6 +590,7 @@ export const initDb = () => {
   ensureColumn('research_artifact_outputs', 'provenance_json', 'TEXT');
   ensureColumn('research_artifact_outputs', 'rendered_spec_json', 'TEXT');
   ensureColumn('research_artifact_outputs', 'rendered_spec_digest', 'TEXT');
+  ensureColumn('research_artifact_outputs', 'progress', 'TEXT');
   migrateArtifactStatusConstraint();
   ensureArtifactDraftRequestSchema();
 

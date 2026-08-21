@@ -12,7 +12,6 @@ import type {
   ResearchSnapshot
 } from './types.js';
 import { validateArtifactCitations } from './schema.js';
-import { createExternalArtifactQualityAdapter, type ArtifactQualityAdapter } from './qualityAdapter.js';
 import { RendererUnavailableError } from './errors.js';
 
 export { RendererUnavailableError } from './errors.js';
@@ -280,8 +279,6 @@ export class DefaultPdfRenderer implements ArtifactRenderer {
 }
 
 export class DefaultArtifactQualityInspector implements ArtifactQualityInspector {
-  constructor(private readonly adapter: ArtifactQualityAdapter = createExternalArtifactQualityAdapter()) {}
-
   async inspect(format: ArtifactFormat, result: RendererResult, spec: ArtifactSpec, context?: RendererContext): Promise<QualityReport> {
     const diagnostics = [...(result.diagnostics ?? [])];
     if (result.buffer.byteLength === 0) diagnostics.push(`${format} renderer returned an empty file`);
@@ -298,17 +295,7 @@ export class DefaultArtifactQualityInspector implements ArtifactQualityInspector
       diagnostics.push(...validateArtifactCitations(spec).map((key) => `Unknown citation key in spec: ${key}`));
     }
     diagnostics.push(...validateLayoutManifest(format, result.layoutManifest, spec));
-    if (diagnostics.length) return { ok: false, diagnostics };
-    if (!context?.snapshot) {
-      throw new RendererUnavailableError('Artifact QA unavailable: frozen research snapshot was not supplied');
-    }
-    const rendered = await this.adapter.inspect(format, result, spec, context.snapshot, context.signal);
-    return {
-      ok: rendered.ok,
-      diagnostics: [...diagnostics, ...rendered.diagnostics],
-      ...(rendered.preview ? { preview: rendered.preview } : {}),
-      ...(rendered.previewContentType ? { previewContentType: rendered.previewContentType } : {})
-    };
+    return { ok: diagnostics.length === 0, diagnostics };
   }
 }
 
@@ -372,8 +359,8 @@ export function createDefaultRenderers() {
   } satisfies Record<ArtifactFormat, ArtifactRenderer>;
 }
 
-export function createDefaultArtifactQualityInspector(adapter?: ArtifactQualityAdapter) {
-  return new DefaultArtifactQualityInspector(adapter);
+export function createDefaultArtifactQualityInspector() {
+  return new DefaultArtifactQualityInspector();
 }
 
 type PdfDomMetrics = {
@@ -656,7 +643,7 @@ function throwIfAborted(signal?: AbortSignal) {
 async function importOptional(name: 'pptxgenjs' | 'playwright'): Promise<any | undefined> {
   try {
     // Keep renderers optional so the backend can start and report a structured
-    // preflight diagnostic on machines without Chromium/LibreOffice tooling.
+    // preflight diagnostic on machines without Chromium tooling.
     const load = Function('moduleName', 'return import(moduleName)') as (moduleName: string) => Promise<any>;
     return await load(name);
   } catch {

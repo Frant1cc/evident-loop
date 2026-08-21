@@ -385,6 +385,35 @@ test('ArtifactAgent rejects an undersized model plan instead of inventing filler
   );
 });
 
+test('ArtifactAgent completes a truncated plan that omitted citations, presentation, and pdf', async () => {
+  const conversation = createResearchConversation();
+  createResearchMessage({ conversationId: conversation.id, role: 'user', content: '截断规划', status: 'complete' });
+  const snapshot = createResearchSnapshot(conversation.id);
+  const llm = {
+    complete: async () => ({
+      choices: [{ message: {
+        role: 'assistant' as const,
+        content: JSON.stringify({
+          brief: {
+            title: '模型标题',
+            audience: '决策者',
+            executiveSummary: '模型摘要',
+            keyFindings: ['发现一'],
+            recommendations: ['建议一'],
+            sections: [{ id: 's1', title: '背景', summary: '说明', keyPoints: ['要点'] }]
+          }
+        })
+      } }]
+    })
+  };
+  const spec = await createArtifactAgent({ llm, model: 'test' }).plan(snapshot);
+  assert.equal(spec.title, '模型标题');
+  assert.equal(spec.brief.executiveSummary, '模型摘要');
+  assert.ok(Array.isArray(spec.brief.citations));
+  assert.ok(spec.presentation.slides.length >= 8);
+  assert.ok(spec.pdf.sections.length >= 4);
+});
+
 test('renderer_unavailable fails outputs without spending repair attempts', async () => {
   const conversation = createResearchConversation();
   createResearchMessage({ conversationId: conversation.id, role: 'user', content: '环境缺失测试', status: 'complete' });

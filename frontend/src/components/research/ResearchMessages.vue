@@ -6,17 +6,31 @@ import { Button } from '@/components/ui/button';
 import AgentMessage from '../agent/AgentMessage.vue';
 import ConversationHistoryRail from '../conversation/ConversationHistoryRail.vue';
 import WordArtifactCard from '../documents/WordArtifactCard.vue';
+import ArtifactGenerationPanel from '../artifacts/ArtifactGenerationPanel.vue';
 import { useMessageAutoScroll } from '../../composables/useMessageAutoScroll';
 import type { WordArtifact } from '../../types/artifacts';
-import type { ResearchMessage } from '../../types/research';
+import type { ResearchMessage, ResearchStep } from '../../types/research';
 import type { AuxiliaryState } from '../../lib/auxiliaryState';
 
 const props = defineProps<{
   conversationId?: string;
   messages: ResearchMessage[];
+  steps?: ResearchStep[];
   artifactsByMessageId: Map<string, WordArtifact[]>;
   auxiliaryStateByMessageId?: Map<string, AuxiliaryState>;
+  artifactEnabled?: boolean;
 }>();
+
+const artifactHostMessageId = computed(() => {
+  const steps = props.steps ?? [];
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    const step = steps[index];
+    if (step?.type !== 'tool' || step.title !== 'start_artifact_generation') continue;
+    if (props.messages.some((message) => message.id === step.messageId)) return step.messageId;
+  }
+  return [...props.messages].reverse().find((message) => message.role === 'assistant')?.id
+    ?? props.messages.at(-1)?.id;
+});
 
 const emit = defineEmits<{
   citation: [key: string];
@@ -145,7 +159,10 @@ defineExpose({ scrollContainer });
           v-for="message in messages"
           :key="message.id"
           :data-research-message-id="message.id"
-          class="min-w-0 shrink-0 [contain-intrinsic-size:auto_10rem] [content-visibility:auto]"
+          class="min-w-0 shrink-0"
+          :class="message.id === artifactHostMessageId
+            ? ''
+            : '[contain-intrinsic-size:auto_10rem] [content-visibility:auto]'"
         >
           <AgentMessage
             :message="message"
@@ -165,6 +182,13 @@ defineExpose({ scrollContainer });
               />
             </template>
           </AgentMessage>
+          <ArtifactGenerationPanel
+            v-if="message.id === artifactHostMessageId"
+            class="mt-3"
+            :conversation-id="conversationId"
+            :messages="messages"
+            :enabled="artifactEnabled !== false"
+          />
         </div>
       </div>
     </div>

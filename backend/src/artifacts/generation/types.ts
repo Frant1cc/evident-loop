@@ -160,6 +160,8 @@ export type ArtifactOutput = {
   provenance?: ArtifactVisualProvenance[];
   error?: string;
   diagnostics?: string[];
+  /** Latest renderer progress message while status is rendering/validating. */
+  progress?: string;
   attempts: number;
   createdAt: string;
   updatedAt: string;

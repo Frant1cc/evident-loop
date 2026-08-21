@@ -44,6 +44,7 @@ type OutputRow = {
   rendered_spec_digest: string | null;
   error: string | null;
   diagnostics_json: string | null;
+  progress: string | null;
   attempts: number;
   created_at: string;
   updated_at: string;
@@ -360,6 +361,7 @@ export function updateArtifactOutput(id: string, changes: {
   renderedSpecDigest?: string;
   error?: string;
   diagnostics?: string[];
+  progress?: string;
   attempts?: number;
 }) {
   const current = sqlite.prepare('SELECT * FROM research_artifact_outputs WHERE id = ?').get(id) as OutputRow | undefined;
@@ -367,7 +369,7 @@ export function updateArtifactOutput(id: string, changes: {
   const updatedAt = new Date().toISOString();
   sqlite.prepare(`UPDATE research_artifact_outputs SET
     status = ?, file_name = ?, content_type = ?, size = ?, storage_key = ?, preview_key = ?,
-    provenance_json = ?, rendered_spec_json = ?, rendered_spec_digest = ?, error = ?, diagnostics_json = ?, attempts = ?, updated_at = ? WHERE id = ?`)
+    provenance_json = ?, rendered_spec_json = ?, rendered_spec_digest = ?, error = ?, diagnostics_json = ?, progress = ?, attempts = ?, updated_at = ? WHERE id = ?`)
     .run(
       changes.status ?? current.status,
       changes.fileName ?? current.file_name,
@@ -380,6 +382,7 @@ export function updateArtifactOutput(id: string, changes: {
       'renderedSpecDigest' in changes ? changes.renderedSpecDigest ?? null : current.rendered_spec_digest,
       'error' in changes ? changes.error ?? null : current.error,
       'diagnostics' in changes ? changes.diagnostics ? JSON.stringify(changes.diagnostics) : null : current.diagnostics_json,
+      'progress' in changes ? changes.progress ?? null : current.progress,
       changes.attempts ?? current.attempts,
       updatedAt,
       id
@@ -550,6 +553,7 @@ function toOutput(row: OutputRow): ArtifactOutput {
     ...(row.storage_key ? { downloadUrl: `/api/artifact-files/${encodeURIComponent(row.id)}/download` } : {}),
     ...(row.preview_key ? { previewUrl: `/api/artifact-files/${encodeURIComponent(row.id)}/preview` } : {}),
     ...(row.error ? { error: row.error } : {}),
+    ...(row.progress ? { progress: row.progress } : {}),
     ...(diagnostics.length ? { diagnostics } : {}),
     ...(provenance.length ? { provenance } : {}),
     ...(renderedSpec ? { renderedSpec } : {}),

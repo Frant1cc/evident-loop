@@ -23,7 +23,7 @@ export function createStartArtifactGenerationTool(application: ArtifactApplicati
   return defineTool({
     label: '按需启动 Artifact Agent 草稿',
     name: 'start_artifact_generation',
-    description: 'Start the on-demand logical Artifact Agent from a frozen research snapshot. Its explicit internal pipeline is plan -> consented asset resolution -> PPTX/PDF render -> per-page QA; this call only creates an editable draft and the user must confirm before rendering. It is not a ToolRuntime. Never pass shell commands, local paths, arbitrary URLs, or tool traces.',
+    description: 'Start the on-demand logical Artifact Agent from a frozen research snapshot. Its explicit internal pipeline is plan -> consented asset resolution -> PPTX/PDF render; this call only creates an editable draft and the user must confirm before rendering. It is not a ToolRuntime. Never pass shell commands, local paths, arbitrary URLs, or tool traces.',
     inputSchema: artifactGenerationInputSchema,
     annotations: { readOnlyHint: false },
     execute: (args, context) => startArtifactGeneration(application, args, context)

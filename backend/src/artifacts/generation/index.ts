@@ -7,6 +7,5 @@ export * from './binaryStore.js';
 export * from './imageProviders.js';
 export * from './images.js';
 export * from './renderers.js';
-export * from './qualityAdapter.js';
 export * from './repository.js';
 export * from './service.js';

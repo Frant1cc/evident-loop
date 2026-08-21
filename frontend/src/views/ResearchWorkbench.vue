@@ -585,6 +585,7 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
         :title="activeConversation?.title"
         :conversation-id="activeConversationId"
         :messages="messages"
+        :steps="steps"
         :artifacts-by-message-id="artifactsByMessageId"
         :auxiliary-state-by-message-id="auxiliaryStateByMessageId"
         :loading="loading"
