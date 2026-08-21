@@ -77,6 +77,7 @@ const emit = defineEmits<{
     </section>
 
     <ResearchMessages
+      class="[grid-row:4]"
       :conversation-id="conversationId"
       :messages="messages"
       :artifacts-by-message-id="artifactsByMessageId"
@@ -85,7 +86,7 @@ const emit = defineEmits<{
       @preview="emit('preview', $event)"
     />
 
-    <footer class="px-3 pb-2 pt-0 md:px-5">
+    <footer class="px-3 pb-2 pt-0 md:px-5 [grid-row:5]">
       <div class="mx-auto grid w-full max-w-4xl gap-1.5">
         <div v-if="error" class="rounded-md bg-destructive/5 px-2.5 py-1.5 text-xs text-destructive" role="alert">{{ error }}</div>
         <p
