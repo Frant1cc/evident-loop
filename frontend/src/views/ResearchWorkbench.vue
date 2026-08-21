@@ -19,6 +19,7 @@ import {
   type ResearchToolGroupInfo,
   type ResearchToolInfo
 } from '../api/research';
+import { listResearchArtifactGenerations } from '../api/artifacts';
 import { ApprovalApiError, decideToolApproval } from '../api/approvals';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -46,6 +47,7 @@ import type { StreamConnectionState } from '../types/streaming';
 import { buildAuxiliaryState, type AuxiliaryState } from '../lib/auxiliaryState';
 import { buildSelectedToolPolicy, requiredGroupIds, standaloneTools } from '../tools/selection';
 import type { ToolApproval, ToolApprovalDecision } from '../types/approvals';
+import type { ToolPolicy } from '../types/tasks';
 import { upsertToolApproval } from '../types/approvals';
 
 defineOptions({ name: 'ResearchWorkbench' });
@@ -70,6 +72,7 @@ const selectedStep = ref<ResearchStep>();
 const activeRailTab = ref<'timeline' | 'sources' | 'details'>('timeline');
 const activeDetailsTab = ref<'notes' | 'memory' | 'tool' | 'prompt'>('notes');
 const deleteTarget = ref<ResearchConversation>();
+const deleteArtifactCount = ref<number>();
 const deleting = ref(false);
 const availableTools = ref<ResearchToolInfo[]>([]);
 const availableToolGroups = ref<ResearchToolGroupInfo[]>([]);
@@ -243,10 +246,13 @@ async function send() {
   activeRailTab.value = 'timeline';
 
   try {
-    const toolPolicy = buildSelectedToolPolicy(
-      availableToolGroups.value,
-      enabledToolGroups.value,
-      enabledStandaloneTools.value
+    const toolPolicy = withExplicitArtifactTool(
+      content,
+      buildSelectedToolPolicy(
+        availableToolGroups.value,
+        enabledToolGroups.value,
+        enabledStandaloneTools.value
+      )
     );
     const started = await startResearchMessage(conversationId, content, toolPolicy, selectedSkillId.value);
     messageRenderer.upsert(started.userMessage);
@@ -446,6 +452,7 @@ async function confirmDeleteConversation() {
     await deleteResearchConversation(conversation.id);
     conversations.value = conversations.value.filter((item) => item.id !== conversation.id);
     deleteTarget.value = undefined;
+    deleteArtifactCount.value = undefined;
 
     if (activeConversationId.value !== conversation.id) return;
 
@@ -457,6 +464,35 @@ async function confirmDeleteConversation() {
     error.value = err instanceof Error ? err.message : '删除会话失败';
   } finally {
     deleting.value = false;
+  }
+}
+
+function withExplicitArtifactTool(content: string, policy: ToolPolicy): ToolPolicy {
+  if (!isExplicitArtifactRequest(content) || !availableTools.value.some((tool) => tool.name === 'start_artifact_generation')) {
+    return policy;
+  }
+  if (policy.mode === 'all') return policy;
+  const names = policy.mode === 'selected' ? [...policy.names] : [];
+  if (!names.includes('start_artifact_generation')) names.push('start_artifact_generation');
+  return { mode: 'selected', names };
+}
+
+function isExplicitArtifactRequest(content: string) {
+  const normalized = content.toLowerCase();
+  const mentionsFormat = /\b(?:pptx?|pdf)\b|幻灯片|演示文稿|长篇报告/.test(normalized);
+  const asksToCreate = /生成|创建|制作|导出|下载|转换|做成|产出/.test(normalized);
+  return mentionsFormat && asksToCreate;
+}
+
+async function prepareDeleteTarget(conversation: ResearchConversation) {
+  deleteTarget.value = conversation;
+  deleteArtifactCount.value = undefined;
+  try {
+    const result = await listResearchArtifactGenerations(conversation.id);
+    if (deleteTarget.value?.id === conversation.id) deleteArtifactCount.value = result.generations.length;
+  } catch {
+    // The delete API remains authoritative; an unavailable history request
+    // should not prevent the user from explicitly confirming deletion.
   }
 }
 
@@ -539,7 +575,7 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
           :busy="deleting"
           @create="createConversation"
           @select="selectConversation"
-          @delete="deleteTarget = $event"
+          @delete="prepareDeleteTarget"
           @toggle="collapsed = !collapsed"
         />
       </template>
@@ -611,7 +647,7 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
           </div>
           <DialogTitle>删除研究会话</DialogTitle>
           <DialogDescription>
-            “{{ deleteTarget?.title }}”及其消息、来源和笔记将被永久删除，此操作无法撤销。
+            “{{ deleteTarget?.title }}”及其消息、来源、笔记和 {{ deleteArtifactCount ?? '正在读取' }} 个关联产物版本将被永久删除；对应的二进制、预览和中间素材也会物理删除，此操作无法撤销。
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>

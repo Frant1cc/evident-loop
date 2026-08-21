@@ -5,6 +5,7 @@ import ResearchHeader from './ResearchHeader.vue';
 import ResearchMessages from './ResearchMessages.vue';
 import ResearchComposer from './ResearchComposer.vue';
 import ToolApprovalCard from '../approvals/ToolApprovalCard.vue';
+import ArtifactGenerationPanel from '../artifacts/ArtifactGenerationPanel.vue';
 import type { ResearchSkillInfo, ResearchToolGroupInfo, ResearchToolInfo } from '../../api/research';
 import type { ToolApproval, ToolApprovalDecision } from '../../types/approvals';
 import type { WordArtifact } from '../../types/artifacts';
@@ -49,8 +50,14 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <main class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)_auto] bg-background">
+  <main class="grid min-h-0 grid-rows-[auto_auto_auto_minmax(0,1fr)_auto] bg-background">
     <ResearchHeader :title="title" />
+
+    <ArtifactGenerationPanel
+      :conversation-id="conversationId"
+      :messages="messages"
+      :enabled="!loading"
+    />
 
     <section v-if="approvals.some((approval) => approval.status === 'pending')" class="app-scrollbar max-h-[min(34vh,420px)] overflow-y-auto border-b border-amber-500/20 bg-amber-500/[0.035] px-3 py-3 md:px-5" aria-live="polite" aria-label="待处理的工具审批">
       <div class="mx-auto grid w-full max-w-4xl gap-2.5">

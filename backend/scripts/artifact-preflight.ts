@@ -1,0 +1,5 @@
+import { runArtifactPreflight } from '../src/artifacts/generation/qualityAdapter.js';
+
+const result = await runArtifactPreflight();
+console.log(JSON.stringify(result, null, 2));
+if (!result.ok) process.exitCode = 1;

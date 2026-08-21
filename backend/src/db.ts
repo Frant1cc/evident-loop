@@ -273,6 +273,90 @@ export const initDb = () => {
     CREATE INDEX IF NOT EXISTS research_notes_conversation_updated_at_idx
     ON research_notes(conversation_id, updated_at DESC);
 
+    CREATE TABLE IF NOT EXISTS research_artifacts (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL,
+      version INTEGER NOT NULL CHECK (version > 0),
+      snapshot_digest TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('planning', 'awaiting_confirmation', 'rendering', 'validating', 'repairing', 'completed', 'partial', 'failed', 'cancelled', 'superseded')),
+      stale INTEGER NOT NULL DEFAULT 0 CHECK (stale IN (0, 1)),
+      spec_json TEXT NOT NULL,
+      snapshot_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (conversation_id) REFERENCES research_conversations(id) ON DELETE CASCADE,
+      UNIQUE (conversation_id, version)
+    );
+
+    CREATE TABLE IF NOT EXISTS research_artifact_outputs (
+      id TEXT PRIMARY KEY,
+      generation_id TEXT NOT NULL,
+      version INTEGER NOT NULL CHECK (version > 0),
+      format TEXT NOT NULL CHECK (format IN ('pptx', 'pdf')),
+      status TEXT NOT NULL CHECK (status IN ('pending', 'rendering', 'validating', 'completed', 'failed', 'cancelled')),
+      file_name TEXT,
+      content_type TEXT,
+      size INTEGER CHECK (size IS NULL OR size >= 0),
+      storage_key TEXT,
+      preview_key TEXT,
+      provenance_json TEXT,
+      rendered_spec_json TEXT,
+      rendered_spec_digest TEXT,
+      error TEXT,
+      diagnostics_json TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (generation_id) REFERENCES research_artifacts(id) ON DELETE CASCADE,
+      UNIQUE (generation_id, format)
+    );
+
+    CREATE INDEX IF NOT EXISTS research_artifacts_conversation_version_idx
+    ON research_artifacts(conversation_id, version DESC);
+    CREATE INDEX IF NOT EXISTS research_artifact_outputs_generation_status_idx
+    ON research_artifact_outputs(generation_id, status);
+
+    CREATE TABLE IF NOT EXISTS research_artifact_assets (
+      id TEXT PRIMARY KEY,
+      generation_id TEXT NOT NULL,
+      source_id TEXT,
+      original_page_url TEXT,
+      image_url TEXT NOT NULL,
+      license_confirmed INTEGER NOT NULL DEFAULT 0 CHECK (license_confirmed IN (0, 1)),
+      mime_type TEXT NOT NULL,
+      byte_size INTEGER NOT NULL CHECK (byte_size > 0),
+      pixel_width INTEGER,
+      pixel_height INTEGER,
+      storage_key TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (generation_id) REFERENCES research_artifacts(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS research_artifact_assets_generation_idx
+    ON research_artifact_assets(generation_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS research_artifact_image_consents (
+      id TEXT PRIMARY KEY,
+      generation_id TEXT NOT NULL,
+      conversation_id TEXT NOT NULL,
+      image_url TEXT NOT NULL,
+      source_id TEXT,
+      confirmed_at TEXT NOT NULL,
+      FOREIGN KEY (generation_id) REFERENCES research_artifacts(id) ON DELETE CASCADE,
+      FOREIGN KEY (conversation_id) REFERENCES research_conversations(id) ON DELETE CASCADE
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS research_artifact_image_consents_unique_idx
+    ON research_artifact_image_consents(generation_id, image_url);
+
+    CREATE TABLE IF NOT EXISTS artifact_image_providers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      base_url TEXT NOT NULL,
+      model TEXT NOT NULL,
+      encrypted_api_key TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS agent_tasks (
       id TEXT PRIMARY KEY,
       goal TEXT NOT NULL,
@@ -501,6 +585,13 @@ export const initDb = () => {
     ON agent_artifacts(task_id, updated_at DESC);
   `);
 
+  // Existing artifact output tables predate durable image provenance.
+  ensureColumn('research_artifact_outputs', 'provenance_json', 'TEXT');
+  ensureColumn('research_artifact_outputs', 'rendered_spec_json', 'TEXT');
+  ensureColumn('research_artifact_outputs', 'rendered_spec_digest', 'TEXT');
+  migrateArtifactStatusConstraint();
+  ensureArtifactDraftRequestSchema();
+
 // Existing local databases predate durable context state and native tool-call replay.
   // SQLite has no ADD COLUMN IF NOT EXISTS, so keep this tiny, idempotent migration here.
   ensureColumn('research_conversations', 'context_state_json', 'TEXT');
@@ -524,4 +615,144 @@ function ensureColumn(table: string, column: string, definition: string) {
   if (!columns.some((entry) => entry.name === column)) {
     sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
+}
+
+/**
+ * The artifact status CHECK was introduced before the immutable-version
+ * `superseded` state. SQLite cannot alter a CHECK constraint in place, so
+ * rebuild the small artifact family when an existing local database still has
+ * the old constraint. Foreign keys stay enabled; dependent tables are copied
+ * with references to the new parent before the legacy tables are dropped.
+ */
+function migrateArtifactStatusConstraint() {
+  const row = sqlite.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'research_artifacts'").get() as { sql?: string } | undefined;
+  if (!row?.sql || row.sql.includes("'superseded'")) return;
+
+  const rebuild = sqlite.transaction(() => {
+    sqlite.exec(`
+      DROP INDEX IF EXISTS research_artifacts_conversation_version_idx;
+      ALTER TABLE research_artifacts RENAME TO research_artifacts_legacy;
+      CREATE TABLE research_artifacts (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        version INTEGER NOT NULL CHECK (version > 0),
+        snapshot_digest TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('planning', 'awaiting_confirmation', 'rendering', 'validating', 'repairing', 'completed', 'partial', 'failed', 'cancelled', 'superseded')),
+        stale INTEGER NOT NULL DEFAULT 0 CHECK (stale IN (0, 1)),
+        spec_json TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (conversation_id) REFERENCES research_conversations(id) ON DELETE CASCADE,
+        UNIQUE (conversation_id, version)
+      );
+      INSERT INTO research_artifacts
+        (id, conversation_id, version, snapshot_digest, status, stale, spec_json, snapshot_json, created_at, updated_at)
+        SELECT id, conversation_id, version, snapshot_digest, status, stale, spec_json, snapshot_json, created_at, updated_at
+        FROM research_artifacts_legacy;
+
+      DROP INDEX IF EXISTS research_artifact_outputs_generation_status_idx;
+      ALTER TABLE research_artifact_outputs RENAME TO research_artifact_outputs_legacy;
+      CREATE TABLE research_artifact_outputs (
+        id TEXT PRIMARY KEY,
+        generation_id TEXT NOT NULL,
+        version INTEGER NOT NULL CHECK (version > 0),
+        format TEXT NOT NULL CHECK (format IN ('pptx', 'pdf')),
+        status TEXT NOT NULL CHECK (status IN ('pending', 'rendering', 'validating', 'completed', 'failed', 'cancelled')),
+        file_name TEXT,
+        content_type TEXT,
+        size INTEGER CHECK (size IS NULL OR size >= 0),
+        storage_key TEXT,
+        preview_key TEXT,
+        provenance_json TEXT,
+        rendered_spec_json TEXT,
+        rendered_spec_digest TEXT,
+        error TEXT,
+        diagnostics_json TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (generation_id) REFERENCES research_artifacts(id) ON DELETE CASCADE,
+        UNIQUE (generation_id, format)
+      );
+      INSERT INTO research_artifact_outputs
+        (id, generation_id, version, format, status, file_name, content_type, size, storage_key, preview_key, provenance_json, rendered_spec_json, rendered_spec_digest, error, diagnostics_json, attempts, created_at, updated_at)
+        SELECT id, generation_id, version, format, status, file_name, content_type, size, storage_key, preview_key, provenance_json, rendered_spec_json, rendered_spec_digest, error, diagnostics_json, attempts, created_at, updated_at
+        FROM research_artifact_outputs_legacy;
+
+      DROP INDEX IF EXISTS research_artifact_assets_generation_idx;
+      ALTER TABLE research_artifact_assets RENAME TO research_artifact_assets_legacy;
+      CREATE TABLE research_artifact_assets (
+        id TEXT PRIMARY KEY,
+        generation_id TEXT NOT NULL,
+        source_id TEXT,
+        original_page_url TEXT,
+        image_url TEXT NOT NULL,
+        license_confirmed INTEGER NOT NULL DEFAULT 0 CHECK (license_confirmed IN (0, 1)),
+        mime_type TEXT NOT NULL,
+        byte_size INTEGER NOT NULL CHECK (byte_size > 0),
+        pixel_width INTEGER,
+        pixel_height INTEGER,
+        storage_key TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (generation_id) REFERENCES research_artifacts(id) ON DELETE CASCADE
+      );
+      INSERT INTO research_artifact_assets
+        (id, generation_id, source_id, original_page_url, image_url, license_confirmed, mime_type, byte_size, pixel_width, pixel_height, storage_key, created_at)
+        SELECT id, generation_id, source_id, original_page_url, image_url, license_confirmed, mime_type, byte_size, pixel_width, pixel_height, storage_key, created_at
+        FROM research_artifact_assets_legacy;
+
+      DROP INDEX IF EXISTS research_artifact_image_consents_unique_idx;
+      ALTER TABLE research_artifact_image_consents RENAME TO research_artifact_image_consents_legacy;
+      CREATE TABLE research_artifact_image_consents (
+        id TEXT PRIMARY KEY,
+        generation_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        image_url TEXT NOT NULL,
+        source_id TEXT,
+        confirmed_at TEXT NOT NULL,
+        FOREIGN KEY (generation_id) REFERENCES research_artifacts(id) ON DELETE CASCADE,
+        FOREIGN KEY (conversation_id) REFERENCES research_conversations(id) ON DELETE CASCADE
+      );
+      INSERT INTO research_artifact_image_consents
+        (id, generation_id, conversation_id, image_url, source_id, confirmed_at)
+        SELECT id, generation_id, conversation_id, image_url, source_id, confirmed_at
+        FROM research_artifact_image_consents_legacy;
+
+      DROP TABLE research_artifact_outputs_legacy;
+      DROP TABLE research_artifact_assets_legacy;
+      DROP TABLE research_artifact_image_consents_legacy;
+      DROP TABLE research_artifacts_legacy;
+      CREATE INDEX research_artifacts_conversation_version_idx
+        ON research_artifacts(conversation_id, version DESC);
+      CREATE INDEX research_artifact_outputs_generation_status_idx
+        ON research_artifact_outputs(generation_id, status);
+      CREATE INDEX research_artifact_assets_generation_idx
+        ON research_artifact_assets(generation_id, created_at);
+      CREATE UNIQUE INDEX research_artifact_image_consents_unique_idx
+        ON research_artifact_image_consents(generation_id, image_url);
+    `);
+  });
+  rebuild();
+}
+
+function ensureArtifactDraftRequestSchema() {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS research_artifact_draft_requests (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL,
+      research_run_id TEXT,
+      preferences_json TEXT,
+      status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled')),
+      generation_id TEXT,
+      error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT,
+      FOREIGN KEY (conversation_id) REFERENCES research_conversations(id) ON DELETE CASCADE,
+      FOREIGN KEY (generation_id) REFERENCES research_artifacts(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS research_artifact_draft_requests_run_status_idx
+    ON research_artifact_draft_requests(conversation_id, research_run_id, status, created_at);
+  `);
 }
