@@ -1,4 +1,5 @@
 import type { LlmProvider } from '../../llm/contracts.js';
+import { lastUserTextFromSnapshot, resolveArtifactFormats } from './formats.js';
 import { parseArtifactPlanModelOutput, parseArtifactSpec } from './schema.js';
 import { parseModelJsonObject } from './parseModelJson.js';
 import type {
@@ -281,12 +282,17 @@ function mergePlan(
   if (pageCount < 6 || pageCount > 20) {
     throw new ArtifactPlanningError(`PDF plan resolves to ${pageCount} pages; plan between 6 and 20 substantive pages`);
   }
+  const formats = resolveArtifactFormats({
+    requested: preferences?.formats,
+    userText: lastUserTextFromSnapshot(snapshot)
+  });
   return parseArtifactSpec({
     title,
     audience,
     theme,
     branding,
     brief: { ...brief, title, audience },
+    formats,
     presentation: {
       ...presentation,
       slides: [
@@ -319,11 +325,11 @@ function createPlanningPrompt(snapshot: ResearchSnapshot, preferences?: Artifact
       sources: snapshot.sources,
       notes: snapshot.notes
     },
-    output: 'Return JSON only with keys brief, presentation, pdf. Do not include Markdown fences.'
+    output: 'Return JSON only with keys brief, presentation, pdf. Do not include Markdown fences. preferences.formats is the user-requested file set.'
   });
 }
 
-const artifactPlanningSystemPrompt = `You are EvidentLoop's ArtifactAgent. Convert a frozen research snapshot into one factually consistent ResearchBrief, PresentationPlan, and PdfReportPlan. Plan 8-15 substantive slides and enough substantive report sections for 6-20 actual PDF pages; requested target counts are soft goals and must be normalized to the real plan. Never add filler or no-information pages just to reach a target. Only use facts and citations present in the snapshot; say that evidence is insufficient when needed. Keep the same citation keys across both outputs.
+const artifactPlanningSystemPrompt = `You are EvidentLoop's ArtifactAgent. Convert a frozen research snapshot into one factually consistent ResearchBrief, PresentationPlan, and PdfReportPlan. Plan 8-15 substantive slides and enough substantive report sections for 6-20 actual PDF pages; requested target counts are soft goals and must be normalized to the real plan. Never add filler or no-information pages just to reach a target. Only use facts and citations present in the snapshot; say that evidence is insufficient when needed. Keep the same citation keys across both outputs. preferences.formats lists the files the user asked to generate (pptx, pdf, or both); still return both plans so the shared brief stays consistent, but do not pad a format they did not request.
 
 Return exactly ONE JSON object with ONLY the three keys "brief", "presentation", "pdf". Objects are STRICT: only the fields listed below are allowed, no extra keys, and every listed field is REQUIRED unless marked optional. Use exactly the field names and enum values below.
 

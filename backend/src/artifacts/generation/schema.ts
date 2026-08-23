@@ -1,10 +1,12 @@
 import { z } from 'zod';
 
+import { normalizeArtifactFormats } from './formats.js';
 import type {
   ArtifactPreferences,
   ArtifactSpec,
   PdfReportPlan,
   PresentationPlan,
+  PresentationSlide,
   ResearchBrief
 } from './types.js';
 
@@ -95,6 +97,11 @@ const brandingSchema = z.object({
   bodyFont: text(120).optional()
 }).strict();
 
+const artifactFormatsSchema = z.preprocess(
+  (value) => normalizeArtifactFormats(value) ?? ['pptx', 'pdf'],
+  z.array(z.enum(['pptx', 'pdf'])).min(1).max(2)
+);
+
 export const artifactSpecSchema = z.object({
   title: text(200),
   audience: text(300),
@@ -102,7 +109,8 @@ export const artifactSpecSchema = z.object({
   branding: brandingSchema,
   brief: researchBriefSchema,
   presentation: presentationPlanSchema,
-  pdf: pdfReportPlanSchema
+  pdf: pdfReportPlanSchema,
+  formats: artifactFormatsSchema
 }).strict();
 
 export const artifactPreferencesSchema = z.object({
@@ -111,7 +119,8 @@ export const artifactPreferencesSchema = z.object({
   theme: z.enum(['research', 'technical', 'business']).optional(),
   targetSlideCount: z.number().int().min(8).max(15).optional(),
   targetPageCount: z.number().int().min(6).max(20).optional(),
-  branding: brandingSchema.optional()
+  branding: brandingSchema.optional(),
+  formats: z.array(z.enum(['pptx', 'pdf'])).min(1).max(2).optional()
 }).strict();
 
 export type ArtifactPlanModelOutput = {
@@ -235,7 +244,7 @@ function completeBriefSection(value: unknown) {
   };
 }
 
-function completeSlide(value: unknown) {
+function completeSlide(value: unknown): PresentationSlide | undefined {
   if (!isRecord(value)) return undefined;
   const id = asNonEmptyString(value.id);
   const title = asNonEmptyString(value.title);
@@ -243,7 +252,7 @@ function completeSlide(value: unknown) {
     ? value.kind
     : 'content';
   if (!id || !title) return undefined;
-  const slide: Record<string, unknown> = {
+  const slide: PresentationSlide = {
     id,
     title,
     kind,
@@ -252,7 +261,7 @@ function completeSlide(value: unknown) {
   };
   const speakerNotes = asNonEmptyString(value.speakerNotes);
   if (speakerNotes) slide.speakerNotes = speakerNotes;
-  if (isRecord(value.visual)) slide.visual = value.visual;
+  if (isRecord(value.visual)) slide.visual = value.visual as PresentationSlide['visual'];
   return slide;
 }
 

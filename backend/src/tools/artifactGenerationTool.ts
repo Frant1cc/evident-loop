@@ -11,6 +11,7 @@ const artifactGenerationInputSchema = z.object({
   theme: z.enum(['research', 'technical', 'business']).optional(),
   targetSlideCount: z.number().int().min(8).max(15).optional(),
   targetPageCount: z.number().int().min(6).max(20).optional(),
+  formats: z.array(z.enum(['pptx', 'pdf'])).min(1).max(2).optional(),
   branding: z.object({
     primaryColor: z.string().regex(/^#?[0-9a-fA-F]{6}$/).optional(),
     logoUrl: z.string().url().refine((value) => value.startsWith('https://'), 'logoUrl must use HTTPS').optional(),
@@ -23,7 +24,7 @@ export function createStartArtifactGenerationTool(application: ArtifactApplicati
   return defineTool({
     label: '按需启动 Artifact Agent 草稿',
     name: 'start_artifact_generation',
-    description: 'Start the on-demand logical Artifact Agent from a frozen research snapshot. Its explicit internal pipeline is plan -> consented asset resolution -> PPTX/PDF render; this call only creates an editable draft and the user must confirm before rendering. It is not a ToolRuntime. Never pass shell commands, local paths, arbitrary URLs, or tool traces.',
+    description: 'Start the on-demand logical Artifact Agent from a frozen research snapshot. Set formats from the user request: pptx for PPT/PPTX/slides, pdf for PDF/long reports, or both only when they asked for both. Never default to both. Its explicit internal pipeline is plan -> consented asset resolution -> PPTX/PDF render; this call only creates an editable draft and the user must confirm before rendering. It is not a ToolRuntime. Never pass shell commands, local paths, arbitrary URLs, or tool traces.',
     inputSchema: artifactGenerationInputSchema,
     annotations: { readOnlyHint: false },
     execute: (args, context) => startArtifactGeneration(application, args, context)
@@ -59,6 +60,7 @@ async function startArtifactGeneration(application: ArtifactApplication, args: u
     ...(input.theme ? { theme: input.theme } : {}),
     ...(input.targetSlideCount ? { targetSlideCount: input.targetSlideCount } : {}),
     ...(input.targetPageCount ? { targetPageCount: input.targetPageCount } : {}),
+    ...(input.formats?.length ? { formats: [...new Set(input.formats)] } : {}),
     ...(input.branding ? { branding: input.branding } : {})
   }, context.signal, { researchRunId });
   if (result.queued) {
@@ -81,6 +83,7 @@ async function startArtifactGeneration(application: ArtifactApplication, args: u
     theme: draft.spec.theme,
     slideCount: draft.spec.presentation.slides.length,
     pdfSectionCount: draft.spec.pdf.sections.length,
+    formats: draft.spec.formats,
     requiresConfirmation: true,
     message: 'Artifact draft created. Present the editable outline to the user and wait for confirmation before rendering.'
   };

@@ -100,6 +100,79 @@ test('artifact generation creates an editable draft and a partial result when on
   assert.equal(binary.size, 1);
 });
 
+test('renders only the format inferred from the latest user request', async () => {
+  const conversation = createResearchConversation();
+  createResearchMessage({ conversationId: conversation.id, role: 'user', content: '研究数据库迁移后只生成 PPT', status: 'complete' });
+  createResearchMessage({ conversationId: conversation.id, role: 'assistant', content: '迁移应当可回滚。', status: 'complete' });
+  const binary = new Map<string, Buffer>();
+  const binaryStore: ArtifactBinaryStore = {
+    put: async (key, value) => { binary.set(key, value); },
+    get: async (key) => binary.get(key) ?? null,
+    delete: async (key) => { binary.delete(key); }
+  };
+  let pdfRenderCount = 0;
+  const service = createArtifactGenerationService({
+    model: 'test',
+    agent: createArtifactAgent({ model: 'test' }),
+    renderers: {
+      pptx: fakeRenderer('pptx', Buffer.from('PK\x03\x04')),
+      pdf: {
+        render: async () => {
+          pdfRenderCount += 1;
+          throw new Error('PDF should not render for a PPT-only request');
+        }
+      }
+    },
+    qualityInspector: { inspect: async () => ({ ok: true, diagnostics: [] }) },
+    binaryStore
+  });
+  const draft = await service.createDraft(conversation.id);
+  assert.deepEqual(draft.spec.formats, ['pptx']);
+  const generation = service.startRender(draft.id);
+  await service.waitForRender(generation.id);
+  const completed = service.get(generation.id)!;
+  assert.equal(completed.status, 'completed');
+  assert.deepEqual(completed.outputs.map((output) => output.format), ['pptx']);
+  assert.equal(completed.outputs[0]?.status, 'completed');
+  assert.equal(pdfRenderCount, 0);
+});
+
+test('explicit format preferences override inferred wording', async () => {
+  const conversation = createResearchConversation();
+  createResearchMessage({ conversationId: conversation.id, role: 'user', content: '请生成 PPT', status: 'complete' });
+  createResearchMessage({ conversationId: conversation.id, role: 'assistant', content: '结论已整理。', status: 'complete' });
+  const binary = new Map<string, Buffer>();
+  const binaryStore: ArtifactBinaryStore = {
+    put: async (key, value) => { binary.set(key, value); },
+    get: async (key) => binary.get(key) ?? null,
+    delete: async (key) => { binary.delete(key); }
+  };
+  let pptxRenderCount = 0;
+  const service = createArtifactGenerationService({
+    model: 'test',
+    agent: createArtifactAgent({ model: 'test' }),
+    renderers: {
+      pptx: {
+        render: async () => {
+          pptxRenderCount += 1;
+          throw new Error('PPTX should not render when PDF was requested');
+        }
+      },
+      pdf: fakeRenderer('pdf', Buffer.from('%PDF-1.7'))
+    },
+    qualityInspector: { inspect: async () => ({ ok: true, diagnostics: [] }) },
+    binaryStore
+  });
+  const draft = await service.createDraft(conversation.id, { formats: ['pdf'] });
+  assert.deepEqual(draft.spec.formats, ['pdf']);
+  const generation = service.startRender(draft.id);
+  await service.waitForRender(generation.id);
+  const completed = service.get(generation.id)!;
+  assert.equal(completed.status, 'completed');
+  assert.deepEqual(completed.outputs.map((output) => output.format), ['pdf']);
+  assert.equal(pptxRenderCount, 0);
+});
+
 test('conversation artifact deletion compensates binary removal failures before deleting metadata', async () => {
   const conversation = createResearchConversation();
   createResearchMessage({ conversationId: conversation.id, role: 'user', content: '建立删除补偿测试', status: 'complete' });

@@ -9,6 +9,7 @@ export type ArtifactDraftPreferences = {
   targetSlideCount?: number;
   targetPageCount?: number;
   branding?: ArtifactBranding;
+  formats?: Array<'pptx' | 'pdf'>;
 };
 
 export type ImageProvider = {

@@ -29,6 +29,7 @@ import {
   getArtifactDraftRequest,
   listArtifactDraftRequests
 } from './repository.js';
+import { lastUserTextFromSnapshot, resolveArtifactFormats } from './formats.js';
 import { parseArtifactPreferences, parseArtifactSpec } from './schema.js';
 import { createArtifactAgent, type ArtifactAgent } from './agent.js';
 import {
@@ -110,9 +111,16 @@ export function createArtifactGenerationService(options: {
     if (options.isResearchConversationActive?.(conversationId)) {
       throw new ArtifactStateError('Wait for the active research run to complete before creating an artifact draft');
     }
-    const preferences = rawPreferences === undefined ? undefined : parseArtifactPreferences(rawPreferences);
+    const parsedPreferences = rawPreferences === undefined ? undefined : parseArtifactPreferences(rawPreferences);
     const snapshot = createResearchSnapshot(conversationId);
     if (!snapshot.messages.length) throw new ArtifactStateError('Research conversation has no completed messages');
+    const preferences = {
+      ...parsedPreferences,
+      formats: resolveArtifactFormats({
+        requested: parsedPreferences?.formats,
+        userText: lastUserTextFromSnapshot(snapshot)
+      })
+    };
     const spec = await agent.plan(snapshot, preferences, signal);
     // A run can start while the text model is planning. Re-check immediately
     // before persistence so a draft can never be created from a moving
@@ -230,7 +238,7 @@ export function createArtifactGenerationService(options: {
         throw error;
       }
       updateArtifactGeneration(id, { status: 'superseded' });
-      for (const format of ['pptx', 'pdf'] as const) createArtifactOutput(generation.id, generation.version, format);
+      for (const format of generation.spec.formats) createArtifactOutput(generation.id, generation.version, format);
       launchRender(generation.id, signal, undefined, mediaCopy);
       return getArtifactGeneration(generation.id)!;
     } finally {
@@ -478,8 +486,8 @@ export function createArtifactGenerationService(options: {
     if (!generation) return;
     try {
       if (mediaCopy) await copyRehomedAssetBinaries(mediaCopy.mediaCopies, binaryStore, signal);
-      const formats = onlyFormat ? [onlyFormat] : (['pptx', 'pdf'] as const);
       const spec = generation.spec;
+      const formats = onlyFormat ? [onlyFormat] : spec.formats;
       const outputByFormat = new Map(
         generation.outputs.map((output) => [output.format, output])
       );
@@ -487,7 +495,9 @@ export function createArtifactGenerationService(options: {
 
       for (const format of formats) {
         throwIfAborted(signal);
-        const output = outputByFormat.get(format) ?? createArtifactOutput(id, generation.version, format);
+        const output = outputByFormat.get(format)
+          ?? (onlyFormat ? createArtifactOutput(id, generation.version, format) : undefined);
+        if (!output) continue;
         const result = await renderOne(output, format, spec, generation.snapshot, signal);
         if (result) successful += 1;
       }

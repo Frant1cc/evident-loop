@@ -15,6 +15,7 @@ import {
 } from '../../api/artifacts';
 import type { ResearchArtifactGeneration } from '../../types/artifacts';
 import type { ResearchMessage } from '../../types/research';
+import { ARTIFACT_FORMATS, formatLabels, inferArtifactFormats, type ArtifactFormat } from '../../lib/artifactFormats';
 import {
   createGenerationDraftRevision,
   hasUnpersistedDraftChanges,
@@ -48,11 +49,43 @@ const consentId = ref('');
 const consentImageUrl = ref('');
 const consentBusy = ref(false);
 const sourceImageBusy = ref(false);
+const createFormats = ref<ArtifactFormat[]>([]);
 let sessionEpoch = 0;
 
 const selected = computed(() => generations.value.find((generation) => generation.id === selectedId.value));
 const editable = computed(() => selected.value?.status === 'awaiting_confirmation' && !selected.value.stale);
 const canCreate = computed(() => props.enabled && Boolean(props.conversationId) && props.messages.some((message) => message.status === 'complete'));
+const selectedFormats = computed(() => selected.value?.spec.formats?.length ? selected.value.spec.formats : [...ARTIFACT_FORMATS]);
+const confirmLabel = computed(() => `确认并生成 ${formatLabels(selectedFormats.value)}`);
+
+watch(() => props.conversationId, () => {
+  createFormats.value = inferArtifactFormats(latestUserText()) ?? [];
+}, { immediate: true });
+
+function latestUserText() {
+  return [...props.messages].reverse().find((message) => message.role === 'user' && message.status === 'complete')?.content ?? '';
+}
+
+function toggleCreateFormat(format: ArtifactFormat) {
+  createFormats.value = ARTIFACT_FORMATS.filter((item) => item === format
+    ? !createFormats.value.includes(item)
+    : createFormats.value.includes(item));
+}
+
+function includesSelectedFormat(format: ArtifactFormat) {
+  return selectedFormats.value.includes(format);
+}
+
+function toggleSelectedFormat(format: ArtifactFormat) {
+  const spec = selected.value?.spec;
+  if (!spec || !editable.value) return;
+  const next = ARTIFACT_FORMATS.filter((item) => item === format
+    ? !selectedFormats.value.includes(item)
+    : selectedFormats.value.includes(item));
+  if (!next.length) return;
+  spec.formats = next;
+  void saveDraft();
+}
 
 function outputStatusText(output: { status: string; error?: string; progress?: string }): string {
   if (output.status === 'completed') return '可下载';
@@ -129,10 +162,15 @@ async function createDraft() {
   const conversationId = props.conversationId;
   const request = currentSessionToken();
   if (!conversationId || busy.value) return;
+  const formats = createFormats.value.length ? createFormats.value : inferArtifactFormats(latestUserText());
+  if (!formats?.length) {
+    error.value = '请先选择要生成 PPTX、PDF，或在对话里说明需要哪种文件';
+    return;
+  }
   busy.value = true;
   error.value = '';
   try {
-    const result = await createResearchArtifactDraft(conversationId);
+    const result = await createResearchArtifactDraft(conversationId, { formats });
     if (!isCurrentSession(request)) return;
     generations.value = [result.generation, ...generations.value];
     selectedId.value = result.generation.id;
@@ -205,7 +243,7 @@ async function confirmRender() {
   const generation = selected.value;
   const request = currentSessionToken();
   if (!generation || !editable.value || busy.value || saving.value || sourceImageBusy.value || consentBusy.value) return;
-  if (!window.confirm('确认当前大纲并生成 PPTX 与 PDF？确认后将创建不可变版本。')) return;
+  if (!window.confirm(`确认当前大纲并生成 ${formatLabels(selectedFormats.value)}？确认后将创建不可变版本。`)) return;
   if (!await saveDraft()) return;
   if (!isCurrentSession(request)) return;
   if (selectedId.value !== generation.id) {
@@ -421,11 +459,21 @@ function syncConsentForGeneration(generation: ResearchArtifactGeneration | undef
     <header class="flex flex-wrap items-center justify-between gap-2">
       <div>
         <p class="m-0 text-sm font-bold text-[var(--agent-text)]">按需 Artifact Agent</p>
-        <p class="m-0 mt-1 text-xs text-[var(--agent-text-muted)]">逻辑 Agent 按“冻结快照 → 大纲 → 图片策略 → PPT/PDF”内部流水线生成</p>
+        <p class="m-0 mt-1 text-xs text-[var(--agent-text-muted)]">按用户请求只生成 PPT 或 PDF，不必两种都出</p>
       </div>
-      <button v-if="canCreate" type="button" class="rounded-md bg-[var(--agent-selected-bg)] px-3 py-1.5 text-xs font-bold text-[var(--agent-selected-text)] disabled:opacity-50" :disabled="busy" @click="createDraft">
-        {{ busy ? '处理中…' : '生成大纲' }}
-      </button>
+      <div v-if="canCreate" class="flex flex-wrap items-center gap-2">
+        <label class="flex items-center gap-1 text-xs text-[var(--agent-text-muted)]">
+          <input type="checkbox" :checked="createFormats.includes('pptx')" @change="toggleCreateFormat('pptx')" />
+          PPTX
+        </label>
+        <label class="flex items-center gap-1 text-xs text-[var(--agent-text-muted)]">
+          <input type="checkbox" :checked="createFormats.includes('pdf')" @change="toggleCreateFormat('pdf')" />
+          PDF
+        </label>
+        <button type="button" class="rounded-md bg-[var(--agent-selected-bg)] px-3 py-1.5 text-xs font-bold text-[var(--agent-selected-text)] disabled:opacity-50" :disabled="busy" @click="createDraft">
+          {{ busy ? '处理中…' : '生成大纲' }}
+        </button>
+      </div>
     </header>
 
     <p v-if="error" class="m-0 rounded-md bg-destructive/5 px-2.5 py-1.5 text-xs text-destructive" role="alert">{{ error }}</p>
@@ -449,11 +497,22 @@ function syncConsentForGeneration(generation: ResearchArtifactGeneration | undef
           <label class="grid gap-1 text-xs font-semibold text-[var(--agent-text-muted)]">受众<input v-model="selected.spec.audience" class="rounded-md border border-[var(--agent-border)] bg-transparent px-2 py-1.5 text-sm text-[var(--agent-text)]" @blur="saveDraft" /></label>
           <label class="grid gap-1 text-xs font-semibold text-[var(--agent-text-muted)]">主题<select v-model="selected.spec.theme" class="rounded-md border border-[var(--agent-border)] bg-transparent px-2 py-1.5 text-sm text-[var(--agent-text)]" @change="saveDraft"><option value="research">研究汇报</option><option value="technical">技术方案</option><option value="business">商业汇报</option></select></label>
         </div>
+        <div class="flex flex-wrap gap-3 text-xs text-[var(--agent-text-muted)]">
+          <span class="font-semibold">生成格式</span>
+          <label class="flex items-center gap-1">
+            <input type="checkbox" :checked="includesSelectedFormat('pptx')" @change="toggleSelectedFormat('pptx')" />
+            PPTX
+          </label>
+          <label class="flex items-center gap-1">
+            <input type="checkbox" :checked="includesSelectedFormat('pdf')" @change="toggleSelectedFormat('pdf')" />
+            PDF
+          </label>
+        </div>
         <div class="grid gap-2 md:grid-cols-2">
-          <label class="grid gap-1 text-xs font-semibold text-[var(--agent-text-muted)]">目标幻灯片数
+          <label v-if="includesSelectedFormat('pptx')" class="grid gap-1 text-xs font-semibold text-[var(--agent-text-muted)]">目标幻灯片数
             <input v-model.number="selected.spec.presentation.targetSlideCount" type="number" min="8" max="15" class="rounded-md border border-[var(--agent-border)] bg-transparent px-2 py-1.5 text-sm text-[var(--agent-text)]" @change="saveDraft" />
           </label>
-          <label class="grid gap-1 text-xs font-semibold text-[var(--agent-text-muted)]">目标 PDF 页数
+          <label v-if="includesSelectedFormat('pdf')" class="grid gap-1 text-xs font-semibold text-[var(--agent-text-muted)]">目标 PDF 页数
             <input v-model.number="selected.spec.pdf.targetPageCount" type="number" min="6" max="20" class="rounded-md border border-[var(--agent-border)] bg-transparent px-2 py-1.5 text-sm text-[var(--agent-text)]" @change="saveDraft" />
           </label>
         </div>
@@ -483,7 +542,7 @@ function syncConsentForGeneration(generation: ResearchArtifactGeneration | undef
             <textarea :value="selected.spec.brief.recommendations.join('\n')" rows="4" class="rounded-md border border-[var(--agent-border)] bg-transparent px-2 py-1.5 text-xs text-[var(--agent-text)]" @change="selected.spec.brief.recommendations = parseLines(($event.target as HTMLTextAreaElement).value, 20); saveDraft()" />
           </label>
         </div>
-        <details>
+        <details v-if="includesSelectedFormat('pptx')">
           <summary class="cursor-pointer text-xs font-semibold text-[var(--agent-text-muted)]">编辑幻灯片大纲（{{ selected.spec.presentation.slides.length }} 页）</summary>
           <div class="mt-2 grid gap-2">
             <div v-for="slide in selected.spec.presentation.slides" :key="slide.id" class="grid gap-1 rounded-md border border-[var(--agent-border)] p-2">
@@ -492,7 +551,7 @@ function syncConsentForGeneration(generation: ResearchArtifactGeneration | undef
             </div>
           </div>
         </details>
-        <details>
+        <details v-if="includesSelectedFormat('pdf')">
           <summary class="cursor-pointer text-xs font-semibold text-[var(--agent-text-muted)]">编辑 PDF 长篇章节（{{ selected.spec.pdf.sections.length }} 节）</summary>
           <div class="mt-2 grid gap-2">
             <div v-for="section in selected.spec.pdf.sections" :key="section.id" class="grid gap-1 rounded-md border border-[var(--agent-border)] p-2">
@@ -520,7 +579,7 @@ function syncConsentForGeneration(generation: ResearchArtifactGeneration | undef
         </details>
         <div class="flex justify-end gap-2">
           <button type="button" class="rounded-md border border-[var(--agent-border)] px-3 py-1.5 text-xs font-bold text-[var(--agent-text)]" :disabled="saving || busy" @click="saveDraft">{{ saving ? '保存中…' : '保存大纲' }}</button>
-          <button type="button" class="rounded-md bg-[var(--agent-selected-bg)] px-3 py-1.5 text-xs font-bold text-[var(--agent-selected-text)]" :disabled="saving || busy || sourceImageBusy || consentBusy" @click="confirmRender">确认并生成 PPT/PDF</button>
+          <button type="button" class="rounded-md bg-[var(--agent-selected-bg)] px-3 py-1.5 text-xs font-bold text-[var(--agent-selected-text)]" :disabled="saving || busy || sourceImageBusy || consentBusy" @click="confirmRender">{{ confirmLabel }}</button>
         </div>
       </div>
 

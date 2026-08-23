@@ -42,7 +42,8 @@ const spec = {
       { id: 'p3', title: '三', paragraphs: ['段落'], bullets: [], citations: [] }
     ],
     targetPageCount: 6
-  }
+  },
+  formats: ['pptx', 'pdf']
 } satisfies ArtifactSpec;
 
 test('layout QA catches a bad second-page bbox without claiming perfect overlap detection', async () => {

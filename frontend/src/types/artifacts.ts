@@ -101,6 +101,7 @@ export type ArtifactSpec = {
   };
   presentation: { slides: ArtifactSlide[]; targetSlideCount: number };
   pdf: { sections: Array<{ id: string; title: string; paragraphs: string[]; bullets: string[]; citations: string[] }>; targetPageCount: number };
+  formats: Array<'pptx' | 'pdf'>;
 };
 
 export type ResearchArtifactGeneration = {

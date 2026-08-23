@@ -132,6 +132,8 @@ export type ArtifactSpec = {
   brief: ResearchBrief;
   presentation: PresentationPlan;
   pdf: PdfReportPlan;
+  /** Files the user asked to render. Outline planning may still keep both plans. */
+  formats: ArtifactFormat[];
 };
 
 export type ArtifactPreferences = {
@@ -141,6 +143,7 @@ export type ArtifactPreferences = {
   targetSlideCount?: number;
   targetPageCount?: number;
   branding?: ArtifactBranding;
+  formats?: ArtifactFormat[];
 };
 
 export type ArtifactOutput = {
