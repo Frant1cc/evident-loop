@@ -11,7 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **MCP Managed Presets**: One-click enablement for built-in MCP presets (Context7 and Memory)
   - Backend-managed presets with cross-platform command resolution (Windows/macOS/Linux)
-  - Fixed package versions: Context7 0.1.5, Memory 0.1.0
+  - Fixed package versions: Context7 4.0.3, Memory 2026.7.4
+  - Version-aware npx arguments support both npm 6 and npm 7+ without prompts
+  - Existing managed connections automatically migrate stale package commands before retesting
   - Idempotent operations: repeated enable returns existing server without duplicates
   - Auto-recovery: application restart automatically restores enabled presets
   - New API endpoints: `GET /api/mcp/presets`, `POST /api/mcp/presets/:id/enable`, `POST /api/mcp/presets/:id/disable`
@@ -29,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - MCP Management UI: Reorganized to show built-in presets separately from custom connections
 - Deprecated frontend preset definitions in `frontend/src/mcp/presets.ts` (now backend-managed)
+- Connected MCP tools are automatically authorized for new research turns and hidden from the per-turn tool picker; MCP availability is controlled only from MCP Management
 
 ### Security
 
@@ -40,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - MCP preset commands now work cross-platform (previously Windows-only with `cmd /c`)
+- DeepSeek DSML/tool-call protocol text is filtered before chat streaming, persistence, and research-step events
 
 ## [Previous Versions]
 

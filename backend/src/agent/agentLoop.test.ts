@@ -7,6 +7,36 @@ import { createToolCatalog } from '../tools/registry.js';
 import { createToolRuntime } from '../tools/runtime.js';
 import { runAgentLoop } from './agentLoop.js';
 
+test('sanitizes leaked tool markup before emitting model-response events', async () => {
+  let calls = 0;
+  const eventMessages: unknown[] = [];
+  const llm: LlmProvider = {
+    complete: async () => {
+      calls += 1;
+      return { choices: [{ message: {
+        role: 'assistant',
+        content: '我来查询。\n<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="fake_tool">'
+      } }] };
+    },
+    stream: async () => undefined
+  };
+
+  const result = await runAgentLoop({
+    llm,
+    model: 'test-model',
+    message: '查询 React',
+    systemPrompt: 'Use tools only through function calling.',
+    toolPolicy: { mode: 'none' },
+    onEvent: (event) => {
+      if (event.type === 'llm_response') eventMessages.push(event.assistantMessage);
+    }
+  });
+
+  assert.equal(calls, 2);
+  assert.doesNotMatch(JSON.stringify(eventMessages), /DSML|fake_tool|<｜/);
+  assert.doesNotMatch(result.reply, /DSML|fake_tool|<｜/);
+});
+
 test('uses one injected tool runtime for both model definitions and execution', async () => {
   const observedToolLists: unknown[] = [];
   let calls = 0;

@@ -2,6 +2,7 @@ import type { StreamEventEnvelope } from '@evident-loop/stream-protocol';
 
 import { DEFAULT_MAX_TOOL_ROUNDS } from '../agent/config.js';
 import { runAgentLoop, type AgentLoopEvent, type RunAgentLoopOptions } from '../agent/agentLoop.js';
+import { containsLeakedToolMarkup, stripLeakedToolMarkup } from '../agent/toolMarkup.js';
 import type { ApprovalManager } from '../approvals/contracts.js';
 import { redactToolArguments } from '../approvals/manager.js';
 import type { LlmProvider } from '../llm/contracts.js';
@@ -486,7 +487,7 @@ async function runQuickConversation(options: {
   try {
     if (!options.llm) throw new Error('LLM provider is not configured');
 
-    let reply = '';
+    let rawReply = '';
     await options.llm.stream(
       {
         model: options.model,
@@ -499,14 +500,18 @@ async function runQuickConversation(options: {
       },
       (delta) => {
         if (!delta.content) return;
-        reply += delta.content;
-        emit(run.id, { type: 'assistant_delta', messageId: run.assistantMessageId, content: delta.content });
+        rawReply += delta.content;
       }
     );
 
     if (getResearchRun(run.id)?.status === 'cancelled') return;
+    const leakedToolMarkup = containsLeakedToolMarkup(rawReply);
+    const reply = leakedToolMarkup
+      ? '模型返回了无效的工具调用格式，本次没有执行任何工具。请启用所需工具后重试。'
+      : stripLeakedToolMarkup(rawReply);
     const completedMessage = updateResearchMessage(run.assistantMessageId, { content: reply, status: 'complete' });
     if (!completedMessage) throw new Error('Research assistant message could not be completed');
+    emit(run.id, { type: 'assistant_delta', messageId: completedMessage.id, content: reply });
 
     const conversation = getResearchConversation(run.conversationId);
     if (!conversation) throw new Error('Research conversation disappeared during execution');

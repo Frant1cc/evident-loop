@@ -6,6 +6,7 @@ export type {
 } from './contracts.js';
 
 export {
+  detectNpxMajorVersion,
   resolveNpxCommand,
   validateCommandSafety
 } from './platform.js';

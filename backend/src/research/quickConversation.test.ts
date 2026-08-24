@@ -125,6 +125,40 @@ test('no skill + selected tools runs the research agent', async () => {
   }
 });
 
+test('quick conversation never streams or persists leaked DSML tool markup', async () => {
+  const conversation = createResearchConversation();
+  let scheduled: (() => void) | undefined;
+  const events: unknown[] = [];
+  const leaked = '我来查询。\n<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="fake_tool">';
+  try {
+    const started = createAndStartResearchRun({
+      conversationId: conversation.id,
+      content: '查询 React',
+      toolPolicy: { mode: 'none' },
+      toolRuntime,
+      llm: streamingLlm(leaked),
+      schedule: (callback) => { scheduled = callback; },
+      runAgent: async () => ({ reply: '', toolCalls: [], trace: [], sources: [] })
+    });
+
+    const unsubscribe = subscribeToResearchRun(started.run.id, (event) => events.push(event));
+    assert.ok(scheduled);
+    scheduled();
+    await waitFor(() => getResearchRun(started.run.id)?.status === 'completed');
+    unsubscribe();
+
+    const assistant = listResearchMessages(conversation.id)
+      .find((message) => message.id === started.assistantMessage.id);
+    assert.equal(
+      assistant?.content,
+      '模型返回了无效的工具调用格式，本次没有执行任何工具。请启用所需工具后重试。'
+    );
+    assert.doesNotMatch(JSON.stringify(events), /DSML|fake_tool|<｜/);
+  } finally {
+    deleteResearchConversation(conversation.id);
+  }
+});
+
 test('quick conversation fails cleanly when the stream throws', async () => {
   const conversation = createResearchConversation();
   let scheduled: (() => void) | undefined;

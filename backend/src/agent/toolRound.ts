@@ -18,6 +18,7 @@ import type {
   ToolCall,
   ToolTrace
 } from './types.js';
+import { containsLeakedToolMarkup, stripLeakedToolMarkup } from './toolMarkup.js';
 
 export type AgentLoopEvent =
   | { type: 'llm'; title: string; model: string; tools?: string[] }
@@ -121,10 +122,13 @@ export async function executeToolRound({
     signal,
     promptTokens: completion.usage?.prompt_tokens
   });
-  await onEvent?.({ type: 'llm_response', assistantMessage });
-
   const rawToolCalls = assistantMessage.tool_calls ?? [];
   const reply = assistantMessage.content?.trim();
+  const eventMessage = !rawToolCalls.length && reply && containsLeakedToolMarkup(reply)
+    ? { ...assistantMessage, content: stripLeakedToolMarkup(reply) }
+    : assistantMessage;
+  await onEvent?.({ type: 'llm_response', assistantMessage: eventMessage });
+
   if (!rawToolCalls.length) {
     if (requiredSingleToolName) {
       throw new Error(

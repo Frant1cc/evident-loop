@@ -6,8 +6,8 @@
 
 | 预置 | 包名 | 当前版本 | 最后审计 | 审计人 | 备注 |
 |------|------|----------|----------|--------|------|
-| Context7 | @upstash/context7-mcp | 0.1.5 | 2026-08-25 | - | 初始版本 |
-| Memory | @modelcontextprotocol/server-memory | 0.1.0 | 2026-08-25 | - | 初始版本 |
+| Context7 | @upstash/context7-mcp | 4.0.3 | 2026-08-25 | - | 已核对 npm registry |
+| Memory | @modelcontextprotocol/server-memory | 2026.7.4 | 2026-08-25 | - | 已核对 npm registry |
 
 ## 升级流程
 
@@ -35,15 +35,19 @@
 
 ### 2026-08-25
 
-**Context7 0.1.5**
-- 初始版本
-- 固定包版本以确保安全性和稳定性
+**Context7 4.0.3**
+- 修复不存在的初始版本 `0.1.5`
+- npm 7+ 使用 `npx --yes @upstash/context7-mcp@4.0.3`；npm 6 使用其非交互兼容形式 `npx @upstash/context7-mcp@4.0.3`
 - 审批策略：只读工具自动允许
 
-**Memory 0.1.0**
-- 初始版本
-- 固定包版本以确保安全性和稳定性
+**Memory 2026.7.4**
+- 修复不存在的初始版本 `0.1.0`
+- npm 7+ 使用 `npx --yes @modelcontextprotocol/server-memory@2026.7.4`；npm 6 使用其非交互兼容形式 `npx @modelcontextprotocol/server-memory@2026.7.4`
 - 审批策略：读取允许，写入需要审批
+
+## 版本策略说明
+
+托管预置始终使用经过验证的固定版本。升级时递增 `presetVersion`；Manager 会在下一次启用时先把已有 Server 的命令迁移到新版本，再重新测试。涉及权限或数据边界变化时还必须递增 `consentVersion`，要求用户重新确认。
 
 ## 安全注意事项
 

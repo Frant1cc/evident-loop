@@ -19,6 +19,7 @@ import type {
   ChatMessage,
   ToolTrace
 } from './types.js';
+import { containsLeakedToolMarkup, stripLeakedToolMarkup } from './toolMarkup.js';
 
 const defaultMaxToolResultChars = 4_000;
 const defaultTemperature = 0.2;
@@ -181,7 +182,8 @@ export async function runAgentLoop({
         continue;
       }
 
-      const cleanedReply = reply ? stripLeakedToolMarkup(reply) : '';
+      const leakedToolMarkup = Boolean(reply && containsLeakedToolMarkup(reply));
+      const cleanedReply = leakedToolMarkup ? '' : (reply ? stripLeakedToolMarkup(reply) : '');
       const finalReply = cleanedReply || createEmptyReplyFallback(toolTraces.length > 0);
       trace.push({ type: 'final_answer', label: cleanedReply ? (toolTraces.length ? '模型已给出最终回答' : '模型直接回答，未调用工具') : '模型未返回可展示回答' });
       return { reply: finalReply, toolCalls: toolTraces, trace, sources: getRagSourcesFromToolTraces(toolTraces) };
@@ -340,23 +342,6 @@ function normalizeLegacyToolAliases(policy: ToolPolicy): ToolPolicy {
   // Persisted tasks created before the controlled web tool may still store the two legacy names.
   if (names.has('web_search') || names.has('fetch_page')) names.add('retrieve_web_evidence');
   return { mode: 'selected', names: [...names] };
-}
-
-/** Detects the model's native tool-call markup leaking into plain content (e.g. DeepSeek DSML tags). */
-function containsLeakedToolMarkup(text: string): boolean {
-  if (text.includes('<｜')) return true;
-  return /<\|{1,2}[^>]{0,60}(dsml|tool[▁_\- ]?call|invoke)/i.test(text);
-}
-
-/** Keeps any prose before the first leaked markup tag and drops the markup itself. */
-function stripLeakedToolMarkup(text: string): string {
-  const fullWidthIndex = text.indexOf('<｜');
-  const asciiMatch = text.match(/<\|{1,2}[^>]{0,60}(dsml|tool[▁_\- ]?call|invoke)/i);
-  const candidates = [fullWidthIndex, asciiMatch?.index ?? -1].filter((index) => index >= 0);
-
-  if (!candidates.length) return text.trim();
-
-  return text.slice(0, Math.min(...candidates)).trim();
 }
 
 function createEmptyReplyFallback(hasToolContext: boolean) {

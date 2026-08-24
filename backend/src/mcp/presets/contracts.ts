@@ -32,7 +32,10 @@ export type ManagedMcpPreset = {
     name: string;
     version: string;
   };
-  resolveDraft: (platform: NodeJS.Platform) => McpServerDraft;
+  resolveDraft: (
+    platform: NodeJS.Platform,
+    runtime: { npxMajorVersion: number }
+  ) => McpServerDraft;
   approvalPolicy: ManagedMcpApprovalPolicy;
 };
 

@@ -20,7 +20,7 @@ import type {
 import { mcpToolDefinitionHash } from './definitionHash.js';
 import { createMcpStore } from './store.js';
 import { McpSchemaValidator } from './validation.js';
-import { MANAGED_PRESETS, getPresetById, describeApprovalPolicy, type McpManagedMetadata, type McpPresetPublic } from './presets/index.js';
+import { MANAGED_PRESETS, detectNpxMajorVersion, getPresetById, describeApprovalPolicy, type McpManagedMetadata, type McpPresetPublic } from './presets/index.js';
 
 type Entry = {
   config: McpServerConfig;
@@ -42,6 +42,7 @@ export class McpManagerImpl implements McpManager {
   private readonly port: number;
   private readonly reconnectBaseMs: number;
   private readonly listChangedDebounceMs: number;
+  private readonly npxMajorVersion?: number;
   private readonly now: () => Date;
   private readonly schemaValidator = new McpSchemaValidator();
   private readonly schemaErrors = new Map<string, string>();
@@ -56,6 +57,7 @@ export class McpManagerImpl implements McpManager {
     this.port = options.port ?? Number(process.env.PORT ?? 3000);
     this.reconnectBaseMs = options.reconnectBaseMs ?? 500;
     this.listChangedDebounceMs = options.listChangedDebounceMs ?? 250;
+    this.npxMajorVersion = options.npxMajorVersion;
     this.now = options.now ?? (() => new Date());
     this.hydratePersistedState();
   }
@@ -65,7 +67,7 @@ export class McpManagerImpl implements McpManager {
     // Do not await connection attempts: a dead local process or an unavailable
     // HTTP endpoint must never block application startup.
     for (const entry of this.entries.values()) {
-      if (entry.config.enabled) void this.connectEntry(entry, false);
+      if (entry.config.enabled) void this.connectEntry(entry, false).catch(() => undefined);
     }
   }
 
@@ -148,7 +150,9 @@ export class McpManagerImpl implements McpManager {
       entry.state = { status: 'disabled' };
       this.store.setServerState(id, entry.state);
     } else if (!wasEnabled) {
-      void this.disconnectEntry(entry).then(() => this.connectEntry(entry, false));
+      void this.disconnectEntry(entry)
+        .then(() => this.connectEntry(entry, false))
+        .catch(() => undefined);
     }
     return this.toPublicServer(entry);
   }
@@ -194,7 +198,7 @@ export class McpManagerImpl implements McpManager {
     }
     this.assertTransportAllowed(entry.config);
     entry.config = this.store.saveServer({ ...entry.config, enabled: true });
-    void this.connectEntry(entry, false);
+    void this.connectEntry(entry, false).catch(() => undefined);
     return this.toPublicServer(entry);
   }
 
@@ -303,47 +307,59 @@ export class McpManagerImpl implements McpManager {
     const preset = getPresetById(presetId);
     if (!preset) throw new Error(`Unknown preset: ${presetId}`);
 
-    if (consentVersion < preset.consentVersion) {
-      throw new Error(`Consent version ${consentVersion} is outdated, current version is ${preset.consentVersion}`);
+    if (consentVersion !== preset.consentVersion) {
+      throw new Error(`Consent version ${consentVersion} does not match current version ${preset.consentVersion}`);
     }
 
-    // 查找或创建唯一 Server
+    const desiredDraft = preset.resolveDraft(process.platform, {
+      npxMajorVersion: this.npxMajorVersion ?? detectNpxMajorVersion(process.platform)
+    });
     let server = this.store.findServerByPresetId(presetId);
     let entry = server ? this.entries.get(server.id) : undefined;
 
     if (!server) {
-      // 创建新 Server
-      const draft = preset.resolveDraft(process.platform);
-      server = this.store.saveServer({ ...draft, enabled: false });
+      server = this.store.saveServer({ ...desiredDraft, enabled: false });
       entry = this.ensureEntry(server);
-
-      // 保存 metadata
-      const metadata: McpManagedMetadata = {
-        presetId: preset.id,
-        presetVersion: preset.version,
-        consentVersion,
-        consentedAt: this.now().toISOString()
-      };
-      this.store.saveManagedMetadata(server.id, metadata);
-    } else if (entry) {
-      // 幂等检查：已连接且启用 → 直接返回
-      if (server.enabled && entry.state.status === 'connected') {
-        return this.toPublicServer(entry);
-      }
-
-      // 检查 consent version
-      const metadata = this.store.getManagedMetadata(server.id);
-      if (metadata && metadata.consentVersion < preset.consentVersion) {
-        throw new Error('Consent version outdated, re-confirmation required');
-      }
     }
 
     if (!entry) throw new Error('Failed to create server entry');
 
-    // 测试连接
-    await this.testServer(server.id);
+    const previousMetadata = this.store.getManagedMetadata(server.id);
+    const desiredConfig = {
+      ...server,
+      ...desiredDraft,
+      id: server.id,
+      enabled: false
+    } as McpServerConfig;
+    const presetChanged = previousMetadata?.presetVersion !== preset.version;
+    const connectionChanged = hasConnectionConfigChanged(server, desiredConfig);
 
-    // 启用
+    if (presetChanged || connectionChanged) {
+      // Managed presets own their transport config. Upgrade stale persisted
+      // commands before testing so a failed old package cannot become sticky.
+      await this.disconnectEntry(entry);
+      server = this.store.saveServer({ ...desiredDraft, id: server.id, enabled: false });
+      entry.config = server;
+      entry.validated = false;
+      entry.state = { status: 'disabled' };
+      this.store.setServerState(server.id, { status: 'disabled', lastRefreshedAt: '' });
+    }
+
+    const nextMetadata: McpManagedMetadata = {
+      presetId: preset.id,
+      presetVersion: preset.version,
+      consentVersion,
+      consentedAt: previousMetadata?.consentVersion === consentVersion
+        ? previousMetadata.consentedAt
+        : this.now().toISOString()
+    };
+    this.store.saveManagedMetadata(server.id, nextMetadata);
+
+    if (!presetChanged && !connectionChanged && server.enabled && entry.state.status === 'connected') {
+      return this.toPublicServer(entry);
+    }
+
+    await this.testServer(server.id);
     await this.setEnabled(server.id, true);
 
     // 等待 connected（30秒超时，500ms 轮询）
@@ -761,7 +777,7 @@ export class McpManagerImpl implements McpManager {
     const delay = jitter ? Math.round(base * (0.8 + Math.random() * 0.4)) : base;
     entry.reconnectTimer = setTimeout(() => {
       entry.reconnectTimer = undefined;
-      void this.connectEntry(entry, false);
+      void this.connectEntry(entry, false).catch(() => undefined);
     }, delay);
   }
 

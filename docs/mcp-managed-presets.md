@@ -96,20 +96,24 @@ enablePreset(presetId, consentVersion)
 返回已连接的 Server 状态
   ↓
 前端显示"已启用，下一轮对话生效"
+  ↓
+后端自动将已连接的 MCP 工具加入 Agent 工具快照
 ```
+
+MCP 工具不出现在研究工作台的逐轮工具选择菜单中。MCP 管理页是唯一的启用/停用入口：服务器已连接时，后端自动将其工具加入每个新研究任务；服务器停用或不可用时不会加入。内置工具仍保持逐轮手动选择。
 
 ### 跨平台命令解析
 
 **Windows:**
 ```javascript
 command: 'npx.cmd'
-args: ['--yes', '@upstash/context7-mcp@0.1.5']
+args: ['--yes', '@upstash/context7-mcp@4.0.3'] // npm 7+；npm 6 省略 --yes
 ```
 
 **macOS/Linux:**
 ```javascript
 command: 'npx'
-args: ['--yes', '@upstash/context7-mcp@0.1.5']
+args: ['--yes', '@upstash/context7-mcp@4.0.3'] // npm 7+；npm 6 省略 --yes
 ```
 
 **安全验证:**
@@ -146,8 +150,15 @@ args: ['--yes', '@upstash/context7-mcp@0.1.5']
 {
   default: 'require_approval',
   tools: {
-    'query_memory': 'allow',
-    'store_memory': 'require_approval'
+    read_graph: 'allow',
+    search_nodes: 'allow',
+    open_nodes: 'allow',
+    create_entities: 'require_approval',
+    create_relations: 'require_approval',
+    add_observations: 'require_approval',
+    delete_entities: 'require_approval',
+    delete_observations: 'require_approval',
+    delete_relations: 'require_approval'
   }
 }
 ```

@@ -184,6 +184,8 @@ export type McpManagerOptions = {
   port?: number;
   reconnectBaseMs?: number;
   listChangedDebounceMs?: number;
+  /** Test seam; production detects the installed npx version lazily. */
+  npxMajorVersion?: number;
   now?: () => Date;
 };
 

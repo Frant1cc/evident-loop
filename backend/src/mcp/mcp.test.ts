@@ -106,6 +106,7 @@ function createFixture(options: {
   host?: string;
   cipher?: ReturnType<typeof createCredentialCipher>;
   listChangedDebounceMs?: number;
+  npxMajorVersion?: number;
 } = {}) {
   const database = new Database(':memory:');
   const state: FakeAdapterState = {
@@ -129,6 +130,7 @@ function createFixture(options: {
     adapterFactory: createFakeAdapter(state),
     host: options.host ?? '127.0.0.1',
     listChangedDebounceMs: options.listChangedDebounceMs ?? 10,
+    npxMajorVersion: options.npxMajorVersion ?? 10,
     reconnectBaseMs: 5
   });
   return { database, state, runtime, store, manager };
@@ -162,6 +164,72 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1_000) {
 function delay(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
+
+test('managed preset enables a pinned package and remains idempotent', async () => {
+  const fixture = createFixture();
+
+  const enabled = await fixture.manager.enablePreset('context7', 1);
+  assert.equal(enabled.status, 'connected');
+  assert.equal(enabled.enabled, true);
+  const persisted = fixture.store.getServer(enabled.id)!;
+  assert.equal(persisted.command, process.platform === 'win32' ? 'npx.cmd' : 'npx');
+  assert.deepEqual(persisted.args, ['--yes', '@upstash/context7-mcp@4.0.3']);
+  const metadata = fixture.store.getManagedMetadata(enabled.id)!;
+  assert.equal(metadata.presetId, 'context7');
+  assert.equal(metadata.presetVersion, 2);
+  assert.equal(metadata.consentVersion, 1);
+  assert.ok(metadata.consentedAt);
+
+  const listCalls = fixture.state.listCalls;
+  const repeated = await fixture.manager.enablePreset('context7', 1);
+  assert.equal(repeated.id, enabled.id);
+  assert.equal(fixture.state.listCalls, listCalls);
+  assert.equal(fixture.manager.listServers().length, 1);
+
+  await fixture.manager.stop();
+  fixture.database.close();
+});
+
+test('managed preset upgrades stale persisted commands before testing', async () => {
+  const fixture = createFixture();
+  const stale = fixture.manager.saveServer({
+    name: 'Context7 文档',
+    transport: 'stdio',
+    command: 'npx',
+    args: ['--yes', '@upstash/context7-mcp@0.1.5'],
+    authMode: 'none',
+    enabled: false
+  });
+  fixture.store.saveManagedMetadata(stale.id, {
+    presetId: 'context7',
+    presetVersion: 1,
+    consentVersion: 1,
+    consentedAt: '2026-08-24T00:00:00.000Z'
+  });
+
+  const enabled = await fixture.manager.enablePreset('context7', 1);
+  assert.equal(enabled.id, stale.id);
+  assert.equal(enabled.status, 'connected');
+  assert.deepEqual(fixture.store.getServer(stale.id)?.args, ['--yes', '@upstash/context7-mcp@4.0.3']);
+  assert.deepEqual(fixture.store.getManagedMetadata(stale.id), {
+    presetId: 'context7',
+    presetVersion: 2,
+    consentVersion: 1,
+    consentedAt: '2026-08-24T00:00:00.000Z'
+  });
+  assert.equal(fixture.manager.listServers().length, 1);
+
+  await fixture.manager.stop();
+  fixture.database.close();
+});
+
+test('managed preset rejects a consent version that is not current', async () => {
+  const fixture = createFixture();
+  await assert.rejects(fixture.manager.enablePreset('context7', 2), /does not match/);
+  assert.equal(fixture.manager.listServers().length, 0);
+  await fixture.manager.stop();
+  fixture.database.close();
+});
 
 test('credential cipher round-trips, detects tampering, and treats missing keys as unavailable', () => {
   const cipher = createCredentialCipher(generateCredentialKey());

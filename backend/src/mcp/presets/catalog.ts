@@ -1,12 +1,12 @@
 import type { ManagedMcpPreset } from './contracts.js';
 import { resolveNpxCommand, validateCommandSafety } from './platform.js';
 
-const CONTEXT7_VERSION = '0.1.5';
-const MEMORY_VERSION = '0.1.0';
+const CONTEXT7_VERSION = '4.0.3';
+const MEMORY_VERSION = '2026.7.4';
 
 export const context7Preset: ManagedMcpPreset = {
   id: 'context7',
-  version: 1,
+  version: 2,
   consentVersion: 1,
   name: 'Context7 文档查询',
   description: '查询最新的库与框架文档，适合研究和代码实现阶段。',
@@ -15,11 +15,12 @@ export const context7Preset: ManagedMcpPreset = {
     name: '@upstash/context7-mcp',
     version: CONTEXT7_VERSION
   },
-  resolveDraft: (platform) => {
+  resolveDraft: (platform, runtime) => {
     const { command, args } = resolveNpxCommand(
       platform,
       '@upstash/context7-mcp',
-      CONTEXT7_VERSION
+      CONTEXT7_VERSION,
+      runtime.npxMajorVersion
     );
     validateCommandSafety(command, args);
     return {
@@ -42,7 +43,7 @@ export const context7Preset: ManagedMcpPreset = {
 
 export const memoryPreset: ManagedMcpPreset = {
   id: 'memory',
-  version: 1,
+  version: 2,
   consentVersion: 1,
   name: 'Memory 本地记忆',
   description: '为 MCP 客户端提供可持久化的本地知识图谱记忆工具。',
@@ -51,11 +52,12 @@ export const memoryPreset: ManagedMcpPreset = {
     name: '@modelcontextprotocol/server-memory',
     version: MEMORY_VERSION
   },
-  resolveDraft: (platform) => {
+  resolveDraft: (platform, runtime) => {
     const { command, args } = resolveNpxCommand(
       platform,
       '@modelcontextprotocol/server-memory',
-      MEMORY_VERSION
+      MEMORY_VERSION,
+      runtime.npxMajorVersion
     );
     validateCommandSafety(command, args);
     return {
@@ -70,8 +72,15 @@ export const memoryPreset: ManagedMcpPreset = {
   approvalPolicy: {
     default: 'require_approval',
     tools: {
-      'query_memory': 'allow',
-      'store_memory': 'require_approval'
+      read_graph: 'allow',
+      search_nodes: 'allow',
+      open_nodes: 'allow',
+      create_entities: 'require_approval',
+      create_relations: 'require_approval',
+      add_observations: 'require_approval',
+      delete_entities: 'require_approval',
+      delete_observations: 'require_approval',
+      delete_relations: 'require_approval'
     }
   }
 };

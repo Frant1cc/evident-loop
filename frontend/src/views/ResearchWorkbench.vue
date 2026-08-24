@@ -58,7 +58,11 @@ import type {
 } from '../types/research';
 import type { StreamConnectionState } from '../types/streaming';
 import { buildAuxiliaryState, type AuxiliaryState } from '../lib/auxiliaryState';
-import { buildSelectedToolPolicy, requiredGroupIds, standaloneTools } from '../tools/selection';
+import {
+  buildSelectedToolPolicy,
+  requiredGroupIds,
+  standaloneTools
+} from '../tools/selection';
 import type { ToolApproval, ToolApprovalDecision } from '../types/approvals';
 import type { ToolPolicy } from '../types/tasks';
 import { upsertToolApproval } from '../types/approvals';
@@ -187,7 +191,7 @@ async function loadTools() {
     const { tools, groups } = await listResearchTools();
     availableTools.value = tools;
     availableToolGroups.value = groups;
-    // Every conversation starts with all tools OFF so the first turn is a quick chat (§4.1, §7).
+    // MCP tools are controlled by MCP Management and are not shown here.
     enabledToolGroups.value = Object.fromEntries(groups.map((group) => [group.id, false]));
     enabledStandaloneTools.value = Object.fromEntries(standaloneTools(tools, groups).map((tool) => [tool.name, false]));
   } catch {
@@ -252,8 +256,8 @@ async function createConversation() {
   await selectConversation(conversation.id);
 }
 
-// §4.1/§7: each conversation opens with no skill and all tools off. Skill/tools belong to the
-// Run, not the conversation, so there is no carry-over between conversations.
+// Skill and selectable built-in tools belong to the Run. MCP tools are added by the backend
+// according to the connection state managed on the MCP page.
 function resetTurnDefaults() {
   selectedSkillId.value = undefined;
   for (const id of Object.keys(enabledToolGroups.value)) enabledToolGroups.value[id] = false;

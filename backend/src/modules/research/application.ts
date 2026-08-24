@@ -50,12 +50,23 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
 
   return {
     listTools: () => dependencies.toolRuntime.listModules()
-      .filter((tool) => tool.exposedToModel !== false)
-      .map((tool) => ({
-        name: tool.definition.function.name,
-        label: tool.label,
-        description: tool.definition.function.description
-      })),
+      .filter((tool) => tool.exposedToModel !== false && tool.source !== 'mcp')
+      .map((tool) => {
+        const availability = typeof tool.availability === 'function'
+          ? tool.availability()
+          : tool.availability ?? { status: 'available' as const };
+        return {
+          name: tool.definition.function.name,
+          label: tool.label,
+          description: tool.definition.function.description,
+          source: tool.source ?? 'builtin',
+          ...(tool.sourceInfo?.serverId ? { serverId: tool.sourceInfo.serverId } : {}),
+          ...(tool.sourceInfo?.serverName ? { serverName: tool.sourceInfo.serverName } : {}),
+          ...(tool.sourceInfo?.remoteName ? { remoteName: tool.sourceInfo.remoteName } : {}),
+          status: availability.status,
+          ...(tool.annotations ? { annotations: tool.annotations } : {})
+        };
+      }),
     listToolGroups: () => toolGroups.map((group) => ({ ...group, toolNames: [...group.toolNames] })),
     listSkills: () => dependencies.skillRuntime.list(),
     normalizeToolPolicy: (value: unknown): ToolPolicy => {
@@ -103,16 +114,20 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
       toolPolicy: ToolPolicy,
       skillId?: string
     ) => {
+      const effectiveToolPolicy = mergeAutomaticMcpTools(
+        toolPolicy,
+        dependencies.toolRuntime.listModules()
+      );
       const registered = new Set(
         dependencies.toolRuntime.getDefinitions().map((tool) => tool.function.name)
       );
       const skill = skillId
-        ? resolveSkillForRun(dependencies.skillRuntime, skillId, toolPolicy, registered)
+        ? resolveSkillForRun(dependencies.skillRuntime, skillId, effectiveToolPolicy, registered)
         : undefined;
       return createAndStartResearchRun({
         conversationId,
         content,
-        toolPolicy,
+        toolPolicy: effectiveToolPolicy,
         toolRuntime: dependencies.toolRuntime,
         skill: skill?.snapshot,
         skillRuntime: dependencies.skillRuntime,
@@ -140,6 +155,27 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
       return run;
     }
   };
+}
+
+export function mergeAutomaticMcpTools(
+  policy: ToolPolicy,
+  modules: ReturnType<ToolRuntime['listModules']>
+): ToolPolicy {
+  if (policy.mode === 'all') return policy;
+  const mcpToolNames = modules
+    .filter((module) => module.source === 'mcp' && module.exposedToModel !== false)
+    .filter((module) => {
+      const availability = typeof module.availability === 'function'
+        ? module.availability()
+        : module.availability ?? { status: 'available' as const };
+      return availability.status === 'available';
+    })
+    .map((module) => module.definition.function.name);
+  if (!mcpToolNames.length) return policy;
+
+  const names = new Set(policy.mode === 'selected' ? policy.names : []);
+  mcpToolNames.forEach((name) => names.add(name));
+  return { mode: 'selected', names: [...names] };
 }
 
 export type ResearchApplication = ReturnType<typeof createResearchApplication>;
