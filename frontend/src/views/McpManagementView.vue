@@ -1,16 +1,45 @@
 <script setup lang="ts">
-import { ref } from 'vue';
-import { PhBrain, PhBookOpenText, PhPlus, PhTerminalWindow } from '@phosphor-icons/vue';
+import { ref, onMounted } from 'vue';
+import { PhTerminalWindow } from '@phosphor-icons/vue';
 
 import McpSettingsPanel from '../components/mcp/McpSettingsPanel.vue';
-import { builtInMcpPresets, type McpPreset } from '../mcp/presets';
-import { Button } from '@/components/ui/button';
+import McpPresetCard from '../components/mcp/McpPresetCard.vue';
+import PresetConsentDialog from '../components/mcp/PresetConsentDialog.vue';
+import type { McpPresetPublic } from '../types/mcp-presets';
+import { listMcpPresets } from '../api/mcp';
 
-const panel = ref<{ openPreset: (preset: McpPreset) => void }>();
+const presets = ref<McpPresetPublic[]>([]);
+const loading = ref(true);
+const selectedPreset = ref<McpPresetPublic | null>(null);
+const consentDialogOpen = ref(false);
 
-function usePreset(preset: McpPreset) {
-  panel.value?.openPreset(preset);
+async function loadPresets() {
+  loading.value = true;
+  try {
+    const result = await listMcpPresets();
+    presets.value = result.presets;
+  } catch (error) {
+    console.error('Failed to load presets:', error);
+  } finally {
+    loading.value = false;
+  }
 }
+
+function handleEnablePreset(presetId: string) {
+  const preset = presets.value.find((p) => p.id === presetId);
+  if (preset) {
+    selectedPreset.value = preset;
+    consentDialogOpen.value = true;
+  }
+}
+
+function handleConsentSuccess() {
+  loadPresets();
+}
+
+onMounted(() => {
+  loadPresets();
+});
 </script>
 
 <template>
@@ -23,20 +52,42 @@ function usePreset(preset: McpPreset) {
       </header>
 
       <section aria-labelledby="mcp-presets-title">
-        <div class="mb-3 flex items-baseline justify-between gap-3"><div><p class="m-0 font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Built-in starters</p><h2 id="mcp-presets-title" class="m-0 mt-1 text-base font-semibold">内置连接</h2></div><span class="text-xs text-muted-foreground">保存后仍需测试</span></div>
-        <div class="grid gap-4 md:grid-cols-2">
-          <article v-for="preset in builtInMcpPresets" :key="preset.id" class="group relative overflow-hidden rounded-xl border border-border bg-card p-5 shadow-xs">
-            <div class="absolute right-0 top-0 h-20 w-20 -translate-y-7 translate-x-7 rounded-full bg-primary/10 blur-2xl" aria-hidden="true" />
-            <component :is="preset.id === 'context7' ? PhBookOpenText : PhBrain" :size="22" weight="duotone" class="text-primary" aria-hidden="true" />
-            <h3 class="m-0 mt-4 text-base font-semibold">{{ preset.name }}</h3>
-            <p class="m-0 mt-1.5 min-h-12 text-sm leading-6 text-muted-foreground">{{ preset.description }}</p>
-            <p class="m-0 mt-4 break-all rounded-md border border-border/70 bg-muted/45 px-2.5 py-2 font-mono text-[10px] leading-4 text-muted-foreground">cmd /c npx -y {{ preset.draft.args?.[preset.draft.args.length - 1] }}</p>
-            <Button type="button" variant="outline" size="sm" class="mt-4" @click="usePreset(preset)"><PhPlus :size="14" weight="bold" aria-hidden="true" />使用此预置</Button>
-          </article>
+        <div class="mb-4">
+          <p class="m-0 font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Built-in presets</p>
+          <h2 id="mcp-presets-title" class="m-0 mt-1 text-base font-semibold">内置连接</h2>
+          <p class="m-0 mt-1 text-sm text-muted-foreground">一键启用审核通过的 MCP 工具</p>
+        </div>
+
+        <div v-if="loading" class="py-8 text-center text-sm text-muted-foreground">
+          加载中...
+        </div>
+
+        <div v-else class="grid gap-4 md:grid-cols-2">
+          <McpPresetCard
+            v-for="preset in presets"
+            :key="preset.id"
+            :preset="preset"
+            @enable="handleEnablePreset"
+            @update="loadPresets"
+          />
         </div>
       </section>
 
-      <McpSettingsPanel ref="panel" />
+      <section aria-labelledby="custom-mcp-title" class="mt-8">
+        <div class="mb-4">
+          <p class="m-0 font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Custom connections</p>
+          <h2 id="custom-mcp-title" class="m-0 mt-1 text-base font-semibold">自定义 MCP 连接</h2>
+        </div>
+        <McpSettingsPanel />
+      </section>
+
+      <PresetConsentDialog
+        v-if="selectedPreset"
+        :preset="selectedPreset"
+        :open="consentDialogOpen"
+        @close="consentDialogOpen = false"
+        @success="handleConsentSuccess"
+      />
     </div>
   </section>
 </template>

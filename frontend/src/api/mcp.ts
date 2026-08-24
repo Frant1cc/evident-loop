@@ -1,4 +1,5 @@
 import type { McpServer, McpServerDraft } from '../types/mcp';
+import type { McpPresetPublic } from '../types/mcp-presets';
 
 export type McpApiResponse<T> = {
   code: 0 | 1;
@@ -58,6 +59,23 @@ export function authorizeMcpServer(id: string, code: string, state?: string) {
   return request<{ server: McpServer }>(`/api/mcp/servers/${encodeURIComponent(id)}/authorize`, {
     method: 'POST',
     body: { code, ...(state ? { state } : {}) }
+  });
+}
+
+export function listMcpPresets() {
+  return request<{ presets: McpPresetPublic[] }>('/api/mcp/presets');
+}
+
+export function enableMcpPreset(presetId: string, consentVersion: number) {
+  return request<{ server: McpServer }>(`/api/mcp/presets/${encodeURIComponent(presetId)}/enable`, {
+    method: 'POST',
+    body: { consentVersion }
+  });
+}
+
+export function disableMcpPreset(presetId: string) {
+  return request<{ server: McpServer }>(`/api/mcp/presets/${encodeURIComponent(presetId)}/disable`, {
+    method: 'POST'
   });
 }
 

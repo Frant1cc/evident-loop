@@ -605,7 +605,11 @@ test('MCP routes permit static Authorization, reject OAuth Authorization, and ap
     refresh: async () => server,
     authorize: async () => server,
     deleteServer: async () => undefined,
-    getToolModules: () => []
+    getToolModules: () => [],
+    listPresets: () => [],
+    enablePreset: async () => server,
+    disablePreset: async () => server,
+    getManagedMetadata: () => undefined
   } as McpManager;
   const app = createApp({ mcpManager: manager, tools: toolCatalog });
   const listener = createServer(app);

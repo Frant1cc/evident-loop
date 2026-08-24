@@ -1,4 +1,5 @@
 import type { ToolModule, ToolRuntime } from '../tools/contracts.js';
+import type { McpManagedMetadata, McpPresetPublic } from './presets/index.js';
 
 /** The lifecycle states intentionally describe management state, not transport details. */
 export type McpServerStatus =
@@ -163,6 +164,9 @@ export type McpStore = {
   listTools: (serverId?: string) => McpToolRecord[];
   upsertTool: (tool: McpToolRecord) => void;
   deleteTools: (serverId: string) => void;
+  saveManagedMetadata: (serverId: string, metadata: McpManagedMetadata) => void;
+  getManagedMetadata: (serverId: string) => McpManagedMetadata | undefined;
+  findServerByPresetId: (presetId: string) => McpServerConfig | undefined;
 };
 
 export type McpServerState = {
@@ -197,4 +201,8 @@ export type McpManager = {
   getServerIdForOAuthState?: (state: string) => string | undefined;
   deleteServer: (id: string) => Promise<void>;
   getToolModules: () => ToolModule[];
+  listPresets: () => McpPresetPublic[];
+  enablePreset: (presetId: string, consentVersion: number) => Promise<McpPublicServer>;
+  disablePreset: (presetId: string) => Promise<McpPublicServer>;
+  getManagedMetadata: (serverId: string) => McpManagedMetadata | undefined;
 };

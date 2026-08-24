@@ -1,5 +1,12 @@
 import type { McpServerDraft } from '../types/mcp';
 
+/**
+ * @deprecated This file is deprecated. MCP presets are now managed by the backend.
+ * Use the API endpoints `/api/mcp/presets` instead.
+ *
+ * This file is kept for backward compatibility but will be removed in a future version.
+ */
+
 export type McpPreset = {
   id: string;
   name: string;
@@ -10,6 +17,8 @@ export type McpPreset = {
 /**
  * Built-in presets are deliberately drafts: a local process never starts until
  * the user saves, tests, and explicitly enables the connection.
+ *
+ * @deprecated Use the backend-managed presets API instead.
  */
 export const builtInMcpPresets: McpPreset[] = [
   {

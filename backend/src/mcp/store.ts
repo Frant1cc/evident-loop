@@ -14,6 +14,7 @@ import type {
   McpToolRecord,
   McpTransportKind
 } from './contracts.js';
+import type { McpManagedMetadata } from './presets/index.js';
 
 type StoredConfig = {
   transport: McpTransportKind;
@@ -28,6 +29,7 @@ type StoredConfig = {
   headerValues?: Record<string, string>;
   oauthValues?: string;
   credentialsUnavailable?: boolean;
+  managedMetadata?: McpManagedMetadata;
 };
 
 type ServerRow = {
@@ -250,6 +252,36 @@ export class SqliteMcpStore implements McpStore {
     this.database.prepare('DELETE FROM mcp_tools WHERE server_id = ?').run(serverId);
   }
 
+  saveManagedMetadata(serverId: string, metadata: McpManagedMetadata): void {
+    const row = this.database.prepare('SELECT config_json FROM mcp_servers WHERE id = ?').get(serverId) as { config_json: string } | undefined;
+    if (!row) throw new Error(`Server not found: ${serverId}`);
+
+    const stored = parseStoredConfig(row.config_json);
+    stored.managedMetadata = metadata;
+
+    this.database.prepare('UPDATE mcp_servers SET config_json = ?, updated_at = ? WHERE id = ?')
+      .run(JSON.stringify(stored), new Date().toISOString(), serverId);
+  }
+
+  getManagedMetadata(serverId: string): McpManagedMetadata | undefined {
+    const row = this.database.prepare('SELECT config_json FROM mcp_servers WHERE id = ?').get(serverId) as { config_json: string } | undefined;
+    if (!row) return undefined;
+
+    const stored = parseStoredConfig(row.config_json);
+    return stored.managedMetadata;
+  }
+
+  findServerByPresetId(presetId: string): McpServerConfig | undefined {
+    const rows = this.database.prepare('SELECT * FROM mcp_servers').all() as ServerRow[];
+    for (const row of rows) {
+      const stored = parseStoredConfig(row.config_json);
+      if (stored.managedMetadata?.presetId === presetId) {
+        return this.fromRow(row);
+      }
+    }
+    return undefined;
+  }
+
   private fromRow(row: ServerRow): McpServerConfig {
     const stored = parseStoredConfig(row.config_json);
     const env = decryptMap(stored.envValues, this.cipher);
@@ -291,7 +323,8 @@ export class SqliteMcpStore implements McpStore {
       ...(config.args && config.args.length > 0 ? { args: config.args } : {}),
       ...(config.cwd ? { cwd: config.cwd } : {}),
       ...(config.url ? { url: config.url } : {}),
-      authMode: config.authMode
+      authMode: config.authMode,
+      ...(preserved?.managedMetadata ? { managedMetadata: preserved.managedMetadata } : {})
     };
 
     let unavailable = false;
@@ -418,7 +451,8 @@ function parseStoredConfig(value: string): StoredConfig {
       ...(parsed.headerNames ? { headerNames: parsed.headerNames } : {}),
       ...(parsed.headerValues ? { headerValues: parsed.headerValues } : {}),
       ...(parsed.oauthValues ? { oauthValues: parsed.oauthValues } : {}),
-      ...(parsed.credentialsUnavailable ? { credentialsUnavailable: true } : {})
+      ...(parsed.credentialsUnavailable ? { credentialsUnavailable: true } : {}),
+      ...(parsed.managedMetadata ? { managedMetadata: parsed.managedMetadata } : {})
     };
   } catch {
     return { transport: 'http', authMode: 'none', credentialsUnavailable: true };

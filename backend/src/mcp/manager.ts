@@ -20,6 +20,7 @@ import type {
 import { mcpToolDefinitionHash } from './definitionHash.js';
 import { createMcpStore } from './store.js';
 import { McpSchemaValidator } from './validation.js';
+import { MANAGED_PRESETS, getPresetById, describeApprovalPolicy, type McpManagedMetadata, type McpPresetPublic } from './presets/index.js';
 
 type Entry = {
   config: McpServerConfig;
@@ -257,6 +258,128 @@ export class McpManagerImpl implements McpManager {
 
   getToolModules(): ToolModule[] {
     return this.runtime.listModules().filter((module) => module.source === 'mcp');
+  }
+
+  listPresets(): McpPresetPublic[] {
+    return MANAGED_PRESETS.map((preset) => {
+      const server = this.store.findServerByPresetId(preset.id);
+      const entry = server ? this.entries.get(server.id) : undefined;
+
+      if (!server || !entry) {
+        return {
+          id: preset.id,
+          name: preset.name,
+          description: preset.description,
+          publisher: preset.publisher,
+          package: preset.package,
+          consentVersion: preset.consentVersion,
+          status: 'not_installed',
+          enabled: false,
+          toolCount: 0,
+          approvalPolicyDescription: describeApprovalPolicy(preset)
+        };
+      }
+
+      const tools = this.store.listTools(server.id);
+      return {
+        id: preset.id,
+        name: preset.name,
+        description: preset.description,
+        publisher: preset.publisher,
+        package: preset.package,
+        consentVersion: preset.consentVersion,
+        status: entry.state.status === 'disabled' ? 'disabled' : entry.state.status,
+        serverId: server.id,
+        enabled: server.enabled,
+        lastError: entry.state.lastError,
+        lastRefreshedAt: entry.state.lastRefreshedAt,
+        toolCount: tools.filter((t) => !t.tombstone).length,
+        approvalPolicyDescription: describeApprovalPolicy(preset)
+      };
+    });
+  }
+
+  async enablePreset(presetId: string, consentVersion: number): Promise<McpPublicServer> {
+    const preset = getPresetById(presetId);
+    if (!preset) throw new Error(`Unknown preset: ${presetId}`);
+
+    if (consentVersion < preset.consentVersion) {
+      throw new Error(`Consent version ${consentVersion} is outdated, current version is ${preset.consentVersion}`);
+    }
+
+    // 查找或创建唯一 Server
+    let server = this.store.findServerByPresetId(presetId);
+    let entry = server ? this.entries.get(server.id) : undefined;
+
+    if (!server) {
+      // 创建新 Server
+      const draft = preset.resolveDraft(process.platform);
+      server = this.store.saveServer({ ...draft, enabled: false });
+      entry = this.ensureEntry(server);
+
+      // 保存 metadata
+      const metadata: McpManagedMetadata = {
+        presetId: preset.id,
+        presetVersion: preset.version,
+        consentVersion,
+        consentedAt: this.now().toISOString()
+      };
+      this.store.saveManagedMetadata(server.id, metadata);
+    } else if (entry) {
+      // 幂等检查：已连接且启用 → 直接返回
+      if (server.enabled && entry.state.status === 'connected') {
+        return this.toPublicServer(entry);
+      }
+
+      // 检查 consent version
+      const metadata = this.store.getManagedMetadata(server.id);
+      if (metadata && metadata.consentVersion < preset.consentVersion) {
+        throw new Error('Consent version outdated, re-confirmation required');
+      }
+    }
+
+    if (!entry) throw new Error('Failed to create server entry');
+
+    // 测试连接
+    await this.testServer(server.id);
+
+    // 启用
+    await this.setEnabled(server.id, true);
+
+    // 等待 connected（30秒超时，500ms 轮询）
+    const timeoutMs = 30_000;
+    const pollIntervalMs = 500;
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < timeoutMs) {
+      const current = this.getServer(server.id);
+      if (!current) throw new Error('Server deleted during enable');
+
+      if (current.status === 'connected') return current;
+      if (current.status === 'error' || current.status === 'unavailable') {
+        throw new Error(`Enable failed: ${current.lastError || 'Connection unavailable'}`);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+
+    throw new Error('Preset enable timeout after 30 seconds');
+  }
+
+  async disablePreset(presetId: string): Promise<McpPublicServer> {
+    const preset = getPresetById(presetId);
+    if (!preset) throw new Error(`Unknown preset: ${presetId}`);
+
+    const server = this.store.findServerByPresetId(presetId);
+    if (!server) {
+      throw new Error(`Preset ${presetId} is not installed`);
+    }
+
+    return this.setEnabled(server.id, false);
+  }
+
+  getManagedMetadata(serverId: string): McpManagedMetadata | undefined {
+    return this.store.getManagedMetadata(serverId);
   }
 
   private hydratePersistedState() {

@@ -101,6 +101,52 @@ export function createMcpRouter(manager: McpManager) {
     }
   });
 
+  router.get('/presets', (_req, res) => {
+    try {
+      const presets = manager.listPresets();
+      res.json(success({ presets }));
+    } catch (error) {
+      respondManagerError(res, error);
+    }
+  });
+
+  router.post('/presets/:presetId/enable', async (req, res) => {
+    const consentVersion = req.body?.consentVersion;
+    if (typeof consentVersion !== 'number' || consentVersion < 1) {
+      res.status(400).json(failure('consentVersion must be a positive number'));
+      return;
+    }
+    try {
+      const server = await manager.enablePreset(req.params.presetId, consentVersion);
+      res.json(success({ server }, 'Preset enabled'));
+    } catch (error) {
+      const message = errorMessage(error, 'Preset enable failed');
+      if (message.includes('Unknown preset')) {
+        res.status(404).json(failure(message));
+      } else if (message.includes('Consent version')) {
+        res.status(409).json(failure(message));
+      } else if (message.includes('timeout')) {
+        res.status(504).json(failure(message));
+      } else {
+        res.status(502).json(failure(message));
+      }
+    }
+  });
+
+  router.post('/presets/:presetId/disable', async (req, res) => {
+    try {
+      const server = await manager.disablePreset(req.params.presetId);
+      res.json(success({ server }, 'Preset disabled'));
+    } catch (error) {
+      const message = errorMessage(error, 'Preset disable failed');
+      if (message.includes('Unknown preset') || message.includes('not installed')) {
+        res.status(404).json(failure(message));
+      } else {
+        respondManagerError(res, error);
+      }
+    }
+  });
+
   return router;
 }
 
