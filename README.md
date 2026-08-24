@@ -28,7 +28,7 @@ Implemented:
 - Multi-format knowledge base for Markdown, TXT, DOCX, and text-based PDF, with structure-aware chunking, page or source-line citations, Dense/Hybrid RAG, and query rewriting
 - RAG evaluation with Recall@K, MRR, and abstention metrics
 - Disconnect-resilient background research with explicit cancellation, a task console, and Word report generation
-- Dynamic ToolRuntime snapshots and MCP connections for the Research Workbench and durable Agent Tasks, with Streamable HTTP/stdio, OAuth, persistent tool schemas, and approval gates
+- Dynamic ToolRuntime snapshots and MCP connections for the Research Workbench and durable Agent Tasks, with Streamable HTTP/stdio, OAuth, persistent tool schemas, approval gates, and one-click managed presets
 
 In progress or not yet implemented:
 
@@ -107,7 +107,13 @@ TAVILY_API_KEY=your_tavily_key
 
 ### MCP connections
 
-Configure MCP servers from **Settings → MCP Servers**. New connections are saved disabled; test the connection and tool list before enabling it. The UI supports local `stdio` servers and MCP Streamable HTTP with static headers or OAuth. See the [dynamic tools and MCP guide](./docs/development/dynamic-tools-and-mcp.md) for lifecycle, approval, API, and security details.
+The MCP management page provides **one-click enablement** for built-in presets (Context7 and Memory) with cross-platform support and fixed package versions. Custom MCP servers can still be configured manually from **Settings → MCP Servers**.
+
+Built-in presets:
+- **Context7**: Query latest library and framework documentation
+- **Memory**: Persistent local knowledge graph for MCP clients
+
+For manual connections, new servers are saved disabled; test the connection and tool list before enabling it. The UI supports local `stdio` servers and MCP Streamable HTTP with static headers or OAuth. See the [dynamic tools and MCP guide](./docs/development/dynamic-tools-and-mcp.md) for lifecycle, approval, API, and security details.
 
 The local deployment boundary is configured in `backend/.env`:
 
