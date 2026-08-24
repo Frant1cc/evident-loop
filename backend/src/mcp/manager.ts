@@ -829,6 +829,17 @@ export function stableToolName(serverId: string, remoteName: string): string {
 }
 
 export function normalizeResult(result: { content?: Array<Record<string, unknown>>; structuredContent?: unknown }): McpNormalizedResult {
+  const MAX_SIZE = 1_000_000; // 1MB
+
+  // 先检查整体大小
+  const resultJson = JSON.stringify(result);
+  if (resultJson.length > MAX_SIZE) {
+    console.warn(`MCP result truncated: ${resultJson.length} bytes > ${MAX_SIZE} bytes`);
+    return {
+      text: resultJson.substring(0, MAX_SIZE) + '\n\n[结果已截断：输出超过 1MB 限制]'
+    };
+  }
+
   const textParts: string[] = [];
   const metadata: Array<Record<string, unknown>> = [];
   const unsupported: Array<Record<string, unknown>> = [];

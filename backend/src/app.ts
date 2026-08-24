@@ -114,7 +114,7 @@ export function createProductionApp(options: { host?: string; port?: number } = 
   );
   const runtime = createToolRuntime(runtimeCatalog as ToolCatalog);
   const mcpManager = createMcpManager({ runtime, host: options.host, port: options.port });
-  const approvalManager = createApprovalManager();
+  const approvalManager = createApprovalManager({ mcpManager });
   return {
     app: createApp({ toolRuntime: runtime, artifactApplication, mcpManager, approvalManager }),
     toolRuntime: runtime,

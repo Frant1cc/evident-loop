@@ -14,6 +14,8 @@ import type {
 } from './contracts.js';
 import { ApprovalDecisionConflictError, ApprovalNotFoundError } from './contracts.js';
 import { createApprovalStore } from './store.js';
+import type { McpManager } from '../mcp/contracts.js';
+import { getPresetById } from '../mcp/presets/index.js';
 
 type ApprovalContext = {
   request: ApprovalAuthorizationRequest;
@@ -33,6 +35,7 @@ type ApprovalContext = {
 export function createApprovalManager(options: ApprovalManagerOptions = {}): ApprovalManager {
   const store: ApprovalStore = options.store ?? createApprovalStore();
   const now = options.now ?? (() => new Date());
+  const mcpManager = options.mcpManager;
   const contexts = new Map<string, ApprovalContext>();
 
   store.ensureSchema();
@@ -215,7 +218,28 @@ export function createApprovalManager(options: ApprovalManagerOptions = {}): App
     // Built-ins and unknown tools never create approval rows. Unknown,
     // unauthorized, and unavailable calls remain ToolRuntime's responsibility.
     if (!module || module.source !== 'mcp') return;
-    if (module.annotations?.readOnlyHint === true) {
+
+    // 获取本地审批策略
+    const localPolicy = mcpManager
+      ? getLocalApprovalPolicy(module, mcpManager)
+      : undefined;
+
+    // 决策优先级：
+    // 1. 本地工具级策略明确要求审批 → 审批
+    // 2. 本地工具级策略明确允许 → 免审批
+    // 3. 预置允许只读 + 远端声明只读 → 免审批
+    // 4. 其他 → 审批
+
+    if (localPolicy === 'require_approval') {
+      // 继续审批流程（不 return）
+    } else if (localPolicy === 'allow') {
+      validateCurrentRuntime(request);
+      return;
+    } else if (localPolicy === 'allow_readonly' && module.annotations?.readOnlyHint === true) {
+      validateCurrentRuntime(request);
+      return;
+    } else if (!localPolicy && module.annotations?.readOnlyHint === true) {
+      // 非托管预置，保持现有行为
       validateCurrentRuntime(request);
       return;
     }
@@ -422,6 +446,27 @@ function approvalErrorForStatus(status: ToolApprovalStatus, toolName: string) {
     retryable: true,
     reason: `Approval status is ${status}.`
   });
+}
+
+function getLocalApprovalPolicy(
+  module: { definition: { function: { name: string } }; sourceInfo?: { serverId?: string } },
+  mcpManager: McpManager
+): 'require_approval' | 'allow' | 'allow_readonly' | undefined {
+  // 1. 查找工具对应的 Server
+  const serverId = module.sourceInfo?.serverId;
+  if (!serverId) return undefined;
+
+  // 2. 查找 Server 的 metadata
+  const metadata = mcpManager.getManagedMetadata(serverId);
+  if (!metadata) return undefined; // 非托管预置
+
+  // 3. 查找预置定义
+  const preset = getPresetById(metadata.presetId);
+  if (!preset) return undefined;
+
+  // 4. 返回工具级策略或预置默认策略
+  const toolName = module.definition.function.name;
+  return preset.approvalPolicy.tools?.[toolName] ?? preset.approvalPolicy.default;
 }
 
 function throwIfAborted(signal?: AbortSignal) {

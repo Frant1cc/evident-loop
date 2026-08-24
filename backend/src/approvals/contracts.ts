@@ -4,6 +4,7 @@ import type {
   ToolRuntime,
   ToolSnapshot
 } from '../tools/contracts.js';
+import type { McpManager } from '../mcp/contracts.js';
 
 export const approvalScopeTypes = ['research_run', 'agent_task'] as const;
 export type ApprovalScopeType = typeof approvalScopeTypes[number];
@@ -85,6 +86,7 @@ export type ApprovalManager = {
 export type ApprovalManagerOptions = {
   store?: ApprovalStore;
   now?: () => Date;
+  mcpManager?: McpManager;
 };
 
 export class ApprovalDecisionConflictError extends Error {
