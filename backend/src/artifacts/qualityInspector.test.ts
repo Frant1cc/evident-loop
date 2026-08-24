@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createDefaultArtifactQualityInspector } from './generation/renderers.js';
+import { createDefaultArtifactQualityInspector, DefaultDocxRenderer } from './generation/renderers.js';
 import type { ArtifactSpec, ResearchSnapshot } from './generation/types.js';
 
 const snapshot = {
@@ -70,4 +70,32 @@ test('layout QA catches a bad second-page bbox without claiming perfect overlap 
   }, spec, { snapshot });
   assert.equal(report.ok, false);
   assert.match(report.diagnostics.join('\n'), /title-2.*bounds/);
+});
+
+test('DOCX renderer persists the long-form report content as an Office package', async () => {
+  const result = await new DefaultDocxRenderer().render(spec, snapshot);
+
+  assert.equal(result.fileName, 'QA.docx');
+  assert.equal(result.buffer.subarray(0, 2).toString('ascii'), 'PK');
+  assert.ok(result.buffer.byteLength > 5_000);
+  assert.match(result.buffer.toString('latin1'), /word\/document\.xml/);
+});
+
+test('DOCX quality inspection does not require a fixed-page layout manifest', async () => {
+  const result = await new DefaultDocxRenderer().render(spec, snapshot);
+  const report = await createDefaultArtifactQualityInspector().inspect('docx', result, spec, { snapshot });
+
+  assert.equal(report.ok, true);
+  assert.deepEqual(report.diagnostics, []);
+});
+
+test('fixed-layout formats still fail quality inspection without a layout manifest', async () => {
+  const report = await createDefaultArtifactQualityInspector().inspect('pptx', {
+    buffer: Buffer.from('PK\x03\x04'),
+    fileName: 'qa.pptx',
+    contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+  }, spec, { snapshot });
+
+  assert.equal(report.ok, false);
+  assert.match(report.diagnostics.join('\n'), /Visual layout manifest unavailable/);
 });

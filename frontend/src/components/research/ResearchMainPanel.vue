@@ -7,8 +7,8 @@ import ResearchComposer from './ResearchComposer.vue';
 import ToolApprovalCard from '../approvals/ToolApprovalCard.vue';
 import type { ResearchSkillInfo, ResearchToolGroupInfo, ResearchToolInfo } from '../../api/research';
 import type { ToolApproval, ToolApprovalDecision } from '../../types/approvals';
-import type { WordArtifact } from '../../types/artifacts';
-import type { ResearchMessage, ResearchStep } from '../../types/research';
+import type { ArtifactOutput, ResearchArtifactGeneration } from '../../types/artifacts';
+import type { ResearchMessage } from '../../types/research';
 import type { StreamConnectionState } from '../../types/streaming';
 import type { AuxiliaryState } from '../../lib/auxiliaryState';
 
@@ -16,8 +16,7 @@ defineProps<{
   title?: string;
   conversationId?: string;
   messages: ResearchMessage[];
-  steps?: ResearchStep[];
-  artifactsByMessageId: Map<string, WordArtifact[]>;
+  generationsByMessageId: Map<string, ResearchArtifactGeneration[]>;
   auxiliaryStateByMessageId?: Map<string, AuxiliaryState>;
   loading: boolean;
   stopping: boolean;
@@ -44,7 +43,11 @@ const emit = defineEmits<{
   toggleStandaloneTool: [name: string];
   selectSkill: [id: string | undefined];
   citation: [key: string];
-  preview: [artifact: WordArtifact];
+  'open-workbench': [generation: ResearchArtifactGeneration];
+  'preview-output': [output: ArtifactOutput];
+  generate: [generation: ResearchArtifactGeneration];
+  cancel: [generation: ResearchArtifactGeneration];
+  'retry-output': [generation: ResearchArtifactGeneration, outputId: string];
   approvalDecision: [approval: ToolApproval, decision: ToolApprovalDecision];
 }>();
 </script>
@@ -75,12 +78,14 @@ const emit = defineEmits<{
     <ResearchMessages
       :conversation-id="conversationId"
       :messages="messages"
-      :steps="steps"
-      :artifacts-by-message-id="artifactsByMessageId"
+      :generations-by-message-id="generationsByMessageId"
       :auxiliary-state-by-message-id="auxiliaryStateByMessageId"
-      :artifact-enabled="!loading"
       @citation="emit('citation', $event)"
-      @preview="emit('preview', $event)"
+      @open-workbench="emit('open-workbench', $event)"
+      @preview-output="emit('preview-output', $event)"
+      @generate="emit('generate', $event)"
+      @cancel="emit('cancel', $event)"
+      @retry-output="(generation, outputId) => emit('retry-output', generation, outputId)"
     />
 
     <footer class="px-3 pb-2 pt-0 md:px-5">

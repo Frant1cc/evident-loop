@@ -10,9 +10,7 @@ import {
   addResearchSource
 } from '../research/store.js';
 import { createArtifactAgent, type ArtifactAgent } from './generation/agent.js';
-import { createCredentialCipher, generateCredentialKey } from '../mcp/crypto.js';
-import { createImageProviderStore } from './generation/imageProviders.js';
-import { fetchSourceImage, generateImageAsset, ImageAssetError } from './generation/images.js';
+import { fetchSourceImage, ImageAssetError } from './generation/images.js';
 import { createArtifactGenerationService } from './generation/service.js';
 import { createResearchSnapshot } from './generation/snapshot.js';
 import { createArtifactGeneration } from './generation/repository.js';
@@ -51,7 +49,7 @@ test('research snapshot digest is deterministic and detects completed-message ch
 
 test('artifact generation creates an editable draft and a partial result when one renderer fails', async () => {
   const conversation = createResearchConversation();
-  createResearchMessage({ conversationId: conversation.id, role: 'user', content: '研究数据库迁移', status: 'complete' });
+  createResearchMessage({ conversationId: conversation.id, role: 'user', content: '研究数据库迁移，生成 pptx 和 pdf', status: 'complete' });
   const assistant = createResearchMessage({ conversationId: conversation.id, role: 'assistant', content: '迁移应当可回滚。', status: 'complete' });
   createResearchNote(conversation.id, '先做备份和演练');
   addResearchSource(assistant.id, {
@@ -72,6 +70,7 @@ test('artifact generation creates an editable draft and a partial result when on
   };
   const renderers = {
     pptx: fakeRenderer('pptx', Buffer.from('PK\x03\x04')),
+    docx: fakeRenderer('docx', Buffer.from('PK\x03\x04')),
     pdf: {
       render: async () => { throw new Error('Chromium unavailable'); }
     } satisfies ArtifactRenderer
@@ -90,6 +89,7 @@ test('artifact generation creates an editable draft and a partial result when on
   const draft = await service.createDraft(conversation.id);
   assert.equal(draft.status, 'awaiting_confirmation');
   assert.equal(draft.spec.theme, 'research');
+  assert.deepEqual(draft.spec.formats.sort(), ['pdf', 'pptx']);
   const generation = service.startRender(draft.id);
   assert.equal(service.get(draft.id)?.status, 'superseded');
   await service.waitForRender(generation.id);
@@ -212,28 +212,18 @@ test('conversation artifact deletion compensates binary removal failures before 
   assert.equal(service.list(conversation.id).length, 0);
 });
 
-test('image provider credentials are encrypted and source image policy rejects unsafe requests', async () => {
-  const store = createImageProviderStore(undefined, createCredentialCipher(generateCredentialKey()));
-  const provider = store.save({
-    name: 'Images',
-    baseUrl: 'https://images.example.test/v1',
-    model: 'image-model',
-    apiKey: 'do-not-log-this'
-  });
-  assert.equal(provider.credentialConfigured, true);
-  const raw = (await import('../db.js')).sqlite.prepare('SELECT encrypted_api_key FROM artifact_image_providers WHERE id = ?').get(provider.id) as { encrypted_api_key: string };
-  assert.ok(raw.encrypted_api_key);
-  assert.doesNotMatch(raw.encrypted_api_key, /do-not-log-this/);
+test('source image policy rejects unsafe requests', async () => {
+  const generationId = '00000000-0000-0000-0000-000000000099';
   await assert.rejects(
-    () => fetchSourceImage({ generationId: provider.id, imageUrl: 'http://example.test/a.png', licenseConfirmed: true }),
+    () => fetchSourceImage({ generationId, imageUrl: 'http://example.test/a.png', licenseConfirmed: true }),
     (error: unknown) => error instanceof ImageAssetError && error.message.includes('HTTPS')
   );
   await assert.rejects(
-    () => fetchSourceImage({ generationId: provider.id, imageUrl: 'https://127.0.0.1/a.png', licenseConfirmed: true }),
+    () => fetchSourceImage({ generationId, imageUrl: 'https://127.0.0.1/a.png', licenseConfirmed: true }),
     (error: unknown) => error instanceof ImageAssetError && error.message.includes('private')
   );
   await assert.rejects(
-    () => fetchSourceImage({ generationId: provider.id, imageUrl: 'https://[fd00::1]/a.png', licenseConfirmed: true }),
+    () => fetchSourceImage({ generationId, imageUrl: 'https://[fd00::1]/a.png', licenseConfirmed: true }),
     (error: unknown) => error instanceof ImageAssetError && error.message.includes('private')
   );
 });
@@ -252,26 +242,6 @@ test('source image response bodies are stream-limited even with a custom fetch a
     }),
     (error: unknown) => error instanceof ImageAssetError && error.message.includes('byte limit')
   );
-});
-
-test('image providers reject unsafe base URLs and never replay bearer credentials across a POST redirect', async () => {
-  const store = createImageProviderStore(undefined, createCredentialCipher(generateCredentialKey()));
-  assert.throws(() => store.save({ name: 'local', baseUrl: 'https://127.0.0.1/v1', model: 'image', apiKey: 'secret' }), /private|local network/);
-  const provider = store.save({ name: 'redirect-provider', baseUrl: 'https://images.example.test/v1', model: 'image', apiKey: 'secret' });
-  const calls: string[] = [];
-  const authorizationHeaders: string[] = [];
-  await assert.rejects(
-    () => generateImageAsset({ generationId: provider.id, providerId: provider.id, prompt: 'test', providerStore: store }, {
-      fetchImpl: async (url, init) => {
-        calls.push(String(url));
-        authorizationHeaders.push(String((init?.headers as Record<string, string> | undefined)?.authorization ?? ''));
-        return new Response(null, { status: 302, headers: { location: 'https://127.0.0.1/private' } });
-      }
-    }),
-    (error: unknown) => error instanceof ImageAssetError && /POST redirects are not allowed/.test(error.message)
-  );
-  assert.deepEqual(calls, ['https://images.example.test/v1/images/generations']);
-  assert.deepEqual(authorizationHeaders, ['Bearer secret']);
 });
 
 test('stale drafts cannot render after the research conversation changes', async () => {
@@ -691,7 +661,7 @@ test('concurrent format retries are independently drained before generation dele
 
 test('cancellation drains every format task and prevents late completion writes', async () => {
   const conversation = createResearchConversation();
-  createResearchMessage({ conversationId: conversation.id, role: 'user', content: '取消多格式任务', status: 'complete' });
+  createResearchMessage({ conversationId: conversation.id, role: 'user', content: '取消多格式任务 pptx pdf', status: 'complete' });
   let fail = true;
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -707,7 +677,7 @@ test('cancellation drains every format task and prevents late completion writes'
   const service = createArtifactGenerationService({
     model: 'test',
     agent: createArtifactAgent({ model: 'test' }),
-    renderers: { pptx: renderer, pdf: renderer },
+    renderers: { pptx: renderer, docx: renderer, pdf: renderer },
     qualityInspector: { inspect: async () => ({ ok: true, diagnostics: [] }) },
     binaryStore: {
       put: async (key, value) => { binary.set(key, value); },
@@ -797,51 +767,46 @@ test('confirmed versions re-home image assets and consents without sharing binar
   assert.equal(listArtifactAssets(generation.id).length, 1);
 });
 
-test('controlled image resolution prefers a configured provider and records provenance before builtin fallback', async () => {
+test('rendering never generates fallback images and DOCX skips media resolution', async () => {
   const conversation = createResearchConversation();
-  createResearchMessage({ conversationId: conversation.id, role: 'user', content: '图片 provider 编排', status: 'complete' });
-  const providerStore = createImageProviderStore(undefined, createCredentialCipher(generateCredentialKey()));
-  const provider = providerStore.save({
-    name: 'fake-provider',
-    baseUrl: 'https://images.example.test/v1',
-    model: 'fake-model',
-    apiKey: 'test-key'
-  });
-  const generatedPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+  createResearchMessage({ conversationId: conversation.id, role: 'user', content: '无图片时生成 pptx pdf docx', status: 'complete' });
   const binary = new Map<string, Buffer>();
   const binaryStore: ArtifactBinaryStore = {
     put: async (key, value) => { binary.set(key, value); },
     get: async (key) => binary.get(key) ?? null,
     delete: async (key) => { binary.delete(key); }
   };
-  const seenAssets: number[] = [];
+  const seen = new Map<ArtifactFormat, { assets: number; provenance: string }>();
+  let imageFetches = 0;
   const service = createArtifactGenerationService({
     model: 'test',
     agent: createArtifactAgent({ model: 'test' }),
-    imageProviders: providerStore,
-    imageFetchImpl: async () => new Response(JSON.stringify({ data: [{ b64_json: generatedPng.toString('base64') }] }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' }
-    }),
+    imageFetchImpl: async () => {
+      imageFetches += 1;
+      throw new Error('rendering must not fetch images');
+    },
     renderers: {
-      pptx: { render: async (_spec, _snapshot, context) => { seenAssets.push(context?.assets?.length ?? 0); return fakeRenderer('pptx', Buffer.from('PK\x03\x04')).render(_spec, _snapshot, context); } },
-      pdf: { render: async (_spec, _snapshot, context) => { seenAssets.push(context?.assets?.length ?? 0); return fakeRenderer('pdf', Buffer.from('%PDF-1.7')).render(_spec, _snapshot, context); } }
+      pptx: { render: async (_spec, _snapshot, context) => { seen.set('pptx', { assets: context?.assets?.length ?? 0, provenance: context?.visualProvenance?.[0]?.kind ?? 'none' }); return fakeRenderer('pptx', Buffer.from('PK\x03\x04')).render(_spec, _snapshot, context); } },
+      docx: { render: async (_spec, _snapshot, context) => { seen.set('docx', { assets: context?.assets?.length ?? 0, provenance: context?.visualProvenance?.[0]?.kind ?? 'none' }); return fakeRenderer('docx', Buffer.from('PK\x03\x04')).render(_spec, _snapshot, context); } },
+      pdf: { render: async (_spec, _snapshot, context) => { seen.set('pdf', { assets: context?.assets?.length ?? 0, provenance: context?.visualProvenance?.[0]?.kind ?? 'none' }); return fakeRenderer('pdf', Buffer.from('%PDF-1.7')).render(_spec, _snapshot, context); } }
     },
     qualityInspector: { inspect: async () => ({ ok: true, diagnostics: [] }) },
     binaryStore
   });
-  const draft = await service.createDraft(conversation.id);
+  const draft = await service.createDraft(conversation.id, { formats: ['pptx', 'docx', 'pdf'] });
   const generation = service.startRender(draft.id);
   await service.waitForRender(generation.id);
   const completed = service.get(generation.id)!;
   assert.equal(completed.status, 'completed');
-  assert.ok(seenAssets.some((count) => count > 0));
-  assert.equal(completed.outputs.every((output) => output.provenance?.some((item) => item.kind === 'image_provider' && item.providerId === provider.id)), true);
+  assert.equal(imageFetches, 0);
+  assert.deepEqual(seen.get('pptx'), { assets: 0, provenance: 'builtin_vector_shape' });
+  assert.deepEqual(seen.get('pdf'), { assets: 0, provenance: 'builtin_vector_shape' });
+  assert.deepEqual(seen.get('docx'), { assets: 0, provenance: 'none' });
 });
 
 test('source image failure falls back to builtin visuals without failing the artifact', async () => {
   const conversation = createResearchConversation();
-  createResearchMessage({ conversationId: conversation.id, role: 'user', content: '图片失败回退', status: 'complete' });
+  createResearchMessage({ conversationId: conversation.id, role: 'user', content: '图片失败回退 pptx pdf', status: 'complete' });
   const seenProvenance: string[] = [];
   const service = createArtifactGenerationService({
     model: 'test',
@@ -849,11 +814,13 @@ test('source image failure falls back to builtin visuals without failing the art
     imageFetchImpl: async () => { throw new Error('source unavailable'); },
     renderers: {
       pptx: { render: async (_spec, _snapshot, context) => { seenProvenance.push(context?.visualProvenance?.[0]?.kind ?? 'missing'); return fakeRenderer('pptx', Buffer.from('PK\x03\x04')).render(_spec, _snapshot, context); } },
+      docx: { render: async (_spec, _snapshot, context) => { seenProvenance.push(context?.visualProvenance?.[0]?.kind ?? 'missing'); return fakeRenderer('docx', Buffer.from('PK\x03\x04')).render(_spec, _snapshot, context); } },
       pdf: fakeRenderer('pdf', Buffer.from('%PDF-1.7'))
     },
     qualityInspector: { inspect: async () => ({ ok: true, diagnostics: [] }) }
   });
   const draft = await service.createDraft(conversation.id);
+  assert.deepEqual(draft.spec.formats.sort(), ['pdf', 'pptx']);
   service.createImageConsent(draft.id, 'https://images.example.test/unavailable.png');
   const generation = service.startRender(draft.id);
   await service.waitForRender(generation.id);
@@ -1045,53 +1012,6 @@ test('confirmation rejects a slow source-image task and only clones the asset af
   await service.waitForRender(confirmed.id);
   assert.equal(listArtifactAssets(confirmed.id).length, 1);
   assert.equal(service.get(draft.id)?.status, 'superseded');
-});
-
-test('confirmation rejects a slow provider task and re-homes its binary after it settles', async () => {
-  const conversation = createResearchConversation();
-  createResearchMessage({ conversationId: conversation.id, role: 'user', content: '确认与 provider 并发', status: 'complete' });
-  const providerStore = createImageProviderStore(undefined, createCredentialCipher(generateCredentialKey()));
-  const provider = providerStore.save({
-    name: 'slow-provider',
-    baseUrl: 'https://images.example.test/v1',
-    model: 'fake-model',
-    apiKey: 'slow-key'
-  });
-  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => { release = resolve; });
-  const binary = new Map<string, Buffer>();
-  const binaryStore: ArtifactBinaryStore = {
-    put: async (key, value) => { binary.set(key, value); },
-    get: async (key) => binary.get(key) ?? null,
-    delete: async (key) => { binary.delete(key); }
-  };
-  const service = createArtifactGenerationService({
-    model: 'test',
-    agent: createArtifactAgent({ model: 'test' }),
-    imageProviders: providerStore,
-    imageFetchImpl: async () => {
-      await gate;
-      return new Response(JSON.stringify({ data: [{ b64_json: png.toString('base64') }] }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' }
-      });
-    },
-    renderers: { pptx: fakeRenderer('pptx', Buffer.from('PK\x03\x04')), pdf: fakeRenderer('pdf', Buffer.from('%PDF-1.7')) },
-    qualityInspector: { inspect: async () => ({ ok: true, diagnostics: [] }) },
-    binaryStore
-  });
-  const draft = await service.createDraft(conversation.id);
-  const media = service.generateImage({ generationId: draft.id, providerId: provider.id, prompt: 'slow visual' });
-  await Promise.resolve();
-  assert.throws(() => service.startRender(draft.id), /image operations to finish/);
-  release();
-  await media;
-  const confirmed = service.startRender(draft.id);
-  await service.waitForRender(confirmed.id);
-  const assets = listArtifactAssets(confirmed.id);
-  assert.equal(assets.length, 1);
-  assert.deepEqual(binary.get(assets[0]!.storageKey), png);
 });
 
 function fakeRenderer(format: ArtifactFormat, buffer: Buffer): ArtifactRenderer {

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { buildAuxiliaryState } from './auxiliaryState';
-import type { WordArtifact } from '../types/artifacts';
+import type { ResearchArtifactGeneration } from '../types/artifacts';
 import type { ResearchStep } from '../types/research';
 
 const step = (overrides: Partial<ResearchStep>): ResearchStep => ({
@@ -12,19 +12,22 @@ const step = (overrides: Partial<ResearchStep>): ResearchStep => ({
   sequence: 1,
   type: 'tool',
   status: 'complete',
-  title: 'generate_word_document',
+  title: 'start_document_generation',
   startedAt: '2026-01-01T00:00:00.000Z',
   ...overrides
 });
 
-const artifact = (id: string, messageId: string): WordArtifact => ({
-  artifactId: id,
-  fileName: `${id}.docx`,
-  downloadUrl: `/api/artifacts/${id}/download`,
-  previewUrl: `/api/artifacts/${id}/preview`,
-  size: 1024,
+const generation = (id: string): ResearchArtifactGeneration => ({
+  id,
+  conversationId: 'conv-1',
+  version: 1,
+  snapshotDigest: 'abc',
+  status: 'awaiting_confirmation',
+  stale: false,
+  spec: {} as ResearchArtifactGeneration['spec'],
+  outputs: [],
   createdAt: '2026-01-01T00:00:00.000Z',
-  expiresAt: '2026-01-08T00:00:00.000Z'
+  updatedAt: '2026-01-01T00:00:00.000Z'
 });
 
 test('returns empty map when no signals are present', () => {
@@ -32,7 +35,7 @@ test('returns empty map when no signals are present', () => {
   assert.equal(result.size, 0);
 });
 
-test('reports running when a tool step is still in flight, even with zero artifacts', () => {
+test('reports running when a tool step is still in flight, even with zero generations', () => {
   const result = buildAuxiliaryState(
     [step({ status: 'running' })],
     new Map()
@@ -40,16 +43,16 @@ test('reports running when a tool step is still in flight, even with zero artifa
   const state = result.get('msg-1');
   assert.ok(state);
   assert.equal(state.status, 'running');
-  assert.equal(state.label, '生成的文档');
-  assert.equal(state.activity, '正在生成文档…');
+  assert.equal(state.label, '文档草稿');
+  assert.equal(state.activity, '正在准备文档草稿…');
   assert.equal(state.count, 0);
 });
 
-test('reports complete and counts finished artifacts', () => {
-  const artifacts = new Map<string, WordArtifact[]>([
-    ['msg-1', [artifact('a-1', 'msg-1'), artifact('a-2', 'msg-1')]]
+test('reports complete and counts finished generations', () => {
+  const generations = new Map<string, ResearchArtifactGeneration[]>([
+    ['msg-1', [generation('g-1'), generation('g-2')]]
   ]);
-  const result = buildAuxiliaryState([step({ status: 'complete' })], artifacts);
+  const result = buildAuxiliaryState([step({ status: 'complete' })], generations);
   const state = result.get('msg-1');
   assert.equal(state?.status, 'complete');
   assert.equal(state?.count, 2);
@@ -77,9 +80,9 @@ test('keeps running state over a later error so a fresh attempt is not masked by
 });
 
 test('aggregates per-message state across multiple steps', () => {
-  const artifacts = new Map<string, WordArtifact[]>([
-    ['msg-1', [artifact('a-1', 'msg-1')]],
-    ['msg-2', [artifact('a-2', 'msg-2'), artifact('a-3', 'msg-2')]]
+  const generations = new Map<string, ResearchArtifactGeneration[]>([
+    ['msg-1', [generation('g-1')]],
+    ['msg-2', [generation('g-2'), generation('g-3')]]
   ]);
   const result = buildAuxiliaryState(
     [
@@ -87,7 +90,7 @@ test('aggregates per-message state across multiple steps', () => {
       step({ id: 's2', messageId: 'msg-2', status: 'complete' }),
       step({ id: 's3', messageId: 'msg-2', status: 'complete' })
     ],
-    artifacts
+    generations
   );
   assert.equal(result.get('msg-1')?.count, 1);
   assert.equal(result.get('msg-1')?.status, 'complete');
@@ -100,7 +103,7 @@ test('ignores non-tool steps (e.g. llm planning)', () => {
       step({ id: 'llm', type: 'llm', status: 'complete' }),
       step({ id: 'tool', status: 'complete' })
     ],
-    new Map([['msg-1', [artifact('a-1', 'msg-1')]]])
+    new Map([['msg-1', [generation('g-1')]]])
   );
   assert.equal(result.get('msg-1')?.status, 'complete');
   assert.equal(result.get('msg-1')?.count, 1);
@@ -116,13 +119,13 @@ test('falls back to generic labels when the tool name is unknown', () => {
   assert.equal(state?.activity, '正在加载附件…');
 });
 
-test('labels start_artifact_generation as a PPT/PDF outline attachment', () => {
+test('labels start_document_generation as 文档草稿', () => {
   const result = buildAuxiliaryState(
-    [step({ title: 'start_artifact_generation', status: 'running' })],
+    [step({ title: 'start_document_generation', status: 'running' })],
     new Map()
   );
   const state = result.get('msg-1');
-  assert.equal(state?.label, 'PPT / PDF 大纲');
-  assert.equal(state?.activity, '正在生成大纲…');
+  assert.equal(state?.label, '文档草稿');
+  assert.equal(state?.activity, '正在准备文档草稿…');
   assert.equal(state?.status, 'running');
 });

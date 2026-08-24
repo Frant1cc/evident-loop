@@ -38,8 +38,7 @@ import {
   RendererUnavailableError
 } from './renderers.js';
 import { artifactBinaryStore } from './binaryStore.js';
-import { fetchSourceImage, generateImageAsset, validateImageUrl, type ImageAsset } from './images.js';
-import { imageProviderStore, type SqliteImageProviderStore } from './imageProviders.js';
+import { fetchSourceImage, validateImageUrl } from './images.js';
 import type {
   ArtifactBinaryStore,
   ArtifactFormat,
@@ -77,14 +76,12 @@ export function createArtifactGenerationService(options: {
   qualityInspector?: ArtifactQualityInspector;
   binaryStore?: ArtifactBinaryStore;
   isResearchConversationActive?: (conversationId: string) => boolean;
-  imageProviders?: SqliteImageProviderStore;
   imageFetchImpl?: typeof fetch;
 }) {
   const agent = options.agent ?? createArtifactAgent({ llm: options.llm, model: options.model });
   const renderers = { ...createDefaultRenderers(), ...options.renderers } as Record<ArtifactFormat, ArtifactRenderer>;
   const qualityInspector = options.qualityInspector ?? createDefaultArtifactQualityInspector();
   const binaryStore = options.binaryStore ?? artifactBinaryStore;
-  const imageProviders = options.imageProviders ?? imageProviderStore;
   const activeControllers = new Map<string, AbortController>();
   const renderPromises = new Map<string, Promise<void>>();
   const mediaPromises = new Map<string, Promise<unknown>>();
@@ -551,17 +548,12 @@ export function createArtifactGenerationService(options: {
       let storageWritten = false;
       try {
         const renderer = renderers[format];
-        // Keep the no-consent/no-provider path to one async storage read. This
-        // also makes retry scheduling deterministic for callers that enqueue
-        // sibling formats in the same turn.
-        const hasImageResolution = hasConfiguredImageProvider(imageProviders)
-          || listArtifactImageConsents(output.generationId).length > 0;
-        const resolvedAssets = hasImageResolution
-          ? await resolveRenderAssets(output.generationId, spec, snapshot, binaryStore, imageProviders, options.imageFetchImpl, signal)
-          : {
-              assets: await loadRenderAssets(output.generationId, binaryStore),
-              provenance: [{ kind: 'builtin_vector_shape' as const, detail: 'No authorized source or configured image provider' }]
-            };
+        // Word currently has no image blocks, so it must not perform media IO.
+        // Fixed-layout outputs can consume only user-authorized source assets;
+        // when none are available their renderers use deterministic geometry.
+        const resolvedAssets = format === 'docx'
+          ? { assets: [], provenance: [] }
+          : await resolveRenderAssets(output.generationId, binaryStore);
         const execution = await agent.execute({
           format,
           spec,
@@ -713,21 +705,6 @@ export function createArtifactGenerationService(options: {
         }
       ), fetchOptions.signal);
     },
-    generateImage: (
-      input: { generationId: string; providerId: string; prompt: string },
-      signal?: AbortSignal
-    ) => {
-      if (!imageProviders) throw new ArtifactStateError('No image provider registry is configured');
-      const generation = getArtifactGeneration(input.generationId);
-      if (!generation) throw new ArtifactNotFoundError('Artifact generation not found');
-      assertMutableMediaGeneration(generation);
-      return runMediaTask(input.generationId, (taskSignal) => generateImageAsset({ ...input, providerStore: imageProviders }, {
-        signal: taskSignal,
-        store: binaryStore,
-        fetchImpl: options.imageFetchImpl,
-        beforePersist: () => assertMediaTaskStillMutable(input.generationId)
-      }), signal);
-    },
     assertGenerationConversation: (generationId: string, conversationId: string) => {
       const generation = getArtifactGeneration(generationId);
       if (!generation || generation.conversationId !== conversationId) {
@@ -819,18 +796,6 @@ async function loadRenderAssets(generationId: string, store: ArtifactBinaryStore
   return assets;
 }
 
-function imageAssetToRenderAsset(asset: ImageAsset): ArtifactRenderAsset | undefined {
-  if (!asset.data) return undefined;
-  return {
-    id: asset.id,
-    imageUrl: asset.imageUrl,
-    ...(asset.originalPageUrl ? { originalPageUrl: asset.originalPageUrl } : {}),
-    mimeType: asset.mimeType,
-    data: asset.data,
-    licenseConfirmed: asset.licenseConfirmed
-  };
-}
-
 async function copyRehomedAssetBinaries(
   mediaCopies: Array<{ sourceStorageKey: string; targetStorageKey: string }>,
   store: ArtifactBinaryStore,
@@ -857,117 +822,27 @@ async function copyRehomedAssetBinaries(
 
 async function resolveRenderAssets(
   generationId: string,
-  spec: ArtifactSpec,
-  snapshot: ArtifactGeneration['snapshot'],
-  store: ArtifactBinaryStore,
-  providers: SqliteImageProviderStore | undefined,
-  fetchImpl: typeof fetch | undefined,
-  signal: AbortSignal
+  store: ArtifactBinaryStore
 ) {
-  let assets = await loadRenderAssets(generationId, store);
-  const sourceAssets = assets.filter((asset) => !asset.imageUrl.startsWith('generated://'));
-  if (sourceAssets.length) {
+  const assets = await loadRenderAssets(generationId, store);
+  if (assets.length) {
     return {
       assets,
       provenance: [{
         kind: 'authorized_source_asset' as const,
-        assetIds: sourceAssets.map((asset) => asset.id),
-        sourceUrls: sourceAssets.map((asset) => asset.imageUrl)
+        assetIds: assets.map((asset) => asset.id),
+        sourceUrls: assets.map((asset) => asset.imageUrl)
       }]
     };
-  }
-
-  // Source consent is the first-choice network path. Every consent is already
-  // bound to this generation; fetching it here never accepts an arbitrary URL.
-  for (const consent of listArtifactImageConsents(generationId)) {
-    throwIfAborted(signal);
-    try {
-      const fetched = await fetchSourceImage({
-        generationId,
-        imageUrl: consent.imageUrl,
-        sourceId: consent.sourceId,
-        ...(spec.branding.logoUrl === consent.imageUrl ? { originalPageUrl: spec.branding.logoUrl } : {}),
-        licenseConfirmed: true
-      }, { fetchImpl, store, signal, persist: false });
-      const transient = imageAssetToRenderAsset(fetched);
-      if (transient) {
-        return {
-          assets: [...assets, transient],
-          provenance: [{
-            kind: 'authorized_source_asset' as const,
-            sourceUrls: [transient.imageUrl],
-            detail: 'Render-only authorized asset; confirmed generation media rows remain immutable'
-          }]
-        };
-      }
-    } catch (error) {
-      // A rejected source is a controlled fallback event, not an artifact
-      // failure. Keep the reason in progress logs without persisting secrets.
-      const message = error instanceof Error ? error.message : 'source image unavailable';
-      // eslint is not configured in this workspace; this callback is optional.
-      void message;
-    }
-  }
-
-  // The provider is the second-choice path. A provider is selected only from
-  // the explicit, encrypted provider registry; no model-supplied endpoint is
-  // ever passed into this call.
-  let providerId: string | undefined;
-  try {
-    providerId = providers?.list().find((provider) => provider.credentialConfigured)?.id;
-  } catch {
-    providerId = undefined;
-  }
-  if (providerId) {
-    try {
-      const generatedAsset = await generateImageAsset({
-        generationId,
-        providerId,
-        prompt: createVisualPrompt(spec, snapshot),
-        providerStore: providers!
-      }, { fetchImpl, store, signal, persist: false });
-      const transient = imageAssetToRenderAsset(generatedAsset);
-      if (transient) {
-        return {
-          assets: [...assets, transient],
-          provenance: [{
-            kind: 'image_provider' as const,
-            providerId,
-            detail: 'Render-only provider asset; confirmed generation media rows remain immutable'
-          }]
-        };
-      }
-    } catch {
-      // Built-in deterministic geometry remains the final visual fallback.
-    }
   }
 
   return {
     assets,
     provenance: [{
       kind: 'builtin_vector_shape' as const,
-      detail: 'Authorized source and configured image provider were unavailable'
+      detail: 'No authorized source asset was available'
     }]
   };
-}
-
-function createVisualPrompt(spec: ArtifactSpec, snapshot: ArtifactGeneration['snapshot']) {
-  return [
-    `Research artifact visual for ${spec.title}`,
-    spec.brief.executiveSummary,
-    snapshot.topic ? `Topic: ${snapshot.topic}` : ''
-  ].filter(Boolean).join('\n').slice(0, 4_000);
-}
-
-function hasConfiguredImageProvider(store: SqliteImageProviderStore | undefined) {
-  if (!store) return false;
-  try {
-    return store.list().some((provider) => provider.credentialConfigured);
-  } catch {
-    // A provider encrypted under an unavailable credential key is not usable
-    // and must not add an extra asynchronous render path.
-    return false;
-  }
 }
 
 function mergeProvenance(...values: Array<ArtifactVisualProvenance[] | undefined>) {

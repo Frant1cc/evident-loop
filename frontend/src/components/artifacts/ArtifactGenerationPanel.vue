@@ -588,7 +588,7 @@ function syncConsentForGeneration(generation: ResearchArtifactGeneration | undef
           <div class="flex flex-wrap items-center gap-2 rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] px-2.5 py-2 text-xs">
             <span class="font-bold uppercase text-[var(--agent-text)]">{{ output.format }}</span>
             <span class="text-[var(--agent-text-muted)]">{{ outputStatusText(output) }}</span>
-            <span v-if="output.provenance?.length" class="text-[10px] text-[var(--agent-text-muted)]">{{ output.provenance.map((item) => item.kind === 'authorized_source_asset' ? '授权来源图' : item.kind === 'image_provider' ? '图片提供商' : '内置形状').join(' / ') }}</span>
+            <span v-if="output.provenance?.length" class="text-[10px] text-[var(--agent-text-muted)]">{{ output.provenance.map((item) => item.kind === 'authorized_source_asset' ? '授权来源图' : '内置形状').join(' / ') }}</span>
             <span v-if="output.renderedSpec" class="text-[10px] text-[var(--agent-text-muted)]">有效 {{ output.format === 'pptx' ? output.renderedSpec.presentation.targetSlideCount + ' 页' : output.renderedSpec.pdf.targetPageCount + ' 页' }}</span>
             <a v-if="output.downloadUrl" :href="output.downloadUrl" class="ml-auto font-bold text-[var(--agent-selected-text)] no-underline">下载</a>
             <a v-if="output.format === 'pdf' && output.previewUrl" :href="output.previewUrl" target="_blank" rel="noreferrer" class="font-bold text-[var(--agent-selected-text)] no-underline">预览 PDF</a>

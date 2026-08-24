@@ -201,8 +201,8 @@ export async function runAgentLoop({
       toolArgumentRetryUsed = true;
       bonusToolRounds += 1;
       const correctionPrompt =
-        requiredToolName === 'generate_word_document'
-          ? 'The generate_word_document arguments were invalid JSON. Retry the tool call once. Use only title, optional metadata/format, and one contentMarkdown string for the complete body. Do not send blocks. Ensure the function arguments are valid JSON and escape any quotation marks inside contentMarkdown.'
+        requiredToolName === 'start_document_generation'
+          ? 'The start_document_generation arguments were invalid JSON. Retry the tool call once with valid JSON matching the tool schema. Ensure the deliverables array is present and each deliverable has documentType and formats.'
           : `The ${requiredToolName} arguments were invalid JSON. Retry the tool call once with valid JSON matching the tool schema.`;
       messages.push({ role: 'system', content: correctionPrompt });
       trace.push({

@@ -8,7 +8,7 @@ import type { LlmProvider } from '../llm/contracts.js';
 import { resolveLlmProvider } from '../llm/provider.js';
 import { appendStreamEvent } from '../streaming/eventStore.js';
 import { publishStreamEvent, subscribeToStream } from '../streaming/eventHub.js';
-import { isExplicitWordDocumentRequest } from '../tools/wordDocumentTool.js';
+import { isExplicitDocumentRequest } from '../tools/wordDocumentTool.js';
 import type { ToolPolicy, ToolRuntime } from '../tools/contracts.js';
 import { normalizeToolPolicy } from '../tools/policy.js';
 import type { OfficialResearchSkill, ResearchSkillSnapshot } from '../skills/contracts.js';
@@ -71,10 +71,7 @@ Rules:
 - Call retrieve_web_evidence at most once per user request. It already performs query rewriting and progressive search internally; a second call would incorrectly reset the quality budget.
 - Treat retrieve_web_evidence.verdict as authoritative: sufficient may support an answer; exhausted may only support a qualified partial answer; empty must not be presented as evidence. Do not simulate lower-level web_search or fetch_page calls.
 - When retrieved sources support a claim, cite their provided keys such as [S1].
-- Call generate_word_document only when the user explicitly asks to generate, export, download, or create a Word/DOCX file. Ordinary requests to summarize, analyze, or write content should remain normal chat replies.
-- For generate_word_document, always put the complete body in contentMarkdown. Never construct a blocks array. Use <!-- pagebreak --> for explicit page breaks.
-- When the user explicitly asks to generate/export/create a PPT, PPTX, or PDF from this research conversation, call start_artifact_generation exactly once. Set formats from that request: ["pptx"] for PPT/PPTX/slides/演示文稿, ["pdf"] for PDF/长篇报告, or ["pptx","pdf"] only when they asked for both. Never default to both. If they asked to generate a file but the format is unclear, ask which format they want instead of calling the tool. The runtime binds the current conversation and research-run scope; do not include conversationId or invent a scope argument. It creates an editable draft only; never render an artifact or claim a file exists before the user confirms the outline.
-- When generate_word_document succeeds, call it only once. The client renders the document card from the structured tool result, so do not include downloadUrl, previewUrl, localhost URLs, Markdown download links, or redundant download instructions in the final answer. Give only a concise content summary when useful.
+- Call start_document_generation when the user explicitly asks to generate, export, download, or create a document file (Word, DOCX, PDF report, PPT, PPTX, or slides). Set deliverables from the user request: presentation with formats ["pptx"] for PPT/PPTX/slides/演示文稿, longform with formats ["docx"] for Word, longform with formats ["pdf"] for PDF reports/长篇报告, or both deliverable types only when they asked for both presentation and report. Never default to all formats. If the format is unclear, ask which format they want instead of calling the tool. The runtime binds the current conversation and research-run scope; do not include conversationId or invent a scope argument. It creates an editable draft only; never render a document or claim a file exists before the user confirms the outline.
 - If a tool fails, explain the failure based on the tool error instead of pretending it succeeded.
 - Stop calling tools once you have enough information to answer.`;
 
@@ -387,8 +384,8 @@ async function executePersistedResearchRun(options: {
       contextManager,
       toolPolicy,
       toolRuntime: options.toolRuntime,
-      requiredToolName: isExplicitWordDocumentRequest(runInput.content)
-        ? 'generate_word_document'
+      requiredToolName: isExplicitDocumentRequest(runInput.content)
+        ? 'start_document_generation'
         : undefined,
       signal: abortController.signal,
       conversationId: run.conversationId,

@@ -1,5 +1,5 @@
 import type { ResearchStep } from '../types/research';
-import type { WordArtifact } from '../types/artifacts';
+import type { ResearchArtifactGeneration } from '../types/artifacts';
 
 export type AuxiliaryStatus = 'idle' | 'running' | 'complete' | 'error';
 
@@ -17,8 +17,7 @@ export type AuxiliaryState = {
  * picks it up automatically.
  */
 export const ARTIFACT_TOOL_LABELS: Record<string, { label: string; activity: string }> = {
-  generate_word_document: { label: '生成的文档', activity: '正在生成文档…' },
-  start_artifact_generation: { label: 'PPT / PDF 大纲', activity: '正在生成大纲…' }
+  start_document_generation: { label: '文档草稿', activity: '正在准备文档草稿…' }
 };
 
 const FALLBACK_LABELS = { label: '附件', activity: '正在加载附件…' };
@@ -39,7 +38,7 @@ function labelsFor(toolName: string) {
  */
 export function buildAuxiliaryState(
   steps: ResearchStep[],
-  artifactsByMessageId: Map<string, WordArtifact[]>
+  generationsByMessageId: Map<string, ResearchArtifactGeneration[]>
 ): Map<string, AuxiliaryState> {
   const states = new Map<string, AuxiliaryState>();
 
@@ -60,18 +59,18 @@ export function buildAuxiliaryState(
     }
   }
 
-  for (const [messageId, artifacts] of artifactsByMessageId) {
+  for (const [messageId, generations] of generationsByMessageId) {
     const existing = states.get(messageId);
     if (existing) {
-      existing.count = artifacts.length;
+      existing.count = generations.length;
       if (existing.status === 'idle') existing.status = 'complete';
     } else {
-      const labels = labelsFor('generate_word_document');
+      const labels = labelsFor('start_document_generation');
       states.set(messageId, {
         status: 'complete',
         label: labels.label,
         activity: labels.activity,
-        count: artifacts.length
+        count: generations.length
       });
     }
   }

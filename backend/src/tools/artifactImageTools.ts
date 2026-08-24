@@ -13,12 +13,6 @@ const fetchSourceImageSchema = z.object({
   consentId: z.string().trim().uuid()
 }).strict();
 
-const generateImageSchema = z.object({
-  generationId: z.string().trim().uuid(),
-  providerId: z.string().trim().uuid(),
-  prompt: z.string().trim().min(1).max(4_000)
-}).strict();
-
 export function createArtifactImageTools(application: ArtifactApplication): ToolModule[] {
   return [
     defineTool({
@@ -28,14 +22,6 @@ export function createArtifactImageTools(application: ArtifactApplication): Tool
       inputSchema: fetchSourceImageSchema,
       annotations: { readOnlyHint: false },
       execute: (args, context) => fetchImage(application, args, context)
-    }),
-    defineTool({
-      label: '生成备用图片',
-      name: 'generate_image',
-      description: 'Generate a visual fallback through the user-configured OpenAI Images-compatible provider. Image failure must not block PPTX/PDF generation. Never expose or log provider credentials.',
-      inputSchema: generateImageSchema,
-      annotations: { readOnlyHint: false },
-      execute: (args, context) => generateImage(application, args, context)
     })
   ];
 }
@@ -45,13 +31,6 @@ async function fetchImage(application: ArtifactApplication, args: unknown, conte
   const conversationId = requireConversationScope(input.generationId, context);
   application.assertGenerationConversation(input.generationId, conversationId);
   return application.fetchSourceImage(input, { signal: context?.signal }, conversationId);
-}
-
-async function generateImage(application: ArtifactApplication, args: unknown, context?: ToolContext) {
-  const input = generateImageSchema.parse(args);
-  const conversationId = requireConversationScope(input.generationId, context);
-  application.assertGenerationConversation(input.generationId, conversationId);
-  return application.generateImage(input, context?.signal, conversationId);
 }
 
 function requireConversationScope(_generationId: string, context?: ToolContext) {

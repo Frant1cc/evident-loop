@@ -5,7 +5,6 @@ export * from './schema.js';
 export * from './snapshot.js';
 export * from './agent.js';
 export * from './binaryStore.js';
-export * from './imageProviders.js';
 export * from './images.js';
 export * from './renderers.js';
 export * from './repository.js';

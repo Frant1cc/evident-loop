@@ -13,6 +13,9 @@ import type {
 } from './types.js';
 import { validateArtifactCitations } from './schema.js';
 import { RendererUnavailableError } from './errors.js';
+import { resolveDocumentSpec } from '../../documents/presets.js';
+import { renderWordDocument } from '../../documents/renderer.js';
+import type { DocumentBlock, DocumentPresetName } from '../../documents/types.js';
 
 export { RendererUnavailableError } from './errors.js';
 
@@ -285,16 +288,57 @@ export class DefaultArtifactQualityInspector implements ArtifactQualityInspector
     if (format === 'pptx' && !result.buffer.subarray(0, 2).equals(Buffer.from('PK'))) {
       diagnostics.push('PPTX output is not a valid ZIP package');
     }
+    if (format === 'docx' && !result.buffer.subarray(0, 2).equals(Buffer.from('PK'))) {
+      diagnostics.push('DOCX output is not a valid ZIP/OOXML package');
+    }
     if (format === 'pdf' && !result.buffer.subarray(0, 4).equals(Buffer.from('%PDF'))) {
       diagnostics.push('PDF output does not have a PDF header');
     }
+
+    // Basic DOCX OOXML structure validation
+    if (format === 'docx') {
+      let AdmZip: any;
+      try {
+        const mod = await importOptional('adm-zip');
+        if (mod) AdmZip = mod.default ?? mod;
+      } catch {
+        AdmZip = null;
+      }
+
+      if (AdmZip && result.buffer.subarray(0, 2).equals(Buffer.from('PK'))) {
+        try {
+          const zip = new AdmZip(result.buffer);
+          const entries = zip.getEntries().map((entry: any) => entry.entryName as string);
+          if (!entries.includes('[Content_Types].xml')) {
+            diagnostics.push('DOCX is missing [Content_Types].xml');
+          }
+          if (!entries.includes('word/document.xml')) {
+            diagnostics.push('DOCX is missing word/document.xml');
+          }
+          if (entries.includes('word/document.xml')) {
+            const docXml = zip.readAsText('word/document.xml');
+            if (!docXml.includes(spec.title.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c] ?? c)))) {
+              diagnostics.push('DOCX document.xml does not include the title');
+            }
+          }
+        } catch (error) {
+          diagnostics.push(`DOCX structure validation failed: ${error instanceof Error ? error.message : 'unknown'}`);
+        }
+      }
+    }
+
     const snapshot = context?.snapshot;
     if (snapshot) {
       diagnostics.push(...validateArtifactCitationsAgainstSnapshot(spec, snapshot));
     } else {
       diagnostics.push(...validateArtifactCitations(spec).map((key) => `Unknown citation key in spec: ${key}`));
     }
-    diagnostics.push(...validateLayoutManifest(format, result.layoutManifest, spec));
+    // PPTX and PDF renderers produce page geometry that can be checked for
+    // clipping and overlap. DOCX is a reflowable OOXML document, so requiring
+    // the same fixed-page manifest would reject an otherwise valid Word file.
+    if (format !== 'docx') {
+      diagnostics.push(...validateLayoutManifest(format, result.layoutManifest, spec));
+    }
     return { ok: diagnostics.length === 0, diagnostics };
   }
 }
@@ -352,9 +396,65 @@ function overlapRatio(left: ArtifactLayoutBox, right: ArtifactLayoutBox) {
   return intersection / Math.min(left.width * left.height, right.width * right.height);
 }
 
+export class DefaultDocxRenderer implements ArtifactRenderer {
+  async render(spec: ArtifactSpec, _snapshot: ResearchSnapshot, context?: RendererContext): Promise<RendererResult> {
+    throwIfAborted(context?.signal);
+    const blocks: DocumentBlock[] = [
+      { type: 'heading', level: 1, text: '执行摘要' },
+      { type: 'paragraph', text: spec.brief.executiveSummary },
+      ...spec.pdf.sections.flatMap<DocumentBlock>((section) => [
+        { type: 'heading', level: 1, text: section.title },
+        ...section.paragraphs.map((text): DocumentBlock => ({ type: 'paragraph', text })),
+        ...(section.bullets.length
+          ? [{ type: 'bulletList', items: section.bullets } satisfies DocumentBlock]
+          : [])
+      ]),
+      ...(spec.brief.keyFindings.length
+        ? [
+            { type: 'heading', level: 1, text: '主要结论' } satisfies DocumentBlock,
+            { type: 'bulletList', items: spec.brief.keyFindings } satisfies DocumentBlock
+          ]
+        : []),
+      ...(spec.brief.recommendations.length
+        ? [
+            { type: 'heading', level: 1, text: '建议' } satisfies DocumentBlock,
+            { type: 'numberedList', items: spec.brief.recommendations } satisfies DocumentBlock
+          ]
+        : [])
+    ];
+    const presetByTheme: Record<ArtifactSpec['theme'], DocumentPresetName> = {
+      research: 'research-report',
+      technical: 'technical-report',
+      business: 'business-report'
+    };
+    const resolved = resolveDocumentSpec({
+      fileName: `${safeFileStem(spec.title)}.docx`,
+      title: spec.title,
+      subtitle: spec.audience,
+      author: 'EvidentLoop',
+      blocks,
+      format: {
+        preset: presetByTheme[spec.theme],
+        ...(spec.branding.primaryColor ? { primaryColor: spec.branding.primaryColor } : {}),
+        ...(spec.branding.titleFont ? { titleFont: spec.branding.titleFont } : {}),
+        ...(spec.branding.bodyFont ? { bodyFont: spec.branding.bodyFont } : {})
+      }
+    });
+    const buffer = await renderWordDocument(resolved);
+    context?.onProgress?.('Word document rendered');
+    return {
+      buffer,
+      fileName: resolved.fileName,
+      contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      renderedSpec: spec
+    };
+  }
+}
+
 export function createDefaultRenderers() {
   return {
     pptx: new DefaultPptxRenderer(),
+    docx: new DefaultDocxRenderer(),
     pdf: new DefaultPdfRenderer()
   } satisfies Record<ArtifactFormat, ArtifactRenderer>;
 }
@@ -640,7 +740,7 @@ function throwIfAborted(signal?: AbortSignal) {
   throw signal.reason instanceof Error ? signal.reason : new Error('Artifact generation cancelled');
 }
 
-async function importOptional(name: 'pptxgenjs' | 'playwright'): Promise<any | undefined> {
+async function importOptional(name: 'pptxgenjs' | 'playwright' | 'adm-zip'): Promise<any | undefined> {
   try {
     // Keep renderers optional so the backend can start and report a structured
     // preflight diagnostic on machines without Chromium tooling.

@@ -581,7 +581,7 @@ function parseProvenance(value: string | null): ArtifactVisualProvenance[] {
     return parsed.filter((item): item is ArtifactVisualProvenance => {
       if (!item || typeof item !== 'object') return false;
       const kind = (item as { kind?: unknown }).kind;
-      return kind === 'authorized_source_asset' || kind === 'image_provider' || kind === 'builtin_vector_shape';
+      return kind === 'authorized_source_asset' || kind === 'builtin_vector_shape';
     });
   } catch {
     return [];

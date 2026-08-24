@@ -30,7 +30,7 @@ export class ArtifactPlanningError extends Error {
 
 export type ArtifactAgent = {
   plan: (snapshot: ResearchSnapshot, preferences?: ArtifactPreferences, signal?: AbortSignal) => Promise<ArtifactSpec>;
-  repair: (spec: ArtifactSpec, format: 'pptx' | 'pdf', diagnostics: string[], signal?: AbortSignal) => Promise<ArtifactSpec>;
+  repair: (spec: ArtifactSpec, format: ArtifactFormat, diagnostics: string[], signal?: AbortSignal) => Promise<ArtifactSpec>;
   /**
    * Execute one deterministic output attempt under the agent's narrow seams.
    * The service owns persistence and retry state; the agent owns the explicit
@@ -116,7 +116,7 @@ async function planArtifact(
 async function repairArtifact(
   options: { llm?: ArtifactTextModel; model: string },
   spec: ArtifactSpec,
-  format: 'pptx' | 'pdf',
+  format: ArtifactFormat,
   diagnostics: string[],
   signal: AbortSignal | undefined
 ) {

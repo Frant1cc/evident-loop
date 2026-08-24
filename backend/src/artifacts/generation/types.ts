@@ -12,7 +12,7 @@ export const artifactStatuses = [
 ] as const;
 
 export type ArtifactStatus = (typeof artifactStatuses)[number];
-export type ArtifactFormat = 'pptx' | 'pdf';
+export type ArtifactFormat = 'pptx' | 'docx' | 'pdf';
 export type ArtifactOutputStatus =
   | 'pending'
   | 'rendering'
@@ -171,7 +171,7 @@ export type ArtifactOutput = {
 };
 
 export type ArtifactVisualProvenance = {
-  kind: 'authorized_source_asset' | 'image_provider' | 'builtin_vector_shape';
+  kind: 'authorized_source_asset' | 'builtin_vector_shape';
   assetIds?: string[];
   providerId?: string;
   sourceUrls?: string[];
@@ -314,4 +314,120 @@ export type ArtifactBinaryStore = {
   put: (key: string, buffer: Buffer) => Promise<void>;
   get: (key: string) => Promise<Buffer | null>;
   delete: (key: string) => Promise<void>;
+};
+
+// ============================================================================
+// Phase 1: Unified Document Generation Types
+// ============================================================================
+
+export type DocumentType = 'presentation' | 'longform';
+export type DocumentOutputFormat = 'pptx' | 'docx' | 'pdf';
+export type DocumentTheme = 'research' | 'technical' | 'business';
+export type LongformOutputFormat = 'docx' | 'pdf';
+
+export type DocumentBranding = {
+  primaryColor?: string;
+  logoUrl?: string;
+  titleFont?: string;
+  bodyFont?: string;
+};
+
+export type LongformBlock =
+  | {
+      id: string;
+      type: 'heading';
+      level: 1 | 2 | 3;
+      text: string;
+      citations: string[];
+    }
+  | {
+      id: string;
+      type: 'paragraph';
+      text: string;
+      alignment?: 'left' | 'center' | 'right' | 'justify';
+      citations: string[];
+    }
+  | {
+      id: string;
+      type: 'bulletList';
+      items: string[];
+      citations: string[];
+    }
+  | {
+      id: string;
+      type: 'numberedList';
+      items: string[];
+      citations: string[];
+    }
+  | {
+      id: string;
+      type: 'table';
+      headers: string[];
+      rows: string[][];
+      citations: string[];
+    }
+  | {
+      id: string;
+      type: 'pageBreak';
+      citations: [];
+    };
+
+export type PresentationDeliverable = {
+  id: string;
+  documentType: 'presentation';
+  formats: ['pptx'];
+  targetSlideCount: number;
+  slides: PresentationSlide[];
+};
+
+export type LongformDeliverable = {
+  id: string;
+  documentType: 'longform';
+  formats: Array<'docx' | 'pdf'>;
+  subtitle?: string;
+  author?: string;
+  targetPageCount: number;
+  page: {
+    size: 'A4' | 'LETTER';
+    orientation: 'portrait' | 'landscape';
+    margins: {
+      top: number;
+      right: number;
+      bottom: number;
+      left: number;
+    };
+    showHeader: boolean;
+    headerText?: string;
+    footerText?: string;
+    showPageNumber: boolean;
+  };
+  blocks: LongformBlock[];
+};
+
+export type DocumentGenerationSpec = {
+  title: string;
+  audience: string;
+  theme: DocumentTheme;
+  branding: DocumentBranding;
+  brief: ResearchBrief;
+  deliverables: Array<PresentationDeliverable | LongformDeliverable>;
+};
+
+export type DocumentGenerationPreferences = {
+  title?: string;
+  audience?: string;
+  theme?: DocumentTheme;
+  branding?: DocumentBranding;
+  deliverables: Array<
+    | {
+        documentType: 'presentation';
+        formats: ['pptx'];
+        targetSlideCount?: number;
+      }
+    | {
+        documentType: 'longform';
+        formats: Array<'docx' | 'pdf'>;
+        targetPageCount?: number;
+      }
+  >;
 };

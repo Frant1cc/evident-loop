@@ -292,7 +292,7 @@ export const initDb = () => {
       id TEXT PRIMARY KEY,
       generation_id TEXT NOT NULL,
       version INTEGER NOT NULL CHECK (version > 0),
-      format TEXT NOT NULL CHECK (format IN ('pptx', 'pdf')),
+      format TEXT NOT NULL CHECK (format IN ('pptx', 'docx', 'pdf')),
       status TEXT NOT NULL CHECK (status IN ('pending', 'rendering', 'validating', 'completed', 'failed', 'cancelled')),
       file_name TEXT,
       content_type TEXT,
@@ -347,16 +347,6 @@ export const initDb = () => {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS research_artifact_image_consents_unique_idx
     ON research_artifact_image_consents(generation_id, image_url);
-
-    CREATE TABLE IF NOT EXISTS artifact_image_providers (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      base_url TEXT NOT NULL,
-      model TEXT NOT NULL,
-      encrypted_api_key TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
 
     CREATE TABLE IF NOT EXISTS agent_tasks (
       id TEXT PRIMARY KEY,
@@ -592,6 +582,7 @@ export const initDb = () => {
   ensureColumn('research_artifact_outputs', 'rendered_spec_digest', 'TEXT');
   ensureColumn('research_artifact_outputs', 'progress', 'TEXT');
   migrateArtifactStatusConstraint();
+  migrateArtifactOutputFormatConstraint();
   ensureArtifactDraftRequestSchema();
 
 // Existing local databases predate durable context state and native tool-call replay.
@@ -659,7 +650,7 @@ function migrateArtifactStatusConstraint() {
         id TEXT PRIMARY KEY,
         generation_id TEXT NOT NULL,
         version INTEGER NOT NULL CHECK (version > 0),
-        format TEXT NOT NULL CHECK (format IN ('pptx', 'pdf')),
+        format TEXT NOT NULL CHECK (format IN ('pptx', 'docx', 'pdf')),
         status TEXT NOT NULL CHECK (status IN ('pending', 'rendering', 'validating', 'completed', 'failed', 'cancelled')),
         file_name TEXT,
         content_type TEXT,
@@ -733,6 +724,54 @@ function migrateArtifactStatusConstraint() {
         ON research_artifact_assets(generation_id, created_at);
       CREATE UNIQUE INDEX research_artifact_image_consents_unique_idx
         ON research_artifact_image_consents(generation_id, image_url);
+    `);
+  });
+  rebuild();
+}
+
+/**
+ * Migrate the research_artifact_outputs format CHECK to include 'docx'.
+ * The table is rebuilt atomically to preserve all constraints and indexes.
+ * Data is preserved; only the CHECK constraint changes.
+ */
+function migrateArtifactOutputFormatConstraint() {
+  const row = sqlite.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'research_artifact_outputs'").get() as { sql?: string } | undefined;
+  if (!row?.sql || row.sql.includes("'docx'")) return;
+
+  const rebuild = sqlite.transaction(() => {
+    sqlite.exec(`
+      DROP INDEX IF EXISTS research_artifact_outputs_generation_status_idx;
+      ALTER TABLE research_artifact_outputs RENAME TO research_artifact_outputs_pre_docx;
+      CREATE TABLE research_artifact_outputs (
+        id TEXT PRIMARY KEY,
+        generation_id TEXT NOT NULL,
+        version INTEGER NOT NULL CHECK (version > 0),
+        format TEXT NOT NULL CHECK (format IN ('pptx', 'docx', 'pdf')),
+        status TEXT NOT NULL CHECK (status IN ('pending', 'rendering', 'validating', 'completed', 'failed', 'cancelled')),
+        file_name TEXT,
+        content_type TEXT,
+        size INTEGER CHECK (size IS NULL OR size >= 0),
+        storage_key TEXT,
+        preview_key TEXT,
+        provenance_json TEXT,
+        rendered_spec_json TEXT,
+        rendered_spec_digest TEXT,
+        error TEXT,
+        diagnostics_json TEXT,
+        progress TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (generation_id) REFERENCES research_artifacts(id) ON DELETE CASCADE,
+        UNIQUE (generation_id, format)
+      );
+      INSERT INTO research_artifact_outputs
+        (id, generation_id, version, format, status, file_name, content_type, size, storage_key, preview_key, provenance_json, rendered_spec_json, rendered_spec_digest, error, diagnostics_json, progress, attempts, created_at, updated_at)
+        SELECT id, generation_id, version, format, status, file_name, content_type, size, storage_key, preview_key, provenance_json, rendered_spec_json, rendered_spec_digest, error, diagnostics_json, progress, attempts, created_at, updated_at
+        FROM research_artifact_outputs_pre_docx;
+      DROP TABLE research_artifact_outputs_pre_docx;
+      CREATE INDEX research_artifact_outputs_generation_status_idx
+        ON research_artifact_outputs(generation_id, status);
     `);
   });
   rebuild();

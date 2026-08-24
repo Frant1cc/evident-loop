@@ -242,7 +242,9 @@ function registerGenerationRoutes(router: Router, generation: ArtifactApplicatio
     }
     const previewContentType = action === 'preview' && output.format === 'pptx'
       ? 'image/png'
-      : output.contentType ?? 'application/octet-stream';
+      : action === 'preview' && output.format === 'docx'
+        ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        : output.contentType ?? 'application/octet-stream';
     res.setHeader('Content-Type', previewContentType);
     res.setHeader('Content-Length', String(payload.buffer.byteLength));
     res.setHeader('Cache-Control', 'private, no-store');
@@ -250,40 +252,6 @@ function registerGenerationRoutes(router: Router, generation: ArtifactApplicatio
     res.send(payload.buffer);
   });
 
-  router.get('/artifact-image-providers', (_req, res) => {
-    res.json({ code: 1, message: 'success', data: { providers: generation.listImageProviders() } });
-  });
-
-  router.post('/artifact-image-providers', (req, res) => {
-    if (req.body?.id !== undefined && (typeof req.body.id !== 'string' || !isOpaqueId(req.body.id))) {
-      res.status(400).json(failure('Image provider id is invalid'));
-      return;
-    }
-    try {
-      const provider = generation.saveImageProvider({
-        id: typeof req.body?.id === 'string' ? req.body.id : undefined,
-        name: String(req.body?.name ?? ''),
-        baseUrl: String(req.body?.baseUrl ?? ''),
-        model: String(req.body?.model ?? ''),
-        apiKey: typeof req.body?.apiKey === 'string' ? req.body.apiKey : undefined
-      });
-      res.status(201).json({ code: 1, message: 'Image provider saved', data: { provider } });
-    } catch (error) {
-      respondArtifactError(res, error, 400);
-    }
-  });
-
-  router.delete('/artifact-image-providers/:providerId', (req, res) => {
-    if (!isOpaqueId(req.params.providerId)) {
-      res.status(404).json(failure('Image provider not found'));
-      return;
-    }
-    if (!generation.deleteImageProvider(req.params.providerId)) {
-      res.status(404).json(failure('Image provider not found'));
-      return;
-    }
-    res.json({ code: 1, message: 'Image provider deleted', data: { deleted: true } });
-  });
 }
 
 function respondArtifactError(res: Response, error: unknown, defaultStatus = 400) {

@@ -244,16 +244,6 @@ export const researchArtifactImageConsents = sqliteTable('research_artifact_imag
   confirmedAt: text('confirmed_at').notNull()
 });
 
-export const artifactImageProviders = sqliteTable('artifact_image_providers', {
-  id: text('id').primaryKey(),
-  name: text('name').notNull(),
-  baseUrl: text('base_url').notNull(),
-  model: text('model').notNull(),
-  encryptedApiKey: text('encrypted_api_key').notNull(),
-  createdAt: text('created_at').notNull(),
-  updatedAt: text('updated_at').notNull()
-});
-
 export const agentTasks = sqliteTable('agent_tasks', {
   id: text('id').primaryKey(),
   goal: text('goal').notNull(),

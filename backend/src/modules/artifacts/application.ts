@@ -1,11 +1,7 @@
 import type { LlmProvider } from '../../llm/contracts.js';
 import {
   createArtifactGenerationService,
-  imageProviderStore,
-  createImageProviderStore,
-  type ImageProviderInput,
-  type ArtifactGenerationService,
-  type SqliteImageProviderStore
+  type ArtifactGenerationService
 } from '../../artifacts/generation/index.js';
 
 export type ArtifactApplicationDependencies = {
@@ -13,18 +9,15 @@ export type ArtifactApplicationDependencies = {
   model: string;
   artifactModel?: string;
   generationService?: ArtifactGenerationService;
-  imageProviders?: SqliteImageProviderStore;
   isResearchConversationActive?: (conversationId: string) => boolean;
 };
 
 /** Public use-case interface for draft/confirm/rendered research artifacts. */
 export function createArtifactApplication(dependencies: ArtifactApplicationDependencies) {
-  const providers = dependencies.imageProviders ?? imageProviderStore;
   const generation = dependencies.generationService ?? createArtifactGenerationService({
     llm: dependencies.llm,
     model: dependencies.artifactModel?.trim() || dependencies.model,
-    isResearchConversationActive: dependencies.isResearchConversationActive,
-    imageProviders: providers
+    isResearchConversationActive: dependencies.isResearchConversationActive
   });
   return {
     createDraft: generation.createDraft,
@@ -52,17 +45,8 @@ export function createArtifactApplication(dependencies: ArtifactApplicationDepen
     fetchSourceImage: (input: Parameters<typeof generation.fetchSourceImage>[0], options: { signal?: AbortSignal } = {}, conversationId?: string) => {
       if (conversationId) generation.assertGenerationConversation(input.generationId, conversationId);
       return generation.fetchSourceImage(input, options);
-    },
-    generateImage: (input: { generationId: string; providerId: string; prompt: string }, signal?: AbortSignal, conversationId?: string) => {
-      if (conversationId) generation.assertGenerationConversation(input.generationId, conversationId);
-      return generation.generateImage(input, signal);
-    },
-    listImageProviders: () => providers.list(),
-    saveImageProvider: (input: ImageProviderInput) => providers.save(input),
-    deleteImageProvider: (id: string) => providers.delete(id)
+    }
   };
 }
 
 export type ArtifactApplication = ReturnType<typeof createArtifactApplication>;
-
-export { createImageProviderStore };

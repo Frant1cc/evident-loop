@@ -99,7 +99,7 @@ const brandingSchema = z.object({
 
 const artifactFormatsSchema = z.preprocess(
   (value) => normalizeArtifactFormats(value) ?? ['pptx', 'pdf'],
-  z.array(z.enum(['pptx', 'pdf'])).min(1).max(2)
+  z.array(z.enum(['pptx', 'docx', 'pdf'])).min(1).max(3)
 );
 
 export const artifactSpecSchema = z.object({
@@ -120,7 +120,7 @@ export const artifactPreferencesSchema = z.object({
   targetSlideCount: z.number().int().min(8).max(15).optional(),
   targetPageCount: z.number().int().min(6).max(20).optional(),
   branding: brandingSchema.optional(),
-  formats: z.array(z.enum(['pptx', 'pdf'])).min(1).max(2).optional()
+  formats: z.array(z.enum(['pptx', 'docx', 'pdf'])).min(1).max(3).optional()
 }).strict();
 
 export type ArtifactPlanModelOutput = {

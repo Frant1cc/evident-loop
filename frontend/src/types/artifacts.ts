@@ -27,7 +27,7 @@ export type ArtifactOutput = {
   id: string;
   generationId: string;
   version: number;
-  format: 'pptx' | 'pdf';
+  format: 'pptx' | 'pdf' | 'docx';
   status: ArtifactOutputStatus;
   fileName?: string;
   contentType?: string;
@@ -37,7 +37,7 @@ export type ArtifactOutput = {
   renderedSpec?: ArtifactSpec;
   renderedSpecDigest?: string;
   provenance?: Array<{
-    kind: 'authorized_source_asset' | 'image_provider' | 'builtin_vector_shape';
+    kind: 'authorized_source_asset' | 'builtin_vector_shape';
     assetIds?: string[];
     providerId?: string;
     sourceUrls?: string[];
@@ -79,6 +79,26 @@ export type ArtifactBranding = {
   bodyFont?: string;
 };
 
+export type LongformBlock =
+  | { id: string; type: 'heading'; level: 1 | 2 | 3; text: string; citations: string[] }
+  | { id: string; type: 'paragraph'; text: string; citations: string[] }
+  | { id: string; type: 'bulletList'; items: string[]; citations: string[] }
+  | { id: string; type: 'numberedList'; items: string[]; citations: string[] }
+  | { id: string; type: 'table'; headers: string[]; rows: string[][]; citations: string[] }
+  | { id: string; type: 'pageBreak' };
+
+export type LongformPageSettings = {
+  size: 'A4' | 'Letter';
+  orientation: 'portrait' | 'landscape';
+  marginTop: number;
+  marginBottom: number;
+  marginLeft: number;
+  marginRight: number;
+  header?: string;
+  footer?: string;
+  pageNumbers: boolean;
+};
+
 export type ArtifactSpec = {
   title: string;
   audience: string;
@@ -100,8 +120,9 @@ export type ArtifactSpec = {
     citations: Array<{ citationKey: string; sourceId: string; title: string; locator?: string }>;
   };
   presentation: { slides: ArtifactSlide[]; targetSlideCount: number };
+  longform: { blocks: LongformBlock[]; pageSettings: LongformPageSettings };
   pdf: { sections: Array<{ id: string; title: string; paragraphs: string[]; bullets: string[]; citations: string[] }>; targetPageCount: number };
-  formats: Array<'pptx' | 'pdf'>;
+  formats: Array<'pptx' | 'pdf' | 'docx'>;
 };
 
 export type ResearchArtifactGeneration = {

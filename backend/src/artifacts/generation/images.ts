@@ -7,7 +7,6 @@ import { Readable } from 'node:stream';
 import { sqlite } from '../../db.js';
 import { artifactBinaryStore } from './binaryStore.js';
 import type { ArtifactBinaryStore } from './types.js';
-import type { SqliteImageProviderStore } from './imageProviders.js';
 
 export const imageLimits = {
   maxBytes: 10 * 1024 * 1024,
@@ -152,52 +151,6 @@ export async function fetchSourceImage(input: {
   } satisfies ImageAsset;
 }
 
-export async function generateImageAsset(input: {
-  generationId: string;
-  providerId: string;
-  prompt: string;
-  providerStore: SqliteImageProviderStore;
-}, options: ImageFetchOptions = {}) {
-  assertPersistableGeneration(input.generationId, options.persist !== false);
-  const provider = input.providerStore.get(input.providerId);
-  const apiKey = input.providerStore.getCredential(input.providerId);
-  if (!provider || !apiKey) throw new ImageAssetError('Image provider is unavailable or credentials are not configured');
-  const providerUrl = validateImageUrl(provider.baseUrl);
-  const body = JSON.stringify({ model: provider.model, prompt: input.prompt, response_format: 'b64_json' });
-  const response = await fetchProviderResponse(
-    `${providerUrl}/images/generations`,
-    apiKey,
-    body,
-    options
-  );
-  if (!response.ok) throw new ImageAssetError(`Image provider failed with status ${response.status}`);
-  let payload: { data?: Array<{ b64_json?: string; url?: string }> };
-  try {
-    const providerResponseLimit = options.maxBytes === undefined
-      ? Math.min(imageLimits.maxBytes * 2, 32 * 1024 * 1024)
-      : options.maxBytes;
-    payload = JSON.parse((await readResponseBodyWithLimit(response, providerResponseLimit, options.signal)).toString('utf8')) as { data?: Array<{ b64_json?: string; url?: string }> };
-  } catch (error) {
-    if (error instanceof ImageAssetError) throw error;
-    throw new ImageAssetError('Image provider returned an invalid response');
-  }
-  const first = payload.data?.[0];
-  if (first?.b64_json) {
-    const buffer = Buffer.from(first.b64_json, 'base64');
-    return saveGeneratedImage(
-      input.generationId,
-      buffer,
-      options.store ?? artifactBinaryStore,
-      options.persist !== false,
-      options.beforePersist
-    );
-  }
-  if (first?.url) {
-    return fetchSourceImage({ generationId: input.generationId, imageUrl: first.url, licenseConfirmed: true }, options);
-  }
-  throw new ImageAssetError('Image provider returned no image');
-}
-
 export function validateImageUrl(value: string) {
   let parsed: URL;
   try {
@@ -231,38 +184,6 @@ async function rejectPrivateHost(value: string) {
     if (error instanceof ImageAssetError) throw error;
     // DNS failures are left to fetch so local adapters/tests can supply a fake fetch.
   }
-}
-
-async function fetchProviderResponse(
-  value: string,
-  apiKey: string,
-  body: string,
-  options: ImageFetchOptions
-) {
-  let currentUrl = validateImageUrl(value);
-  let response: Response | undefined;
-  for (let redirect = 0; redirect <= imageLimits.maxRedirects; redirect += 1) {
-    // Resolve and validate every hop. A provider must not redirect a safe
-    // configured endpoint into a private network or a non-HTTPS URL.
-    await rejectPrivateHost(currentUrl);
-    response = options.fetchImpl
-      ? await options.fetchImpl(currentUrl, {
-          method: 'POST',
-          redirect: 'manual',
-          signal: options.signal,
-          headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
-          body
-        })
-      : await pinnedHttpsFetch(currentUrl, options.signal, {
-          authorization: `Bearer ${apiKey}`,
-          'content-type': 'application/json'
-        }, 'POST', body);
-    if (response.status < 300 || response.status >= 400) return response;
-    // A provider POST carries a bearer credential. Reject every redirect so
-    // it can never be replayed to another origin.
-    throw new ImageAssetError('Image provider POST redirects are not allowed');
-  }
-  throw new ImageAssetError('Image provider redirect limit exceeded');
 }
 
 async function pinnedHttpsFetch(
@@ -398,56 +319,6 @@ function readJpegDimensions(buffer: Buffer) {
     offset += 2 + length;
   }
   return undefined;
-}
-
-async function saveGeneratedImage(
-  generationId: string,
-  buffer: Buffer,
-  store: ArtifactBinaryStore,
-  persist = true,
-  beforePersist?: () => void | Promise<void>
-) {
-  if (buffer.byteLength > imageLimits.maxBytes) throw new ImageAssetError('Generated image exceeds byte limit');
-  const dimensions = readImageDimensions('image/png', buffer);
-  if (!dimensions || dimensions.width <= 0 || dimensions.height <= 0 || dimensions.width * dimensions.height > imageLimits.maxPixels) {
-    throw new ImageAssetError('Generated image dimensions could not be verified');
-  }
-  const id = randomUUID();
-  const storageKey = `assets/${generationId}/${id}`;
-  if (persist) {
-    await beforePersist?.();
-    await store.put(storageKey, buffer);
-    try {
-      await beforePersist?.();
-    } catch (error) {
-      await store.delete(storageKey);
-      throw error;
-    }
-  }
-  const now = new Date().toISOString();
-  if (persist) {
-    try {
-      sqlite.prepare(`INSERT INTO research_artifact_assets
-        (id, generation_id, image_url, license_confirmed, mime_type, byte_size, pixel_width, pixel_height, storage_key, created_at)
-        VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`)
-        .run(id, generationId, 'generated://provider', 'image/png', buffer.byteLength, dimensions.width, dimensions.height, storageKey, now);
-    } catch (error) {
-      await store.delete(storageKey);
-      throw error;
-    }
-  }
-  return {
-    id,
-    generationId,
-    imageUrl: 'generated://provider',
-    licenseConfirmed: true,
-    mimeType: 'image/png',
-    byteSize: buffer.byteLength,
-    pixelWidth: dimensions.width,
-    pixelHeight: dimensions.height,
-    storageKey,
-    ...(persist ? {} : { data: buffer })
-  } satisfies ImageAsset;
 }
 
 function throwIfAborted(signal?: AbortSignal) {

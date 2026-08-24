@@ -5,36 +5,26 @@ import { PhArrowDown, PhCode, PhFileText, PhSparkle } from '@phosphor-icons/vue'
 import { Button } from '@/components/ui/button';
 import AgentMessage from '../agent/AgentMessage.vue';
 import ConversationHistoryRail from '../conversation/ConversationHistoryRail.vue';
-import WordArtifactCard from '../documents/WordArtifactCard.vue';
-import ArtifactGenerationPanel from '../artifacts/ArtifactGenerationPanel.vue';
+import DocumentStatusCard from '../documents/DocumentStatusCard.vue';
 import { useMessageAutoScroll } from '../../composables/useMessageAutoScroll';
-import type { WordArtifact } from '../../types/artifacts';
-import type { ResearchMessage, ResearchStep } from '../../types/research';
+import type { ArtifactOutput, ResearchArtifactGeneration } from '../../types/artifacts';
+import type { ResearchMessage } from '../../types/research';
 import type { AuxiliaryState } from '../../lib/auxiliaryState';
 
 const props = defineProps<{
   conversationId?: string;
   messages: ResearchMessage[];
-  steps?: ResearchStep[];
-  artifactsByMessageId: Map<string, WordArtifact[]>;
+  generationsByMessageId: Map<string, ResearchArtifactGeneration[]>;
   auxiliaryStateByMessageId?: Map<string, AuxiliaryState>;
-  artifactEnabled?: boolean;
 }>();
-
-const artifactHostMessageId = computed(() => {
-  const steps = props.steps ?? [];
-  for (let index = steps.length - 1; index >= 0; index -= 1) {
-    const step = steps[index];
-    if (step?.type !== 'tool' || step.title !== 'start_artifact_generation') continue;
-    if (props.messages.some((message) => message.id === step.messageId)) return step.messageId;
-  }
-  return [...props.messages].reverse().find((message) => message.role === 'assistant')?.id
-    ?? props.messages.at(-1)?.id;
-});
 
 const emit = defineEmits<{
   citation: [key: string];
-  preview: [artifact: WordArtifact];
+  'open-workbench': [generation: ResearchArtifactGeneration];
+  'preview-output': [output: ArtifactOutput];
+  generate: [generation: ResearchArtifactGeneration];
+  cancel: [generation: ResearchArtifactGeneration];
+  'retry-output': [generation: ResearchArtifactGeneration, outputId: string];
 }>();
 
 const messageSignature = computed(() => {
@@ -159,10 +149,7 @@ defineExpose({ scrollContainer });
           v-for="message in messages"
           :key="message.id"
           :data-research-message-id="message.id"
-          class="min-w-0 shrink-0"
-          :class="message.id === artifactHostMessageId
-            ? ''
-            : '[contain-intrinsic-size:auto_10rem] [content-visibility:auto]'"
+          class="min-w-0 shrink-0 [contain-intrinsic-size:auto_10rem] [content-visibility:auto]"
         >
           <AgentMessage
             :message="message"
@@ -174,21 +161,18 @@ defineExpose({ scrollContainer });
             @citation="emit('citation', $event)"
           >
             <template #auxiliary>
-              <WordArtifactCard
-                v-for="artifact in artifactsByMessageId.get(message.id) ?? []"
-                :key="artifact.artifactId"
-                :artifact="artifact"
-                @preview="emit('preview', $event)"
+              <DocumentStatusCard
+                v-for="generation in generationsByMessageId.get(message.id) ?? []"
+                :key="generation.id"
+                :generation="generation"
+                @open-workbench="emit('open-workbench', generation)"
+                @preview="emit('preview-output', $event)"
+                @generate="emit('generate', generation)"
+                @cancel="emit('cancel', generation)"
+                @retry="emit('retry-output', generation, $event)"
               />
             </template>
           </AgentMessage>
-          <ArtifactGenerationPanel
-            v-if="message.id === artifactHostMessageId"
-            class="mt-3"
-            :conversation-id="conversationId"
-            :messages="messages"
-            :enabled="artifactEnabled !== false"
-          />
         </div>
       </div>
     </div>

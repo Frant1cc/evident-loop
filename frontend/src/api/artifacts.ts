@@ -9,30 +9,8 @@ export type ArtifactDraftPreferences = {
   targetSlideCount?: number;
   targetPageCount?: number;
   branding?: ArtifactBranding;
-  formats?: Array<'pptx' | 'pdf'>;
+  formats?: Array<'pptx' | 'pdf' | 'docx'>;
 };
-
-export type ImageProvider = {
-  id: string;
-  name: string;
-  baseUrl: string;
-  model: string;
-  credentialConfigured: boolean;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export function listArtifactImageProviders() {
-  return request<{ providers: ImageProvider[] }>('/api/artifact-image-providers');
-}
-
-export function saveArtifactImageProvider(input: { id?: string; name: string; baseUrl: string; model: string; apiKey?: string }) {
-  return request<{ provider: ImageProvider }>('/api/artifact-image-providers', { method: 'POST', body: input });
-}
-
-export function deleteArtifactImageProvider(id: string) {
-  return request<{ deleted: boolean }>(`/api/artifact-image-providers/${encodeURIComponent(id)}`, { method: 'DELETE' });
-}
 
 export function listResearchArtifactGenerations(conversationId: string) {
   return request<{ generations: ResearchArtifactGeneration[] }>(
@@ -56,7 +34,7 @@ export function getResearchArtifactGeneration(id: string) {
 export function updateResearchArtifactDraft(id: string, spec: ArtifactSpec) {
   return request<{ generation: ResearchArtifactGeneration }>(
     `/api/artifacts/generations/${encodeURIComponent(id)}`,
-    { method: 'PATCH', body: { spec } }
+    { method: 'PATCH', body: { spec: serializeArtifactSpec(spec) } }
   );
 }
 
@@ -120,6 +98,58 @@ export function retryResearchArtifactOutput(id: string) {
     `/api/artifacts/outputs/${encodeURIComponent(id)}/retry`,
     { method: 'POST' }
   );
+}
+
+function serializeArtifactSpec(spec: ArtifactSpec) {
+  const { longform, ...persisted } = spec;
+  if (!longform) return persisted;
+
+  const sections: ArtifactSpec['pdf']['sections'] = [];
+  let current: ArtifactSpec['pdf']['sections'][number] | undefined;
+  const ensureSection = () => {
+    if (!current) {
+      current = { id: `section-${sections.length + 1}`, title: '正文', paragraphs: [], bullets: [], citations: [] };
+      sections.push(current);
+    }
+    return current;
+  };
+
+  for (const block of longform.blocks) {
+    if (block.type === 'heading') {
+      current = {
+        id: block.id,
+        title: block.text || '未命名章节',
+        paragraphs: [],
+        bullets: [],
+        citations: [...block.citations]
+      };
+      sections.push(current);
+    } else if (block.type === 'paragraph') {
+      ensureSection().paragraphs.push(block.text);
+      ensureSection().citations.push(...block.citations);
+    } else if (block.type === 'bulletList' || block.type === 'numberedList') {
+      ensureSection().bullets.push(...block.items);
+      ensureSection().citations.push(...block.citations);
+    } else if (block.type === 'table') {
+      const tableText = [block.headers.join(' | '), ...block.rows.map((row) => row.join(' | '))].join('\n');
+      ensureSection().paragraphs.push(tableText);
+      ensureSection().citations.push(...block.citations);
+    } else if (block.type === 'pageBreak') {
+      current = undefined;
+    }
+  }
+
+  const normalizedSections = sections.filter((section) =>
+    section.paragraphs.length || section.bullets.length || section.title !== '正文'
+  );
+  return {
+    ...persisted,
+    pdf: {
+      ...persisted.pdf,
+      sections: normalizedSections.length ? normalizedSections : persisted.pdf.sections,
+      targetPageCount: Math.min(20, Math.max(6, normalizedSections.length + 2))
+    }
+  };
 }
 
 async function request<T>(path: string, init: { method?: string; body?: unknown } = {}) {
