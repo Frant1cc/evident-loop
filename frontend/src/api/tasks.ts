@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentTask, AgentTaskDetail, PlanStepDraft, ToolPolicy } from '../types/tasks';
+import type { AgentArtifactLibraryItem, AgentEvent, AgentTask, AgentTaskDetail, PlanStepDraft, ToolPolicy } from '../types/tasks';
 
 type ApiResponse<T> = {
   code: 0 | 1;
@@ -8,6 +8,10 @@ type ApiResponse<T> = {
 
 export function listAgentTasks() {
   return request<{ tasks: AgentTask[] }>('/api/tasks');
+}
+
+export function listAllAgentArtifacts() {
+  return request<{ artifacts: AgentArtifactLibraryItem[] }>('/api/tasks/artifacts');
 }
 
 export function createAgentTask(input: {

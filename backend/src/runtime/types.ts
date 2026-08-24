@@ -221,6 +221,10 @@ export type AgentArtifact = {
   updatedAt: string;
 };
 
+export type AgentArtifactLibraryItem = AgentArtifact & {
+  taskGoal: string;
+};
+
 export type AgentTaskDetail = {
   task: AgentTask;
   steps: AgentPlanStep[];

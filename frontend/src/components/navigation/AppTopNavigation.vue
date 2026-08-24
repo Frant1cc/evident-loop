@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   PhBooks,
+  PhArchive,
   PhFlask,
   PhFlowArrow,
   PhGauge,
@@ -27,6 +28,7 @@ const emit = defineEmits<{
 
 const tabs = [
   { key: 'research', label: '研究工作台', icon: PhFlask },
+  { key: 'artifacts', label: '产物', icon: PhArchive },
   { key: 'tasks', label: 'Agent 运行时', icon: PhFlowArrow },
   { key: 'evaluations', label: '质量评测', icon: PhGauge },
   { key: 'knowledge', label: '知识库', icon: PhBooks },

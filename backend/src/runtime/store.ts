@@ -8,6 +8,7 @@ import type {
   AgentCheckpointState,
   AgentEvent,
   AgentArtifact,
+  AgentArtifactLibraryItem,
   AgentClaim,
   AgentEvidence,
   AgentReview,
@@ -651,6 +652,16 @@ export function insertArtifact(artifact: AgentArtifact) {
 export function listArtifacts(taskId: string): AgentArtifact[] {
   return sqlite.prepare('SELECT * FROM agent_artifacts WHERE task_id = ? ORDER BY updated_at DESC').all(taskId)
     .map((row) => toArtifact(row as ArtifactRow));
+}
+
+export function listAllArtifacts(): AgentArtifactLibraryItem[] {
+  return sqlite.prepare(`SELECT agent_artifacts.*, agent_tasks.goal AS task_goal
+    FROM agent_artifacts
+    JOIN agent_tasks ON agent_tasks.id = agent_artifacts.task_id
+    ORDER BY agent_artifacts.updated_at DESC`).all().map((row) => {
+      const item = row as ArtifactRow & { task_goal: string };
+      return { ...toArtifact(item), taskGoal: item.task_goal };
+    });
 }
 
 export const runInTransaction = sqlite.transaction.bind(sqlite) as <TArgs extends unknown[], TResult>(

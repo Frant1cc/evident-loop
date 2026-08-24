@@ -7,13 +7,38 @@ import {
   deleteAgentTask,
   failOrphanedAgentTasks,
   getAgentTaskDetail,
+  listAllAgentArtifacts,
   listAgentTaskEvents,
   saveAgentTaskPlan,
   transitionAgentTask,
   updateAgentTaskPlan
 } from './service.js';
+import { insertArtifact } from './store.js';
 
 initDb();
+
+test('lists Agent reports with their source task goal for the artifact library', () => {
+  const created = createAgentTask({ goal: '汇总季度证据' });
+  const now = new Date().toISOString();
+  insertArtifact({
+    id: `library-${created.task.id}`,
+    taskId: created.task.id,
+    type: 'report',
+    title: '季度证据报告',
+    content: '# 报告',
+    status: 'completed',
+    createdAt: now,
+    updatedAt: now
+  });
+
+  try {
+    const item = listAllAgentArtifacts().find((artifact) => artifact.taskId === created.task.id);
+    assert.equal(item?.title, '季度证据报告');
+    assert.equal(item?.taskGoal, '汇总季度证据');
+  } finally {
+    deleteAgentTask(created.task.id);
+  }
+});
 
 test('persists explicit tool policies and reads legacy arrays without ambiguity', () => {
   const noTools = createAgentTask({ goal: '禁用所有工具', toolPolicy: { mode: 'none' } });

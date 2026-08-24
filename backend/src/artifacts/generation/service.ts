@@ -16,6 +16,7 @@ import {
   getArtifactImageConsent,
   listArtifactImageConsents,
   listArtifactGenerations,
+  listAllArtifactGenerations,
   listArtifactAssets,
   deleteArtifactRecordsForGeneration,
   updateArtifactGeneration,
@@ -669,6 +670,12 @@ export function createArtifactGenerationService(options: {
     },
     get,
     list: (conversationId: string) => listArtifactGenerations(conversationId).map((generation) => {
+      if ((generation.status === 'awaiting_confirmation' || generation.status === 'planning') && isResearchSnapshotStale(generation.snapshot)) {
+        return updateArtifactGeneration(generation.id, { stale: true }) ?? generation;
+      }
+      return generation;
+    }),
+    listAll: () => listAllArtifactGenerations().map((generation) => {
       if ((generation.status === 'awaiting_confirmation' || generation.status === 'planning') && isResearchSnapshotStale(generation.snapshot)) {
         return updateArtifactGeneration(generation.id, { stale: true }) ?? generation;
       }

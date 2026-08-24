@@ -19,6 +19,10 @@ export function createTasksRouter(tasks: TaskApplication) {
     res.json(success({ tasks: tasks.list() }));
   });
 
+  router.get('/tasks/artifacts', (_req, res) => {
+    res.json(success({ artifacts: tasks.listArtifacts() }));
+  });
+
   router.delete('/tasks/:taskId', (req, res) => {
     try {
       const task = tasks.delete(req.params.taskId);

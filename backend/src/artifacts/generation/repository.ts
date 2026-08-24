@@ -309,6 +309,14 @@ export function listArtifactGenerations(conversationId: string) {
   return rows.map((row) => toGeneration(row, outputStatement.all(row.id) as OutputRow[]));
 }
 
+export function listAllArtifactGenerations() {
+  const rows = sqlite.prepare(`SELECT * FROM research_artifacts
+    ORDER BY updated_at DESC, version DESC`).all() as GenerationRow[];
+  const outputStatement = sqlite.prepare(`SELECT * FROM research_artifact_outputs
+    WHERE generation_id = ? ORDER BY format ASC`);
+  return rows.map((row) => toGeneration(row, outputStatement.all(row.id) as OutputRow[]));
+}
+
 export function updateArtifactSpec(id: string, spec: ArtifactSpec) {
   const updatedAt = new Date().toISOString();
   sqlite.prepare('UPDATE research_artifacts SET spec_json = ?, updated_at = ? WHERE id = ?')

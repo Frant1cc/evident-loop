@@ -20,7 +20,6 @@ import type { ToolCatalog } from './tools/contracts.js';
 import { createToolCatalog, toolCatalog } from './tools/registry.js';
 import { createToolRuntime } from './tools/runtime.js';
 import { createStartDocumentGenerationTool } from './tools/documentGenerationTool.js';
-import { createArtifactImageTools } from './tools/artifactImageTools.js';
 import { createDefaultResearchSkillRuntime } from './skills/runtime.js';
 import type { McpManager } from './mcp/contracts.js';
 import { createMcpManager } from './mcp/manager.js';
@@ -52,8 +51,7 @@ export function createApp(dependencies: AppDependencies = {}) {
   });
   const tools = dependencies.tools ?? createToolCatalog([
     ...toolCatalog.values(),
-    createStartDocumentGenerationTool(artifactApplication),
-    ...createArtifactImageTools(artifactApplication)
+    createStartDocumentGenerationTool(artifactApplication)
   ]);
   const toolRuntime = dependencies.toolRuntime ?? createToolRuntime(tools);
   const approvalManager = dependencies.approvalManager ?? createApprovalManager();
@@ -114,7 +112,6 @@ export function createProductionApp(options: { host?: string; port?: number } = 
     'start_document_generation',
     createStartDocumentGenerationTool(artifactApplication)
   );
-  for (const module of createArtifactImageTools(artifactApplication)) runtimeCatalog.set(module.definition.function.name, module);
   const runtime = createToolRuntime(runtimeCatalog as ToolCatalog);
   const mcpManager = createMcpManager({ runtime, host: options.host, port: options.port });
   const approvalManager = createApprovalManager();
@@ -134,8 +131,7 @@ export const app = createApp();
 
 function createLegacyToolRuntime(runtime: ToolRuntime): ToolRuntime {
   const artifactToolNames = new Set([
-    'start_document_generation',
-    'fetch_source_image'
+    'start_document_generation'
   ]);
   const modules = runtime.listModules().filter((module) =>
     module.source !== 'mcp' && !artifactToolNames.has(module.definition.function.name)

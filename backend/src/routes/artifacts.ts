@@ -55,6 +55,14 @@ async function sendArtifact(
 }
 
 function registerGenerationRoutes(router: Router, generation: ArtifactApplication) {
+  router.get('/artifacts/generations', (_req, res) => {
+    try {
+      res.json({ code: 1, message: 'success', data: { generations: generation.listAllGenerations() } });
+    } catch (error) {
+      respondArtifactError(res, error);
+    }
+  });
+
   router.post('/research/conversations/:conversationId/artifacts/drafts', async (req, res) => {
     if (!isOpaqueId(req.params.conversationId)) {
       res.status(404).json(failure('Research conversation not found'));

@@ -10,7 +10,7 @@ import express from 'express';
 import { ArtifactStore } from './store.js';
 import { createArtifactsRouter } from '../routes/artifacts.js';
 import { initDb } from '../db.js';
-import { createResearchConversation, createResearchMessage } from '../research/store.js';
+import { createResearchConversation, createResearchMessage, updateResearchConversation } from '../research/store.js';
 import { createArtifactAgent } from './generation/agent.js';
 import { createArtifactGenerationService } from './generation/service.js';
 import { createArtifactApplication } from '../modules/artifacts/index.js';
@@ -78,6 +78,33 @@ test('generation API binds image consent and physically deletes opaque generatio
     const missingResponse = await fetch(`${baseUrl}/api/artifacts/generations/${draft.id}`);
     assert.equal(missingResponse.status, 404);
   } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('generation library API lists research artifacts across conversations', async () => {
+  const conversation = createResearchConversation();
+  updateResearchConversation(conversation.id, { title: '全局产物测试', topic: undefined, summary: undefined });
+  createResearchMessage({ conversationId: conversation.id, role: 'user', content: '生成全局产物', status: 'complete' });
+  const service = createArtifactGenerationService({ model: 'test', agent: createArtifactAgent({ model: 'test' }) });
+  const generation = createArtifactApplication({ model: 'test', generationService: service });
+  const draft = await generation.createDraft(conversation.id);
+  const directory = await mkdtemp(path.join(tmpdir(), 'api-artifact-library-'));
+  const app = express();
+  app.use('/api', createArtifactsRouter(new ArtifactStore({ directory, ttlMs: 60_000 }), generation));
+  const server = createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Test server did not bind');
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/artifacts/generations`);
+    assert.equal(response.status, 200);
+    const payload = await response.json() as { data: { generations: Array<{ id: string; snapshot: { conversationTitle: string } }> } };
+    const listed = payload.data.generations.find((item) => item.id === draft.id);
+    assert.equal(listed?.snapshot.conversationTitle, '全局产物测试');
+  } finally {
+    await generation.deleteGeneration(draft.id);
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     await rm(directory, { recursive: true, force: true });
   }

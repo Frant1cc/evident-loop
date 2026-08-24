@@ -134,6 +134,9 @@ export type ResearchArtifactGeneration = {
   stale: boolean;
   spec: ArtifactSpec;
   outputs: ArtifactOutput[];
+  snapshot?: {
+    conversationTitle: string;
+  };
   imageConsents?: ArtifactImageConsent[];
   createdAt: string;
   updatedAt: string;

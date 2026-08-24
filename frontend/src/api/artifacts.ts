@@ -18,6 +18,10 @@ export function listResearchArtifactGenerations(conversationId: string) {
   );
 }
 
+export function listAllResearchArtifactGenerations() {
+  return request<{ generations: ResearchArtifactGeneration[] }>('/api/artifacts/generations');
+}
+
 export function createResearchArtifactDraft(conversationId: string, preferences: ArtifactDraftPreferences = {}) {
   return request<{ generation: ResearchArtifactGeneration }>(
     `/api/research/conversations/${encodeURIComponent(conversationId)}/artifacts/drafts`,

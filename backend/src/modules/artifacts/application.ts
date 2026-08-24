@@ -29,6 +29,7 @@ export function createArtifactApplication(dependencies: ArtifactApplicationDepen
     getDraftRequest: generation.getDraftRequest,
     getGeneration: generation.get,
     listGenerations: generation.list,
+    listAllGenerations: generation.listAll,
     updateDraft: generation.updateDraft,
     startRender: generation.startRender,
     retryOutput: generation.retryOutput,

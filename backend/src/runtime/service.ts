@@ -21,6 +21,7 @@ import {
   insertSupplementalPlanStep,
   insertTask,
   listArtifacts,
+  listAllArtifacts,
   listEvents,
   listPlanSteps,
   listReviews,
@@ -137,6 +138,10 @@ export function failOrphanedAgentTasks() {
 
 export function listAgentTasks() {
   return listTasks();
+}
+
+export function listAllAgentArtifacts() {
+  return listAllArtifacts();
 }
 
 export function deleteAgentTask(id: string) {

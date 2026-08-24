@@ -4,10 +4,12 @@ import test from 'node:test';
 import {
   createResearchArtifactDraft,
   fetchResearchArtifactSourceImage,
+  listAllResearchArtifactGenerations,
   renderResearchArtifact,
   updateResearchArtifactDraft
 } from './artifacts';
 import type { ArtifactSpec } from '../types/artifacts';
+import { listAllAgentArtifacts } from './tasks';
 
 const originalFetch = globalThis.fetch;
 
@@ -41,6 +43,26 @@ test('artifact draft API uses the conversation-scoped endpoint and returns struc
   assert.equal(requestUrl, '/api/research/conversations/conversation%2F1/artifacts/drafts');
   assert.equal(requestMethod, 'POST');
   assert.equal(result.generation.status, 'awaiting_confirmation');
+});
+
+test('artifact library API requests the global generation collection', async () => {
+  let requestUrl = '';
+  globalThis.fetch = async (input) => {
+    requestUrl = String(input);
+    return new Response(JSON.stringify({ code: 1, message: 'ok', data: { generations: [] } }), { status: 200 });
+  };
+  await listAllResearchArtifactGenerations();
+  assert.equal(requestUrl, '/api/artifacts/generations');
+});
+
+test('artifact library requests the Agent report collection', async () => {
+  let requestUrl = '';
+  globalThis.fetch = async (input) => {
+    requestUrl = String(input);
+    return new Response(JSON.stringify({ code: 1, message: 'ok', data: { artifacts: [] } }), { status: 200 });
+  };
+  await listAllAgentArtifacts();
+  assert.equal(requestUrl, '/api/tasks/artifacts');
 });
 
 test('artifact render API is explicit and never uses a download URL as a render command', async () => {

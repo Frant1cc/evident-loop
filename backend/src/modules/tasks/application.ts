@@ -8,6 +8,7 @@ import {
   createAgentTask,
   deleteAgentTask,
   getAgentTaskDetail,
+  listAllAgentArtifacts,
   listAgentTaskEvents,
   listAgentTasks,
   planAgentTask,
@@ -56,6 +57,7 @@ export function createTaskApplication(dependencies: TaskApplicationDependencies)
 
   return {
     list: listAgentTasks,
+    listArtifacts: listAllAgentArtifacts,
     get: (id: string) => {
       const detail = getAgentTaskDetail(id);
       return withApprovals(detail);
