@@ -93,6 +93,7 @@ test('GET /research/tools returns model tools and user-visible groups separately
     assert.ok(names.includes('read_document'));
     assert.ok(!names.includes('search_docs'));
     assert.ok(!names.includes('knowledge'));
+    assert.ok(!names.includes('read_evidence'));
     assert.equal(payload.data.tools.find((tool: { name: string }) => tool.name === 'search_knowledge')?.source, 'builtin');
     assert.equal(payload.data.tools.find((tool: { name: string }) => tool.name === 'search_knowledge')?.status, 'available');
     assert.deepEqual(payload.data.groups, [{

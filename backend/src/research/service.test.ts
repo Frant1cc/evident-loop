@@ -109,6 +109,59 @@ test('completes a queued background run and persists its final message', async (
   }
 });
 
+test('persists context compression as a visible research step', async () => {
+  const conversation = createResearchConversation();
+  let scheduled: (() => void) | undefined;
+
+  try {
+    const started = createAndStartResearchRun({
+      conversationId: conversation.id,
+      content: '继续长对话',
+      toolPolicy: allTools,
+      toolRuntime,
+      llm: {
+        complete: async () => ({
+          choices: [{
+            message: {
+              role: 'assistant',
+              content: '<user-main-request>continue</user-main-request>\n'
+                + '<tool-calls-and-results>none</tool-calls-and-results>\n'
+                + '<answers-provided>none</answers-provided>\n'
+                + '<pending-tasks>answer</pending-tasks>\n'
+                + '<current-progress>active</current-progress>\n'
+                + '<suggested-next-step>answer</suggested-next-step>\n'
+                + '<confirmed-facts>none</confirmed-facts>\n'
+                + '<core-constraints>none</core-constraints>\n'
+                + '<cited-evidence-keys>none</cited-evidence-keys>'
+            }
+          }]
+        }),
+        stream: async () => undefined
+      },
+      schedule: (callback) => { scheduled = callback; },
+      runAgent: async (options) => {
+        await options.contextManager?.prepare({
+          messages: [{ role: 'user', content: 'x'.repeat(440_000) }],
+          model: options.model
+        });
+        return { reply: '压缩后继续完成。', toolCalls: [], trace: [], sources: [] };
+      }
+    });
+
+    assert.ok(scheduled);
+    scheduled();
+    await waitFor(() => getResearchRun(started.run.id)?.status === 'completed');
+    const contextStep = listResearchSteps(conversation.id).find((step) => step.type === 'context');
+    assert.equal(contextStep?.status, 'complete');
+    assert.equal(contextStep?.title, '上下文摘要压缩');
+    assert.equal((contextStep?.output as { level?: string } | undefined)?.level, 'summary');
+    assert.equal(typeof (contextStep?.output as { beforeTokens?: number } | undefined)?.beforeTokens, 'number');
+    assert.equal(typeof (contextStep?.output as { afterTokens?: number } | undefined)?.afterTokens, 'number');
+  } finally {
+    deleteResearchConversation(conversation.id);
+  }
+});
+
 test('natural-language artifact tool queues during streaming and creates a renderable draft at completion', async () => {
   const conversation = createResearchConversation();
   let scheduled: (() => void) | undefined;

@@ -137,7 +137,7 @@ export const researchSteps = sqliteTable('research_steps', {
   conversationId: text('conversation_id').notNull(),
   messageId: text('message_id').notNull(),
   sequence: integer('sequence').notNull(),
-  type: text('type', { enum: ['llm', 'tool'] }).notNull(),
+  type: text('type', { enum: ['llm', 'tool', 'context'] }).notNull(),
   status: text('status', { enum: ['running', 'complete', 'error'] }).notNull(),
   title: text('title').notNull(),
   inputJson: text('input_json'),

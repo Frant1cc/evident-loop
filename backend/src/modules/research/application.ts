@@ -30,6 +30,8 @@ import { builtInToolGroups, validateToolGroups, type ToolGroupDefinition } from 
 import type { ResolvedResearchSkill } from '../../skills/contracts.js';
 import { getMaxSequence, listStreamEventsAfter } from '../../streaming/eventStore.js';
 
+const AUTOMATIC_RESEARCH_TOOL_NAMES = new Set(['read_evidence']);
+
 export type ResearchApplicationDependencies = {
   llm?: LlmProvider;
   model: string;
@@ -50,7 +52,11 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
 
   return {
     listTools: () => dependencies.toolRuntime.listModules()
-      .filter((tool) => tool.exposedToModel !== false && tool.source !== 'mcp')
+      .filter((tool) =>
+        tool.exposedToModel !== false &&
+        tool.source !== 'mcp' &&
+        !AUTOMATIC_RESEARCH_TOOL_NAMES.has(tool.definition.function.name)
+      )
       .map((tool) => {
         const availability = typeof tool.availability === 'function'
           ? tool.availability()
@@ -114,7 +120,7 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
       toolPolicy: ToolPolicy,
       skillId?: string
     ) => {
-      const effectiveToolPolicy = mergeAutomaticMcpTools(
+      const effectiveToolPolicy = mergeAutomaticResearchTools(
         toolPolicy,
         dependencies.toolRuntime.listModules()
       );
@@ -157,25 +163,31 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
   };
 }
 
-export function mergeAutomaticMcpTools(
+export function mergeAutomaticResearchTools(
   policy: ToolPolicy,
   modules: ReturnType<ToolRuntime['listModules']>
 ): ToolPolicy {
   if (policy.mode === 'all') return policy;
-  const mcpToolNames = modules
-    .filter((module) => module.source === 'mcp' && module.exposedToModel !== false)
-    .filter((module) => {
-      const availability = typeof module.availability === 'function'
-        ? module.availability()
-        : module.availability ?? { status: 'available' as const };
-      return availability.status === 'available';
-    })
+  const availableModules = modules
+    .filter((module) => module.exposedToModel !== false && isToolAvailable(module));
+  const mcpToolNames = availableModules
+    .filter((module) => module.source === 'mcp')
     .map((module) => module.definition.function.name);
-  if (!mcpToolNames.length) return policy;
 
   const names = new Set(policy.mode === 'selected' ? policy.names : []);
   mcpToolNames.forEach((name) => names.add(name));
+  availableModules
+    .filter((module) => AUTOMATIC_RESEARCH_TOOL_NAMES.has(module.definition.function.name))
+    .forEach((module) => names.add(module.definition.function.name));
+  if (!names.size) return policy;
   return { mode: 'selected', names: [...names] };
+}
+
+function isToolAvailable(module: ReturnType<ToolRuntime['listModules']>[number]): boolean {
+  const availability = typeof module.availability === 'function'
+    ? module.availability()
+    : module.availability ?? { status: 'available' as const };
+  return availability.status === 'available';
 }
 
 export type ResearchApplication = ReturnType<typeof createResearchApplication>;

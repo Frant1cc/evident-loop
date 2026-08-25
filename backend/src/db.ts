@@ -218,7 +218,7 @@ export const initDb = () => {
       conversation_id TEXT NOT NULL,
       message_id TEXT NOT NULL,
       sequence INTEGER NOT NULL,
-      type TEXT NOT NULL CHECK (type IN ('llm', 'tool')),
+      type TEXT NOT NULL CHECK (type IN ('llm', 'tool', 'context')),
       status TEXT NOT NULL CHECK (status IN ('running', 'complete', 'error')),
       title TEXT NOT NULL,
       input_json TEXT,
@@ -590,6 +590,7 @@ export const initDb = () => {
   ensureColumn('research_conversations', 'context_state_json', 'TEXT');
   ensureColumn('research_steps', 'parent_step_id', 'TEXT');
   ensureColumn('research_steps', 'tool_call_id', 'TEXT');
+  migrateResearchStepTypeConstraint();
   ensureColumn('tool_approvals', 'remote_name', 'TEXT');
   ensureColumn('mcp_tools', 'definition_hash', "TEXT NOT NULL DEFAULT ''");
   // Existing installations created before the local-library metadata field.
@@ -608,6 +609,45 @@ function ensureColumn(table: string, column: string, definition: string) {
   if (!columns.some((entry) => entry.name === column)) {
     sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
+}
+
+/** Existing databases restrict research steps to model/tool events. */
+function migrateResearchStepTypeConstraint() {
+  const row = sqlite.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'research_steps'")
+    .get() as { sql?: string } | undefined;
+  if (!row?.sql || row.sql.includes("'context'")) return;
+
+  sqlite.transaction(() => {
+    sqlite.exec(`
+      DROP INDEX IF EXISTS research_steps_conversation_sequence_idx;
+      ALTER TABLE research_steps RENAME TO research_steps_legacy;
+      CREATE TABLE research_steps (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        type TEXT NOT NULL CHECK (type IN ('llm', 'tool', 'context')),
+        status TEXT NOT NULL CHECK (status IN ('running', 'complete', 'error')),
+        title TEXT NOT NULL,
+        input_json TEXT,
+        output_json TEXT,
+        parent_step_id TEXT,
+        tool_call_id TEXT,
+        error TEXT,
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        FOREIGN KEY (conversation_id) REFERENCES research_conversations(id) ON DELETE CASCADE,
+        FOREIGN KEY (message_id) REFERENCES research_messages(id) ON DELETE CASCADE
+      );
+      INSERT INTO research_steps
+        (id, conversation_id, message_id, sequence, type, status, title, input_json, output_json, parent_step_id, tool_call_id, error, started_at, completed_at)
+        SELECT id, conversation_id, message_id, sequence, type, status, title, input_json, output_json, parent_step_id, tool_call_id, error, started_at, completed_at
+        FROM research_steps_legacy;
+      DROP TABLE research_steps_legacy;
+      CREATE INDEX research_steps_conversation_sequence_idx
+        ON research_steps(conversation_id, sequence);
+    `);
+  })();
 }
 
 /**

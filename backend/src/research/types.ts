@@ -8,7 +8,7 @@ import type { ResearchExecutionMode } from './executionMode.js';
 
 export type ResearchMessageStatus = 'streaming' | 'complete' | 'error';
 export type ResearchStepStatus = 'running' | 'complete' | 'error';
-export type ResearchStepType = 'llm' | 'tool';
+export type ResearchStepType = 'llm' | 'tool' | 'context';
 export type ResearchRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 export type ResearchConversation = {

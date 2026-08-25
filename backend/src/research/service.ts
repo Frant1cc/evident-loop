@@ -15,7 +15,10 @@ import { normalizeToolPolicy } from '../tools/policy.js';
 import type { OfficialResearchSkill, ResearchSkillSnapshot } from '../skills/contracts.js';
 import type { ResearchSkillRuntime } from '../skills/runtime.js';
 import { buildResearchContext, createConversationTitle } from '../context/research/history.js';
-import { createResearchContextManager } from '../context/research/manager.js';
+import {
+  createResearchContextManager,
+  type ResearchContextEvent
+} from '../context/research/manager.js';
 import { resolveExecutionMode } from './executionMode.js';
 import {
   addResearchSource,
@@ -348,15 +351,9 @@ async function executePersistedResearchRun(options: {
   }
 
   const activeToolSteps = new Map<string, ResearchStep>();
+  const activeContextSteps = new Map<ResearchContextEvent['level'], ResearchStep>();
   const pendingLlmSteps: ResearchStep[] = [];
   const toolParentStepIds = new Map<string, string>();
-  const contextManager = options.llm || options.apiKey
-    ? createResearchContextManager({
-        conversationId: run.conversationId,
-        llm: resolveLlmProvider({ llm: options.llm, apiKey: options.apiKey }),
-        model: options.model
-      })
-    : undefined;
 
   try {
     // Resolve the exact skill version and verify its digest inside the protected
@@ -368,6 +365,19 @@ async function executePersistedResearchRun(options: {
     let sequence = listResearchSteps(run.conversationId)
       .filter((step) => step.messageId === run!.assistantMessageId)
       .reduce((maximum, step) => Math.max(maximum, step.sequence), 0);
+    const contextManager = options.llm || options.apiKey
+      ? createResearchContextManager({
+          conversationId: run.conversationId,
+          llm: resolveLlmProvider({ llm: options.llm, apiKey: options.apiKey }),
+          model: options.model,
+          onEvent: async (event) => handleContextEvent({
+            event,
+            run: run!,
+            activeContextSteps,
+            nextSequence: () => ++sequence
+          })
+        })
+      : undefined;
     const existingSources = listResearchSources(run.conversationId)
       .filter((source) => source.messageId === run!.assistantMessageId);
     let citationNumber = existingSources.length;
@@ -450,6 +460,10 @@ async function executePersistedResearchRun(options: {
       const step = updateResearchStep(activeStep.id, { status: 'error', output: undefined, error: message });
       if (step) emit(run.id, { type: 'research_step', step });
     }
+    for (const activeStep of activeContextSteps.values()) {
+      const step = updateResearchStep(activeStep.id, { status: 'error', output: undefined, error: message });
+      if (step) emit(run.id, { type: 'research_step', step });
+    }
     const failedRun = updateResearchRun(run.id, {
       status: 'failed',
       error: message,
@@ -468,6 +482,52 @@ async function executePersistedResearchRun(options: {
     activeControllers.delete(run.id);
     activeApprovalManagers.delete(run.id);
   }
+}
+
+async function handleContextEvent(options: {
+  event: ResearchContextEvent;
+  run: ResearchRun;
+  activeContextSteps: Map<ResearchContextEvent['level'], ResearchStep>;
+  nextSequence: () => number;
+}) {
+  if (getResearchRun(options.run.id)?.status === 'cancelled') return;
+  const { event, run } = options;
+  const title = event.level === 'micro' ? '上下文微压缩' : '上下文摘要压缩';
+
+  if (event.type === 'context_compression_started') {
+    const step = createResearchStep({
+      conversationId: run.conversationId,
+      messageId: run.assistantMessageId,
+      sequence: options.nextSequence(),
+      type: 'context',
+      status: 'running',
+      title,
+      input: {
+        level: event.level,
+        estimatedTokens: event.estimatedTokens,
+        thresholdTokens: event.thresholdTokens
+      }
+    });
+    options.activeContextSteps.set(event.level, step);
+    emit(run.id, { type: 'research_step', step });
+    return;
+  }
+
+  const activeStep = options.activeContextSteps.get(event.level);
+  if (!activeStep) return;
+  const step = updateResearchStep(activeStep.id, {
+    status: 'complete',
+    output: {
+      level: event.level,
+      beforeTokens: event.beforeTokens,
+      afterTokens: event.afterTokens,
+      savedTokens: event.savedTokens,
+      thresholdTokens: event.thresholdTokens
+    },
+    error: undefined
+  });
+  options.activeContextSteps.delete(event.level);
+  if (step) emit(run.id, { type: 'research_step', step });
 }
 
 /**
