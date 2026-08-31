@@ -89,6 +89,12 @@ function source(url: string, content: string): RagSource {
 function retrieval(verdict: WebRetrievalResult['verdict'], sources: RagSource[], patch: Partial<WebRetrievalResult> & Partial<WebRetrievalResult['diagnostics']> = {}): WebRetrievalResult {
   return {
     question: 'q',
+    evidencePlan: {
+      subject: 'q',
+      claims: [{ id: 'C1', text: 'q', searchQueries: ['q'], preferredDomains: [], sourceTypes: [], subjectTerms: [] }],
+      preferredDomains: [],
+      planningMethod: 'deterministic-fallback'
+    },
     intent: {
       routerVersion: 'test', urls: [], requiredCapabilities: ['web_search'],
       knownUrl: noSignal(), pdf: noSignal(), officialDocs: noSignal(), freshness: noSignal(),
@@ -101,6 +107,7 @@ function retrieval(verdict: WebRetrievalResult['verdict'], sources: RagSource[],
     },
     verdict, score: 0.8, retrievalQueries: ['q'], queryAttempts: patch.queryAttempts ?? [], pageAttempts: patch.pageAttempts ?? [], sources,
     claims: [], coverageScore: 0.5, coveredClaimCount: 1, totalClaimCount: 2, uncoveredClaims: [],
+    uncoveredBlockingClaims: [], evidenceEntities: [], requiredMentions: [],
     diagnostics: { queriesUsed: 1, pagesFetched: sources.length, queryBudget: 3, pageBudget: 5,
       independentDomains: sources.length ? 1 : 0, durationMs: 25, stopReason: 'test',
       providerAttempts: [], providersUsed: [], fallbackUsed: false,

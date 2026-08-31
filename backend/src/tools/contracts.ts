@@ -1,4 +1,5 @@
 import type { ZodType } from 'zod';
+import type { RagSource } from '../rag/types.js';
 
 export type JsonSchema = {
   type: 'object';
@@ -26,6 +27,25 @@ export type ToolContext = {
   conversationId?: string;
   /** Explicit caller scope used by approval and durable execution seams. */
   toolScope?: ToolScope;
+  /** Reports bounded, user-facing progress for long-running tools. */
+  onProgress?: (progress: ToolProgress) => void | Promise<void>;
+  /** Publishes an accepted source as soon as a long-running tool validates it. */
+  onSource?: (source: RagSource) => void | Promise<void>;
+};
+
+export type ToolProgress = {
+  stage: string;
+  message: string;
+  kind?: 'phase' | 'search' | 'page' | 'evidence' | 'coverage' | 'rewrite';
+  status?: 'running' | 'completed' | 'warning';
+  query?: string;
+  url?: string;
+  title?: string;
+  detail?: string;
+  current?: number;
+  total?: number;
+  coveredClaims?: number;
+  totalClaims?: number;
 };
 
 export type ToolTrace = {

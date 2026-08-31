@@ -7,6 +7,7 @@ import type { ToolPolicy, ToolRuntime, ToolScope } from '../tools/contracts.js';
 import { normalizeToolPolicy } from '../tools/policy.js';
 import { builtInToolRuntime } from '../tools/runtime.js';
 import { DEFAULT_MAX_TOOL_ROUNDS } from './config.js';
+import { auditWebAnswer, buildAuditedWebFallback, buildWebAuditRevisionPrompt } from './webCitationAudit.js';
 import {
   describeEmptyCompletion,
   executeToolRound,
@@ -26,6 +27,8 @@ const defaultTemperature = 0.2;
 
 const leakedMarkupCorrectionPrompt =
   'Your previous reply wrote tool-call markup as plain text instead of using the function-calling interface. Never output tool-call markup (DSML or similar tags) in message content. Either call tools through the function-calling interface, or answer directly in natural language.';
+
+const webAnswerWritingPrompt = 'The controlled web research is complete. Answer in the user\'s language, lead with the direct conclusion, and use all materially useful verified evidence. For comparisons, lists, catalogs, prices, specifications, or timelines, prefer a complete Markdown table followed by a short interpretation. Include relevant date, version, geography, currency, unit, conditions, conflicts, and evidence limits. Every factual sentence or table row needs an inline citation to the matching full source URL. Do not add facts absent from the supplied evidence.';
 
 export type { AgentLoopEvent } from './toolRound.js';
 
@@ -137,9 +140,13 @@ export async function runAgentLoop({
       conversationId,
       toolScope,
       approvalManager,
-      approvalScope
+      approvalScope,
+      originalUserMessage: message
     });
     const { assistantMessage, parsedToolCalls, reply } = roundResult;
+    if (parsedToolCalls.some((toolCall) => toolCall.name === 'retrieve_web_evidence' && !toolCall.parseError)) {
+      messages.push({ role: 'system', content: webAnswerWritingPrompt });
+    }
 
     if (!parsedToolCalls.length) {
       // Provider-side parsing sometimes leaks the model's native tool-call markup (e.g. DeepSeek DSML)
@@ -184,7 +191,7 @@ export async function runAgentLoop({
 
       const leakedToolMarkup = Boolean(reply && containsLeakedToolMarkup(reply));
       const cleanedReply = leakedToolMarkup ? '' : (reply ? stripLeakedToolMarkup(reply) : '');
-      const finalReply = cleanedReply || createEmptyReplyFallback(toolTraces.length > 0);
+      const finalReply = await finalizeWebAnswer(cleanedReply || createEmptyReplyFallback(toolTraces.length > 0));
       trace.push({ type: 'final_answer', label: cleanedReply ? (toolTraces.length ? '模型已给出最终回答' : '模型直接回答，未调用工具') : '模型未返回可展示回答' });
       return { reply: finalReply, toolCalls: toolTraces, trace, sources: getRagSourcesFromToolTraces(toolTraces) };
     }
@@ -280,7 +287,8 @@ export async function runAgentLoop({
       conversationId,
       toolScope,
       approvalManager,
-      approvalScope
+      approvalScope,
+      originalUserMessage: message
     });
     toolTraces.push(...reservedRound.toolTraces);
     trace.push(...reservedRound.trace);
@@ -320,7 +328,7 @@ export async function runAgentLoop({
 
     trace.push({ type: 'final_answer', label: '达到工具调用轮数上限，生成最终回答' });
     return {
-      reply: stripLeakedToolMarkup(assistantMessage.content?.trim() ?? '') || createEmptyReplyFallback(true),
+      reply: await finalizeWebAnswer(stripLeakedToolMarkup(assistantMessage.content?.trim() ?? '') || createEmptyReplyFallback(true)),
       toolCalls: toolTraces,
       trace,
       sources: getRagSourcesFromToolTraces(toolTraces)
@@ -334,6 +342,23 @@ export async function runAgentLoop({
     trace,
     sources: getRagSourcesFromToolTraces(toolTraces)
   };
+
+  async function finalizeWebAnswer(candidate: string) {
+    const audit = auditWebAnswer(candidate, toolTraces);
+    if (!audit.applicable || audit.passed) return candidate;
+    const title = `引用审计发现 ${audit.issues.length} 个问题，正在自动修订`;
+    trace.push({ type: 'llm_call', label: title, model });
+    await onEvent?.({ type: 'llm', title, model });
+    const revisionMessages: ChatMessage[] = [{ role: 'user', content: buildWebAuditRevisionPrompt(candidate, audit, toolTraces, message) }];
+    try {
+      const completion = await llm.complete({ model, messages: revisionMessages, temperature: 0, signal });
+      const revised = stripLeakedToolMarkup(completion.choices?.[0]?.message?.content?.trim() ?? '');
+      if (revised && auditWebAnswer(revised, toolTraces).passed) return revised;
+    } catch (error) {
+      if (signal?.aborted) throw error;
+    }
+    return buildAuditedWebFallback(toolTraces, message);
+  }
 }
 
 function normalizeLegacyToolAliases(policy: ToolPolicy): ToolPolicy {

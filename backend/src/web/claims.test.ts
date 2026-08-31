@@ -1,132 +1,154 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { assessClaimCoverage, extractWebClaims } from './claims.js';
+import { assessClaimCoverage, extractWebClaims, type ClaimEvidence, type WebClaim } from './claims.js';
 
-test('extracts answerable claims and ignores citation instructions', () => {
-  const claims = extractWebClaims(
-    '请联网查询 search_depth 的可选值、每种模式的定位和价格差异，只根据官方文档回答并给出来源。'
-  );
-
-  assert.deepEqual(claims.map((claim) => claim.text), [
-    'search_depth 的可选值',
-    '每种模式的定位和价格差异'
-  ]);
+test('generic fallback extracts claims without a domain-specific dictionary', () => {
+  const claims = extractWebClaims('查询数据库连接池大小、事务隔离级别，并给出来源');
+  assert.deepEqual(claims.map((claim) => claim.text), ['数据库连接池大小', '事务隔离级别']);
+  assert.equal(claims.every((claim) => claim.searchQueries.length > 0), true);
 });
 
-test('reports partial coverage and the unsupported claim', () => {
-  const claims = extractWebClaims('查询 basic 模式的定位、advanced 模式的价格');
-  const coverage = assessClaimCoverage(claims, [
-    { url: 'https://docs.example.com/search', content: 'basic 模式的定位是控制搜索成本。' }
-  ]);
-
-  assert.equal(coverage.claims.length, 2);
+test('structured judgments support one claim while leaving another uncovered', () => {
+  const claims = [claim('pool-size', '连接池大小'), claim('isolation', '事务隔离级别')];
+  const evidence: ClaimEvidence[] = [{
+    url: 'https://docs.example.com/database',
+    content: 'The pool has a maximum size of 20.',
+    judgments: [{
+      claimId: 'pool-size', relation: 'supports', confidence: 0.94, chunkIndex: 0,
+      evidenceQuote: 'maximum size of 20', reason: 'Directly states the limit.', subjectMatched: true, method: 'llm'
+    }]
+  }];
+  const coverage = assessClaimCoverage(claims, evidence);
   assert.equal(coverage.supportedClaimRatio, 0.5);
-  assert.deepEqual(coverage.uncoveredClaims, ['advanced 模式的价格']);
+  assert.deepEqual(coverage.uncoveredClaims, ['事务隔离级别']);
 });
 
-test('does not treat an unrelated pricing article as evidence for API depth pricing', () => {
-  const claims = extractWebClaims(
-    'Tavily搜索API中search_depth参数有哪些可选值？"basic"和"advanced"两种搜索深度分别有什么作用？依据Tavily官方文档，二者在计费/定价上有什么区别？'
-  );
-  const coverage = assessClaimCoverage(claims, [
-    {
-      url: 'https://www.tavily.com/blog/tavily-on-x402',
-      content: 'Tavily advanced search through x402 costs 0.01 dollars per call.'
-    },
-    {
-      url: 'https://docs.tavily.com/documentation/api-credits',
-      content: 'API credits: basic search costs 1 credit and advanced search costs 2 credits.'
-    }
-  ]);
-
-  assert.deepEqual(coverage.claims.map((claim) => claim.text), [
-    'Tavily搜索API中search_depth参数有哪些可选值',
-    '"basic"和"advanced"两种搜索深度分别有什么作用',
-    'basic 和 advanced 在计费/定价上有什么区别'
-  ]);
-  assert.equal(coverage.claims[2]?.supported, true);
-  assert.deepEqual(coverage.claims[2]?.sourceUrls, ['https://docs.tavily.com/documentation/api-credits']);
-});
-
-test('normalizes enumeration prefixes and keeps short technical claims', () => {
-  const claims = extractWebClaims(
-    'SSE 长连接优化，包括心跳机制、消息压缩、缓冲设置、服务端并发控制、鉴权'
-  );
-
-  assert.deepEqual(claims.map((claim) => claim.text), [
-    'SSE 长连接优化',
-    '心跳机制',
-    '消息压缩',
-    '缓冲设置',
-    '服务端并发控制',
-    '鉴权'
-  ]);
-});
-
-test('uses technical synonyms when assessing SSE claim coverage', () => {
-  const claims = extractWebClaims('心跳机制、消息压缩、缓冲设置、服务端并发控制、鉴权');
-  const coverage = assessClaimCoverage(claims, [{
-    url: 'https://nginx.org/en/docs/http/ngx_http_proxy_module.html',
-    content: [
-      'Send a heartbeat event to keep the connection alive.',
-      'Disable gzip compression for low latency.',
-      'Set proxy_buffering off and X-Accel-Buffering: no.',
-      'Use worker_connections as the connection limit and apply backpressure.',
-      'Authentication uses an access token or secure cookie.'
-    ].join('\n')
-  }]);
-
-  assert.deepEqual(coverage.uncoveredClaims, []);
-});
-
-test('recognizes English reconnection and multiplexing evidence for Chinese claims', () => {
-  const claims = extractWebClaims('SSE 断线重连、多路复用、客户端优化、鉴权与超时、性能与并发优化最佳实践');
-  const coverage = assessClaimCoverage(claims, [{
-    url: 'https://developer.mozilla.org/docs/Web/API/Server-sent_events',
-    content: [
-      'EventSource provides automatic reconnection and sends Last-Event-ID when reconnecting.',
-      'HTTP/2 multiplexing avoids the low per-domain connection limit.',
-      'Client-side code handles onerror and calls close() when the stream is no longer needed.',
-      'Authentication uses secure cookies and the proxy has an idle timeout.',
-      'Non-blocking event loops improve throughput and scalability under high concurrency.'
-    ].join('\n')
-  }]);
-
-  assert.deepEqual(coverage.uncoveredClaims, []);
-});
-
-test('rejects WebSocket-only evidence for SSE operational claims', () => {
-  const claims = extractWebClaims('SSE 心跳保活、背压控制、压缩、负载均衡、与 WebSocket 对比');
-  const coverage = assessClaimCoverage(claims, [{
-    url: 'https://example.com/websocket-guide',
-    content: 'WebSocket uses heartbeat, connection limits, gzip compression and load balancing.'
-  }]);
-
-  assert.deepEqual(coverage.claims.filter((claim) => claim.supported), []);
+test('a neighboring subject cannot support a claim', () => {
+  const claims = [claim('flow-control', 'SSE 慢消费者处理', ['SSE', 'EventSource'])];
+  const evidence: ClaimEvidence[] = [{
+    url: 'https://example.com/websocket',
+    content: 'WebSocket backpressure guidance.',
+    judgments: [{
+      claimId: 'flow-control', relation: 'irrelevant', confidence: 0.9, chunkIndex: 0,
+      evidenceQuote: '', reason: 'The page concerns WebSocket.', subjectMatched: false, method: 'llm'
+    }]
+  }];
+  const coverage = assessClaimCoverage(claims, evidence);
+  assert.equal(coverage.claims[0]?.supported, false);
   assert.equal(coverage.subjectConsistencyRate, 0);
-  assert.deepEqual(coverage.subjectMismatchUrls, ['https://example.com/websocket-guide']);
 });
 
-test('requires real backpressure semantics near the SSE subject', () => {
-  const claims = extractWebClaims('SSE 背压控制');
-  const unrelated = assessClaimCoverage(claims, [{
-    url: 'https://example.com/limits', content: 'SSE has a maximum connection limit.'
+test('caller-required evidence keeps deterministic exact-group matching', () => {
+  const claims: WebClaim[] = [{
+    ...claim('cost', 'advanced costs 2 credits'),
+    evidenceGroups: [['advanced'], ['2 credits']]
+  }];
+  const coverage = assessClaimCoverage(claims, [{
+    url: 'https://docs.example.com/pricing',
+    content: 'Advanced search costs 2 credits.'
   }]);
-  const supported = assessClaimCoverage(claims, [{
-    url: 'https://example.com/stream', content: 'An SSE server respects stream backpressure and waits for the drain event when the write buffer reaches highWaterMark.'
-  }]);
-
-  assert.equal(unrelated.claims[0]?.supported, false);
-  assert.equal(supported.claims[0]?.supported, true);
+  assert.equal(coverage.claims[0]?.supported, true);
 });
 
-test('does not combine a subject-only chunk with an unrelated fact chunk', () => {
-  const claims = extractWebClaims('SSE 压缩');
-  const coverage = assessClaimCoverage(claims, [
-    { url: 'https://example.com/guide', content: 'SSE uses EventSource for one-way updates.' },
-    { url: 'https://example.com/guide', content: 'WebSocket payload compression can use gzip.' }
-  ]);
-
+test('third-party URLs cannot support an official announcement claim', () => {
+  const strictClaim: WebClaim = {
+    ...claim('official-release', 'What model has OpenAI officially announced?', ['OpenAI']),
+    preferredDomains: ['openai.com'],
+    sourceTypes: ['official_announcement'],
+    requiredAuthority: 'official'
+  };
+  const coverage = assessClaimCoverage([strictClaim], [{
+    url: 'https://aggregator.example/openai-roadmap',
+    content: 'OpenAI officially announced a future model.',
+    judgments: [{
+      claimId: strictClaim.id, relation: 'supports', confidence: 0.99, chunkIndex: 0,
+      evidenceQuote: 'OpenAI officially announced a future model.', reason: 'Textual support',
+      subjectMatched: true, method: 'llm'
+    }]
+  }]);
   assert.equal(coverage.claims[0]?.supported, false);
 });
+
+test('automatically resolves a conflict in favor of the more authoritative source', () => {
+  const target = claim('api-mode', 'The API supports streaming mode', ['API']);
+  const coverage = assessClaimCoverage([target], [
+    judged(target.id, 'https://docs.example.com/api', 'supports', 'Streaming mode is supported.', 'official', '2026-01-01'),
+    judged(target.id, 'https://blog.example.net/api', 'contradicts', 'Streaming mode is not supported.', 'third_party', '2026-06-01')
+  ]);
+  assert.equal(coverage.conflicts[0]?.status, 'resolved_supports');
+  assert.equal(coverage.claims[0]?.supported, true);
+  assert.deepEqual(coverage.claims[0]?.sourceUrls, ['https://docs.example.com/api']);
+});
+
+test('uses publication time when equally authoritative sources conflict', () => {
+  const target = claim('release-status', 'The release is generally available', ['release']);
+  const coverage = assessClaimCoverage([target], [
+    judged(target.id, 'https://old.example.com/release', 'supports', 'The release is generally available.', 'official', '2026-01-01'),
+    judged(target.id, 'https://new.example.com/release', 'contradicts', 'The release has been withdrawn.', 'official', '2026-02-01')
+  ]);
+  assert.equal(coverage.conflicts[0]?.status, 'resolved_contradicts');
+  assert.equal(coverage.claims[0]?.supported, false);
+});
+
+test('requires two independent winning sources to resolve a high-risk conflict', () => {
+  const target = claim('medical-dose', 'The medical treatment requires a 20 mg dose', ['treatment']);
+  const coverage = assessClaimCoverage([target], [
+    judged(target.id, 'https://regulator.example/dose', 'supports', 'Use a 20 mg dose.', 'official', '2026-02-01'),
+    judged(target.id, 'https://clinic.example/dose', 'contradicts', 'Do not use a 20 mg dose.', 'third_party', '2026-01-01')
+  ]);
+  assert.equal(coverage.conflicts[0]?.status, 'unresolved');
+  assert.equal(coverage.conflicts[0]?.requiresHumanReview, true);
+  assert.equal(coverage.claims[0]?.supported, false);
+});
+
+test('does not establish a high-risk claim from only one supporting domain', () => {
+  const target = claim('investment-return', 'The investment guarantees a financial return', ['investment']);
+  const oneSource = assessClaimCoverage([target], [
+    judged(target.id, 'https://regulator.example/return', 'supports', 'The return is guaranteed.', 'official', '2026-02-01')
+  ]);
+  assert.equal(oneSource.claims[0]?.supported, false);
+
+  const corroborated = assessClaimCoverage([target], [
+    judged(target.id, 'https://regulator.example/return', 'supports', 'The return is guaranteed.', 'official', '2026-02-01'),
+    judged(target.id, 'https://exchange.example/return', 'supports', 'The return is guaranteed.', 'official', '2026-02-01')
+  ]);
+  assert.equal(corroborated.claims[0]?.supported, true);
+});
+
+function claim(id: string, text: string, subjectTerms: string[] = []): WebClaim {
+  return {
+    id,
+    text,
+    searchQueries: [text],
+    preferredDomains: [],
+    sourceTypes: [],
+    subjectTerms
+  };
+}
+
+function judged(
+  claimId: string,
+  url: string,
+  relation: 'supports' | 'contradicts',
+  evidenceQuote: string,
+  authority: ClaimEvidence['authority'],
+  publishedAt: string
+): ClaimEvidence {
+  return {
+    url,
+    content: evidenceQuote,
+    authority,
+    publishedAt,
+    judgments: [{
+      claimId,
+      relation,
+      confidence: 0.9,
+      chunkIndex: 0,
+      evidenceQuote,
+      reason: 'Direct evidence.',
+      subjectMatched: true,
+      method: 'llm'
+    }]
+  };
+}

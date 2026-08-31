@@ -20,6 +20,8 @@ export type WebSearchResult = {
   provider?: string;
   /** Optional provider-supplied page content that can avoid a second fetch. */
   content?: string;
+  /** Provider-supplied publication timestamp when available. */
+  publishedAt?: string;
 };
 
 type TavilyResponse = {
@@ -28,6 +30,7 @@ type TavilyResponse = {
     url?: string;
     content?: string;
     score?: number;
+    published_date?: string;
   }>;
 };
 
@@ -86,7 +89,10 @@ export async function webSearch(
       title: item.title?.trim() || item.url!,
       url: item.url!,
       snippet: (item.content ?? '').trim().slice(0, MAX_SNIPPET_CHARS),
-      ...(typeof item.score === 'number' ? { score: item.score } : {})
+      ...(typeof item.score === 'number' ? { score: item.score } : {}),
+      ...(typeof item.published_date === 'string' && item.published_date.trim()
+        ? { publishedAt: item.published_date.trim() }
+        : {})
     }));
 
   return { query, results };

@@ -12,7 +12,8 @@ const FRESHNESS_HIGH = [
   'today', 'live', 'realtime', 'right now', 'as of now'
 ];
 const FRESHNESS_MEDIUM = [
-  '最新', '最近', '近期', '本周', '本月', 'latest', 'recent', 'this week', 'this month'
+  '最新', '最近', '近期', '本周', '本月', 'latest', 'recent', 'this week', 'this month',
+  'upcoming', 'next', 'roadmap', 'planning to release', 'preparing to release', '准备', '即将', '将要'
 ];
 const OFFICIAL_DOCS_HIGH = [
   '官方文档', '开发者文档', 'api reference', 'api docs', 'sdk docs',

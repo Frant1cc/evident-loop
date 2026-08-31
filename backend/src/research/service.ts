@@ -10,7 +10,7 @@ import { resolveLlmProvider } from '../llm/provider.js';
 import { appendStreamEvent } from '../streaming/eventStore.js';
 import { publishStreamEvent, subscribeToStream } from '../streaming/eventHub.js';
 import { isExplicitDocumentRequest } from '../tools/wordDocumentTool.js';
-import type { ToolPolicy, ToolRuntime } from '../tools/contracts.js';
+import type { ToolPolicy, ToolProgress, ToolRuntime } from '../tools/contracts.js';
 import { normalizeToolPolicy } from '../tools/policy.js';
 import type { OfficialResearchSkill, ResearchSkillSnapshot } from '../skills/contracts.js';
 import type { ResearchSkillRuntime } from '../skills/runtime.js';
@@ -98,6 +98,7 @@ export function composeResearchSystemPrompt(basePrompt: string, skill?: Official
 export type ResearchRunEvent =
   | { type: 'research_step'; step: ResearchStep }
   | { type: 'tool_call_started'; step: ResearchStep }
+  | { type: 'tool_call_progress'; step: ResearchStep }
   | { type: 'tool_call_completed'; step: ResearchStep }
   | { type: 'tool_approval_requested'; approval: import('../approvals/contracts.js').ToolApprovalDto }
   | { type: 'tool_approval_resolved'; approval: import('../approvals/contracts.js').ToolApprovalDto }
@@ -685,12 +686,38 @@ async function handleAgentEvent(options: {
     return;
   }
 
+  if (event.type === 'tool_progress') {
+    const activeStep = options.activeToolSteps.get(event.toolCall.id);
+    if (!activeStep) return;
+    const progressHistory = progressHistoryFromOutput(activeStep.output);
+    const entry = {
+      ...event.progress,
+      id: `${activeStep.id}:${progressHistory.length + 1}`,
+      occurredAt: new Date().toISOString()
+    };
+    const step = updateResearchStep(activeStep.id, {
+      status: 'running',
+      output: {
+        progress: event.progress,
+        progressHistory: appendOrCompleteProgress(progressHistory, entry).slice(-120)
+      },
+      error: undefined
+    });
+    if (step) {
+      options.activeToolSteps.set(event.toolCall.id, step);
+      emit(run.id, { type: 'research_step', step });
+      emit(run.id, { type: 'tool_call_progress', step });
+    }
+    return;
+  }
+
   if (event.type === 'tool_completed') {
     const activeStep = options.activeToolSteps.get(event.toolCall.id);
     if (!activeStep) return;
+    const progressHistory = progressHistoryFromOutput(activeStep.output);
     const step = updateResearchStep(activeStep.id, {
       status: event.toolCall.error ? 'error' : 'complete',
-      output: event.toolCall.error ? undefined : event.toolCall.result,
+      output: event.toolCall.error ? undefined : mergeToolResultWithProgress(event.toolCall.result, progressHistory),
       error: event.toolCall.error
     });
     options.activeToolSteps.delete(event.toolCall.id);
@@ -708,6 +735,44 @@ async function handleAgentEvent(options: {
     options.researchSources.push(source);
     emit(run.id, { type: 'research_source_found', messageId: run.assistantMessageId, source });
   }
+}
+
+type PersistedToolProgress = ToolProgress & { id: string; occurredAt: string };
+
+function progressHistoryFromOutput(output: unknown): PersistedToolProgress[] {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return [];
+  const value = (output as { progressHistory?: unknown }).progressHistory;
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is PersistedToolProgress => Boolean(
+    item && typeof item === 'object' && !Array.isArray(item)
+      && typeof (item as PersistedToolProgress).id === 'string'
+      && typeof (item as PersistedToolProgress).occurredAt === 'string'
+      && typeof (item as PersistedToolProgress).stage === 'string'
+      && typeof (item as PersistedToolProgress).message === 'string'
+  ));
+}
+
+function mergeToolResultWithProgress(result: unknown, progressHistory: PersistedToolProgress[]) {
+  if (!progressHistory.length) return result;
+  return result && typeof result === 'object' && !Array.isArray(result)
+    ? { ...(result as Record<string, unknown>), progressHistory }
+    : { result, progressHistory };
+}
+
+function appendOrCompleteProgress(history: PersistedToolProgress[], entry: PersistedToolProgress) {
+  const previous = history.at(-1);
+  if (previous?.status === 'running' && entry.status !== 'running' && progressIdentity(previous) === progressIdentity(entry)) {
+    return [...history.slice(0, -1), { ...previous, ...entry, id: previous.id, occurredAt: previous.occurredAt }];
+  }
+  return [...history, entry];
+}
+
+function progressIdentity(progress: ToolProgress) {
+  if (progress.kind === 'search') return `search:${progress.query ?? ''}`;
+  if (progress.kind === 'page' || progress.kind === 'evidence') return `${progress.kind}:${progress.url ?? ''}`;
+  if (progress.kind === 'phase') return `phase:${progress.stage}`;
+  if (progress.kind === 'coverage') return `coverage:${progress.current ?? ''}`;
+  return `${progress.kind ?? progress.stage}:${progress.query ?? progress.url ?? progress.message}`;
 }
 
 function failRunningSteps(run: ResearchRun, message: string) {

@@ -1,6 +1,8 @@
 import type { RagSource } from '../rag/types.js';
 import type { WebSearchResult } from '../tools/webSearchTool.js';
-import type { ClaimAssessment } from './claims.js';
+import type { ClaimAssessment, ClaimConflict } from './claims.js';
+import type { WebEvidencePlan } from './evidencePlanner.js';
+import type { EvidenceEntity } from './evidenceEntities.js';
 
 export type WebRetrievalVerdict = 'sufficient' | 'weak' | 'empty' | 'exhausted';
 export type SearchQualityVerdict = 'sufficient' | 'weak' | 'empty';
@@ -80,6 +82,10 @@ export type ScoredWebSearchResult = WebSearchResult & {
   lexicalScore: number;
   completenessScore: number;
   finalScore: number;
+  releaseTier?: 0 | 1 | 2 | 3 | 4;
+  titleExactMatch?: boolean;
+  urlEntityMatch?: boolean;
+  directReleaseMatch?: boolean;
 };
 
 export type ScoredPageChunk = {
@@ -87,6 +93,11 @@ export type ScoredPageChunk = {
   content: string;
   lexicalScore: number;
   finalScore: number;
+  pageTitle?: string;
+  canonicalUrl?: string;
+  domain?: string;
+  publishedAt?: string;
+  pageEntityCandidates?: string[];
 };
 
 export type QueryAttempt = {
@@ -110,6 +121,12 @@ export type PageAttempt = {
   provider?: string;
   subjectConsistencyScore?: number;
   subjectMismatch?: boolean;
+  authority?: 'official' | 'third_party' | 'unverified';
+  publishedAt?: string;
+  freshnessStatus?: 'matched' | 'outside_window' | 'unknown' | 'future_date' | 'not_required';
+  exactEntityMatch?: boolean;
+  evidenceStrength?: 'direct' | 'indirect';
+  entityCandidates?: string[];
 };
 
 export type WebRetrievalDiagnostics = {
@@ -117,7 +134,13 @@ export type WebRetrievalDiagnostics = {
   pagesFetched: number;
   queryBudget: number;
   pageBudget: number;
-  budgetExhaustedBy?: 'queries' | 'pages' | 'queries-and-pages';
+  fetchAttemptBudget?: number;
+  acceptedPages?: number;
+  rejectedPages?: number;
+  recoveryTriggered?: boolean;
+  recoveryQueriesUsed?: number;
+  planningFailure?: WebEvidencePlan['planningFailure'];
+  budgetExhaustedBy?: 'queries' | 'pages' | 'page-attempts' | 'queries-and-pages' | 'queries-and-page-attempts';
   independentDomains: number;
   durationMs: number;
   stopReason: string;
@@ -126,10 +149,14 @@ export type WebRetrievalDiagnostics = {
   fallbackUsed: boolean;
   subjectConsistencyRate?: number;
   subjectMismatchUrls?: string[];
+  authorityRejectedUrls?: string[];
+  freshnessRejectedUrls?: string[];
+  undatedThirdPartyUrls?: string[];
 };
 
 export type WebRetrievalResult = {
   question: string;
+  evidencePlan: WebEvidencePlan;
   intent: RetrievalIntent;
   queryRoute: RetrievalQueryRoute;
   verdict: WebRetrievalVerdict;
@@ -139,10 +166,15 @@ export type WebRetrievalResult = {
   pageAttempts: PageAttempt[];
   sources: RagSource[];
   claims: ClaimAssessment[];
+  /** Automatically governed support/contradiction conflicts. Present on current retrieval results. */
+  conflicts?: ClaimConflict[];
   coverageScore: number;
   coveredClaimCount: number;
   totalClaimCount: number;
   uncoveredClaims: string[];
+  uncoveredBlockingClaims: string[];
+  evidenceEntities: EvidenceEntity[];
+  requiredMentions: EvidenceEntity[];
   diagnostics: WebRetrievalDiagnostics;
 };
 
