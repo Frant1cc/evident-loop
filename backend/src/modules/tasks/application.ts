@@ -1,12 +1,14 @@
 import type { LlmProvider } from '../../llm/contracts.js';
 import { LlmNotConfiguredError } from '../../llm/errors.js';
 import type { ToolRuntime } from '../../tools/contracts.js';
+import type { ApprovalManager } from '../../approvals/contracts.js';
 import { normalizeToolPolicy } from '../../tools/policy.js';
 import { executeAgentTask, finalizeAgentTask } from '../../runtime/executor.js';
 import {
   createAgentTask,
   deleteAgentTask,
   getAgentTaskDetail,
+  listAllAgentArtifacts,
   listAgentTaskEvents,
   listAgentTasks,
   planAgentTask,
@@ -25,6 +27,7 @@ export type TaskApplicationDependencies = {
   llm?: LlmProvider;
   model: string;
   toolRuntime: ToolRuntime;
+  approvalManager?: ApprovalManager;
 };
 
 /** Use-case boundary for the durable task module. HTTP and provider configuration stay outside it. */
@@ -44,16 +47,30 @@ export function createTaskApplication(dependencies: TaskApplicationDependencies)
     }
     return createAgentTask({ ...input, toolPolicy, allowedTools: undefined });
   };
+  const withApprovals = <T extends { task: { id: string } } | undefined>(detail: T): T => {
+    if (!detail || !dependencies.approvalManager) return detail;
+    return {
+      ...detail,
+      approvals: dependencies.approvalManager.list({ type: 'agent_task', id: detail.task.id })
+    } as T;
+  };
 
   return {
     list: listAgentTasks,
-    get: getAgentTaskDetail,
+    listArtifacts: listAllAgentArtifacts,
+    get: (id: string) => {
+      const detail = getAgentTaskDetail(id);
+      return withApprovals(detail);
+    },
     events: listAgentTaskEvents,
     create,
     delete: deleteAgentTask,
     updatePlan: (id: string, steps: PlanStepDraft[]) => updateAgentTaskPlan(id, steps),
     approve: (id: string) => transitionAgentTask(id, 'running', 'plan approved'),
-    transition: (id: string, status: AgentTaskStatus, reason?: string) => transitionAgentTask(id, status, reason),
+    transition: (id: string, status: AgentTaskStatus, reason?: string) => {
+      if (status === 'cancelled') dependencies.approvalManager?.cancelScope({ type: 'agent_task', id });
+      return transitionAgentTask(id, status, reason);
+    },
     retryStep: (taskId: string, stepId: string) => retryAgentPlanStep(taskId, stepId),
     saveEvidenceChain: (taskId: string, stepId: string, draft: EvidenceChainDraft) =>
       saveAgentEvidenceChain(taskId, stepId, draft),
@@ -63,20 +80,22 @@ export function createTaskApplication(dependencies: TaskApplicationDependencies)
       model: dependencies.model,
       signal
     }),
-    run: (id: string, signal?: AbortSignal) => executeAgentTask({
+    run: async (id: string, signal?: AbortSignal) => withApprovals(await executeAgentTask({
       id,
       llm: requireLlm(),
       model: dependencies.model,
       toolRuntime: dependencies.toolRuntime,
+      approvalManager: dependencies.approvalManager,
       signal
-    }),
-    finalize: (id: string, signal?: AbortSignal) => finalizeAgentTask({
+    })),
+    finalize: async (id: string, signal?: AbortSignal) => withApprovals(await finalizeAgentTask({
       id,
       llm: requireLlm(),
       model: dependencies.model,
       toolRuntime: dependencies.toolRuntime,
+      approvalManager: dependencies.approvalManager,
       signal
-    })
+    }))
   };
 }
 

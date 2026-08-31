@@ -9,6 +9,8 @@ export const RESEARCH_EVENT_TYPES = [
   'research_step',
   'tool_call_started',
   'tool_call_completed',
+  'tool_approval_requested',
+  'tool_approval_resolved',
   'research_source_found',
   'assistant_delta',
   'research_message_completed',

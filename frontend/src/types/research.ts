@@ -21,7 +21,7 @@ export type ResearchStep = {
   conversationId: string;
   messageId: string;
   sequence: number;
-  type: 'llm' | 'tool';
+  type: 'llm' | 'tool' | 'context';
   status: 'running' | 'complete' | 'error';
   title: string;
   input?: unknown;
@@ -85,4 +85,5 @@ export type ResearchConversationDetail = {
   notes: ResearchNote[];
   promptPreview: ResearchPromptPreview;
   activeRun?: ResearchRun;
+  approvals?: import('./approvals').ToolApproval[];
 };

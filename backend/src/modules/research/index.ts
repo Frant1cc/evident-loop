@@ -4,5 +4,6 @@ export {
   UnknownResearchSkillError,
   type ResearchApplication
 } from './application.js';
-export type { ResearchRunEvent } from '../../research/service.js';
 export type { ResearchRunStatus } from '../../research/types.js';
+export type { ToolApprovalDto, ToolApprovalScope, ToolApprovalStatus } from '../../approvals/contracts.js';
+export { getActiveResearchRun } from '../../research/store.js';

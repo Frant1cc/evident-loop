@@ -1,7 +1,9 @@
 import {
   buildSummarySource,
   estimateTokens,
+  MICRO_COMPRESSION_TOKENS,
   prepareContext,
+  SESSION_MEMORY_INTERVAL_TOKENS,
   SESSION_MEMORY_MAX_TOKENS,
   SUMMARY_COMPRESSION_TOKENS,
   SUMMARY_MAX_TOKENS,
@@ -44,13 +46,31 @@ const summaryTags = [
   'cited-evidence-keys'
 ];
 
+export type ResearchContextEvent =
+  | {
+      type: 'context_compression_started';
+      level: 'micro' | 'summary';
+      estimatedTokens: number;
+      thresholdTokens: number;
+    }
+  | {
+      type: 'context_compression_completed';
+      level: 'micro' | 'summary';
+      beforeTokens: number;
+      afterTokens: number;
+      savedTokens: number;
+      thresholdTokens: number;
+    };
+
 /** Research adapter around the neutral context package. */
 export function createResearchContextManager(input: {
   conversationId: string;
   llm: LlmProvider;
   model: string;
+  onEvent?: (event: ResearchContextEvent) => void | Promise<void>;
 }): ContextManager {
   let state: ContextState = getResearchConversation(input.conversationId)?.contextState ?? {};
+  let microCompressionReported = false;
 
   const persist = () => {
     updateResearchContextState(input.conversationId, state);
@@ -65,7 +85,7 @@ export function createResearchContextManager(input: {
       persist();
     }
     const checkpointTokens = state.sessionMemoryCheckpointTokens ?? 0;
-    if (canonicalTokens - checkpointTokens < 10_000) return;
+    if (canonicalTokens - checkpointTokens < SESSION_MEMORY_INTERVAL_TOKENS) return;
     const conversation = canonicalMessages.filter((message) => message.role !== 'system');
     const checkpointMessageCount = state.sessionMemoryCheckpointMessageCount ?? 0;
     const delta = conversation.slice(checkpointMessageCount);
@@ -136,6 +156,13 @@ export function createResearchContextManager(input: {
       });
 
       if (prepared.estimatedTokens >= SUMMARY_COMPRESSION_TOKENS) {
+        const beforeTokens = prepared.estimatedTokens;
+        await input.onEvent?.({
+          type: 'context_compression_started',
+          level: 'summary',
+          estimatedTokens: beforeTokens,
+          thresholdTokens: SUMMARY_COMPRESSION_TOKENS
+        });
         // A pre-existing large summary is itself the current model view. Never regenerate a
         // rolling summary from raw audit history after that checkpoint.
         const source = state.summary
@@ -166,6 +193,34 @@ export function createResearchContextManager(input: {
           summaryContent: summary,
           evidenceManifestContent: manifestBlock
         });
+        const afterTokens = estimatePreparedTokens(prepared.messages, request.tools);
+        await input.onEvent?.({
+          type: 'context_compression_completed',
+          level: 'summary',
+          beforeTokens,
+          afterTokens,
+          savedTokens: Math.max(0, beforeTokens - afterTokens),
+          thresholdTokens: SUMMARY_COMPRESSION_TOKENS
+        });
+      } else if (prepared.level === 'micro' && !microCompressionReported) {
+        microCompressionReported = true;
+        const beforeTokens = prepared.estimatedTokens;
+        await input.onEvent?.({
+          type: 'context_compression_started',
+          level: 'micro',
+          estimatedTokens: beforeTokens,
+          thresholdTokens: MICRO_COMPRESSION_TOKENS
+        });
+        const afterTokens = estimatePreparedTokens(prepared.messages, request.tools);
+        await input.onEvent?.({
+          type: 'context_compression_completed',
+          level: 'micro',
+          beforeTokens,
+          afterTokens,
+          savedTokens: Math.max(0, beforeTokens - afterTokens),
+          thresholdTokens: MICRO_COMPRESSION_TOKENS
+        });
+        if (prepared.memoryDue) scheduleMemory(request.messages, prepared.canonicalTokens);
       } else if (prepared.memoryDue) {
         scheduleMemory(request.messages, prepared.canonicalTokens);
       }
@@ -186,6 +241,10 @@ export function createResearchContextManager(input: {
       persist();
     }
   };
+}
+
+function estimatePreparedTokens(messages: ChatMessage[], tools?: ContextPreparation['tools']) {
+  return estimateTokens({ messages, ...(tools?.length ? { tools } : {}) });
 }
 
 async function generateSessionMemory(input: {

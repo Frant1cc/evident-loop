@@ -7,7 +7,7 @@ import { LlmProviderApiError } from '../llm/openAiCompatibleClient.js';
 import { failure, success } from '../response.js';
 import type { ToolRuntime } from '../tools/contracts.js';
 import { builtInToolRuntime } from '../tools/runtime.js';
-import { isExplicitWordDocumentRequest } from '../tools/wordDocumentTool.js';
+import { isExplicitDocumentRequest } from '../tools/wordDocumentTool.js';
 
 const AGENT_SYSTEM_PROMPT = `You are EvidentLoop, an evidence-first durable research agent.
 
@@ -28,9 +28,9 @@ Rules:
 - Call retrieve_web_evidence at most once per user request. It already performs query rewriting and progressive search internally; a second call would incorrectly reset the quality budget.
 - Treat retrieve_web_evidence.verdict as authoritative: sufficient may support an answer; exhausted may only support a qualified partial answer; empty must not be presented as evidence. Do not simulate lower-level web_search or fetch_page calls.
 - When answering from web results, cite the page title or url.
-- Call generate_word_document only when the user explicitly asks to generate, export, download, or create a Word/DOCX file. Ordinary requests to summarize, analyze, or write content should remain normal chat replies.
-- For generate_word_document, always put the complete body in contentMarkdown. Never construct a blocks array. Use <!-- pagebreak --> for explicit page breaks.
-- When generate_word_document succeeds, call it only once. The client renders the document card from the structured tool result, so do not include downloadUrl, previewUrl, localhost URLs, Markdown download links, or redundant download instructions in the final answer. Give only a concise content summary when useful.
+- Call start_document_generation only when the user explicitly asks to generate, export, download, or create a document file (Word, DOCX, PDF report, PPT, PPTX, or slides). Ordinary requests to summarize, analyze, or write content should remain normal chat replies.
+- For start_document_generation, specify deliverables based on what the user requested: presentation for PPT/PPTX/slides, longform for Word/DOCX/PDF reports. If the format is unclear, ask before calling the tool.
+- When start_document_generation succeeds, call it only once. The client renders the document card from the structured tool result, so do not include download URLs, localhost URLs, or redundant download instructions in the final answer. Give only a concise content summary when useful.
 - If a tool fails, explain the failure based on the tool error instead of pretending it succeeded.
 - Stop calling tools once you have enough information to answer.`;
 
@@ -67,8 +67,8 @@ export function createAgentRouter(toolRuntime: ToolRuntime = builtInToolRuntime)
         systemPrompt: AGENT_SYSTEM_PROMPT,
         maxToolRounds: DEFAULT_MAX_TOOL_ROUNDS,
         toolRuntime,
-        requiredToolName: isExplicitWordDocumentRequest(message)
-          ? 'generate_word_document'
+        requiredToolName: isExplicitDocumentRequest(message)
+          ? 'start_document_generation'
           : undefined,
         signal: controller.signal
       });

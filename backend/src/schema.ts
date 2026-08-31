@@ -137,7 +137,7 @@ export const researchSteps = sqliteTable('research_steps', {
   conversationId: text('conversation_id').notNull(),
   messageId: text('message_id').notNull(),
   sequence: integer('sequence').notNull(),
-  type: text('type', { enum: ['llm', 'tool'] }).notNull(),
+  type: text('type', { enum: ['llm', 'tool', 'context'] }).notNull(),
   status: text('status', { enum: ['running', 'complete', 'error'] }).notNull(),
   title: text('title').notNull(),
   inputJson: text('input_json'),
@@ -171,6 +171,77 @@ export const researchNotes = sqliteTable('research_notes', {
   content: text('content').notNull(),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull()
+});
+
+export const researchArtifacts = sqliteTable('research_artifacts', {
+  id: text('id').primaryKey(),
+  conversationId: text('conversation_id').notNull(),
+  version: integer('version').notNull(),
+  snapshotDigest: text('snapshot_digest').notNull(),
+  status: text('status', { enum: ['planning', 'awaiting_confirmation', 'rendering', 'validating', 'repairing', 'completed', 'partial', 'failed', 'cancelled', 'superseded'] }).notNull(),
+  stale: integer('stale', { mode: 'boolean' }).notNull(),
+  specJson: text('spec_json').notNull(),
+  snapshotJson: text('snapshot_json').notNull(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull()
+});
+
+export const researchArtifactOutputs = sqliteTable('research_artifact_outputs', {
+  id: text('id').primaryKey(),
+  generationId: text('generation_id').notNull(),
+  version: integer('version').notNull(),
+  format: text('format', { enum: ['pptx', 'pdf'] }).notNull(),
+  status: text('status', { enum: ['pending', 'rendering', 'validating', 'completed', 'failed', 'cancelled'] }).notNull(),
+  fileName: text('file_name'),
+  contentType: text('content_type'),
+  size: integer('size'),
+  storageKey: text('storage_key'),
+  previewKey: text('preview_key'),
+  provenanceJson: text('provenance_json'),
+  renderedSpecJson: text('rendered_spec_json'),
+  renderedSpecDigest: text('rendered_spec_digest'),
+  error: text('error'),
+  diagnosticsJson: text('diagnostics_json'),
+  attempts: integer('attempts').notNull(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull()
+});
+
+export const researchArtifactAssets = sqliteTable('research_artifact_assets', {
+  id: text('id').primaryKey(),
+  generationId: text('generation_id').notNull(),
+  sourceId: text('source_id'),
+  originalPageUrl: text('original_page_url'),
+  imageUrl: text('image_url').notNull(),
+  licenseConfirmed: integer('license_confirmed', { mode: 'boolean' }).notNull(),
+  mimeType: text('mime_type').notNull(),
+  byteSize: integer('byte_size').notNull(),
+  pixelWidth: integer('pixel_width'),
+  pixelHeight: integer('pixel_height'),
+  storageKey: text('storage_key').notNull(),
+  createdAt: text('created_at').notNull()
+});
+
+export const researchArtifactDraftRequests = sqliteTable('research_artifact_draft_requests', {
+  id: text('id').primaryKey(),
+  conversationId: text('conversation_id').notNull(),
+  researchRunId: text('research_run_id'),
+  preferencesJson: text('preferences_json'),
+  status: text('status', { enum: ['queued', 'running', 'completed', 'failed', 'cancelled'] }).notNull(),
+  generationId: text('generation_id'),
+  error: text('error'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+  completedAt: text('completed_at')
+});
+
+export const researchArtifactImageConsents = sqliteTable('research_artifact_image_consents', {
+  id: text('id').primaryKey(),
+  generationId: text('generation_id').notNull(),
+  conversationId: text('conversation_id').notNull(),
+  imageUrl: text('image_url').notNull(),
+  sourceId: text('source_id'),
+  confirmedAt: text('confirmed_at').notNull()
 });
 
 export const agentTasks = sqliteTable('agent_tasks', {

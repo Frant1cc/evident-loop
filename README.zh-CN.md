@@ -1,253 +1,152 @@
 <div align="center">
-  <img src="docs/assets/evident-loop-8bit.svg" alt="EvidentLoop — evidence-first research agent" width="100%" />
+  <img src="docs/assets/evident-loop-8bit.svg" alt="EvidentLoop — 证据优先的研究型 Agent" width="100%" />
 
-  [English](./README.md) · 中文
+  <h1>EvidentLoop</h1>
+
+  <p><strong>给出答案并不难，难的是让研究过程可追溯、可恢复、可验证。</strong></p>
+  <p>一个证据优先的持久化 AI 研究工作台，将开放问题转化为可核验结论与可直接使用的专业文稿。</p>
+
+  <p>
+    <img src="https://img.shields.io/badge/TypeScript-5.7-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript" />
+    <img src="https://img.shields.io/badge/Vue-3.5-42B883?style=flat-square&logo=vuedotjs&logoColor=white" alt="Vue 3" />
+    <img src="https://img.shields.io/badge/Express-4-111111?style=flat-square&logo=express&logoColor=white" alt="Express" />
+    <img src="https://img.shields.io/badge/MCP-1.29-6B5CE7?style=flat-square" alt="Model Context Protocol" />
+    <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-D22128?style=flat-square" alt="Apache License 2.0" /></a>
+  </p>
+
+  <p><a href="./README.md">English</a> · <strong>简体中文</strong></p>
 </div>
 
-# EvidentLoop（开发中）
+---
 
-An evidence-first durable research agent.
+EvidentLoop 不是又一个聊天界面，而是一次对“AI 研究系统如何越过 Demo 阶段”的完整工程实践：任务要能恢复，结论要有证据，工具要受约束，检索要能评测，研究结果还要成为真正可交付的文稿。
 
-一个面向研究任务的可恢复、可审计、可评测 Agent。
+## 为什么值得关注
 
-项目正在快速开发，接口、数据结构和交互方式可能调整。目前重点不是继续堆叠聊天功能，而是把 Durable Runtime、Source–Evidence–Claim 证据链、受控检索和可复现评测做扎实。
+| | 核心能力 | 带来的改变 |
+| :---: | --- | --- |
+| ↻ | **持久化 Agent Runtime** | 显式状态机、Checkpoint、工具幂等复用、重试、取消与可恢复 SSE，让长任务中断后仍能安全继续。 |
+| ⛓ | **Source → Evidence → Claim** | 每条结论都可以回溯到具体来源片段，并标记支持、反驳或背景关系。 |
+| ◎ | **可以量化的检索质量** | Dense / Hybrid RAG、置信度驱动的查询改写、拒答用例、历史基线与逐案例回归分析，避免凭感觉调参。 |
+| ◈ | **有硬边界的工具系统** | 不可变 Runtime Snapshot、Schema Hash、策略过滤、可用性检查、审批门禁和 MCP 隔离，把权限落实在代码中。 |
+| ✦ | **从研究到专业交付物** | 同一套可编辑、可版本化流程生成带引用的 DOCX、PDF 与 PPTX，支持渲染质检、修复重试、预览和跨会话产物库。 |
 
-欢迎通过 Issue、Pull Request 和设计讨论参与共创。本 README 同时作为项目说明和贡献指南。
-
-## 项目状态
-
-当前版本适合本地开发、架构学习和功能演示，尚未达到公网生产部署标准。
-
-已经实现：
-
-- 多轮 Function Calling Agent Loop
-- 任务规划、人工审批、显式状态机和 Checkpoint
-- 工具执行记录、幂等复用和失败重试
-- Source–Evidence–Claim 证据链
-- Reviewer 驱动的证据缺口识别与一次受控补充检索
-- 多格式知识库（Markdown / TXT / DOCX / 文本型 PDF）、结构感知分块、页码或原文行号引用，以及 Dense/Hybrid RAG 和查询改写
-- Recall@K、MRR、拒答能力等 RAG 评测
-- 可断线重连、支持显式停止的后台研究工作台，以及任务控制台和 Word 报告生成
-
-正在开发或尚未完成：
-
-- `maxTokens` 已进入任务约束，但尚未完成真实 Token 统计与强制预算控制
-- LLM 和 Embedding Provider 仍需要进一步解耦
-- API 暂无认证、用户隔离和速率限制
-- `fetch_page` 等联网工具仍需生产级 SSRF 加固
-- 扫描 PDF OCR、XLSX/CSV/PPTX 导入和 PDF 视觉版面重建尚未实现
-- 前端自动化测试和端到端测试覆盖不足
-- 多实例任务锁、队列调度和完整 Run Replay 尚未实现
-
-请不要在介绍、简历或文章中把尚未完成的能力描述为已经实现。
-
-## 核心工作流
+## 从问题到可审计产物
 
 ```mermaid
 flowchart LR
-    U["用户目标"] --> P["Planner 生成计划"]
-    P --> A["人工审批"]
-    A --> E["Executor 执行步骤"]
-    E --> T["RAG / Web / Document Tools"]
-    T --> C["Source–Evidence–Claim 证据链"]
-    C --> R["Reviewer 审查证据"]
-    R -->|证据不足| E
-    R -->|通过| W["Writer 生成报告"]
-    W --> O["可审计产物"]
+    Q["研究目标"] --> P["制定计划"]
+    P --> A{"人工审批"}
+    A --> E["RAG / Web / MCP 执行"]
+    E --> SEC["来源 · 证据 · 结论"]
+    SEC --> R{"Reviewer 审查"}
+    R -->|发现证据缺口| E
+    R -->|通过| D["回答 / DOCX / PDF / PPTX"]
+
+    CP["事件 · Checkpoint · 工具记录"] -. 恢复 .-> P
+    CP -. 恢复 .-> E
+    CP -. 恢复 .-> R
 ```
 
-项目遵循几个基本原则：
+整个循环是显式的：Planner 定义预期证据，工具在冻结的权限快照内执行，Reviewer 识别缺少支撑的结论，最终再由 Writer 生成结果。关键约束由运行时代码执行，而不只是写在 Prompt 里。
 
-- 约束应该由运行时代码执行，不能只写在 Prompt 中。
-- 证据不足时应明确说明限制，不能让模型补写不存在的来源。
-- 检索改动应通过固定评测集验证，不能只依赖主观体验。
-- 对长任务保留状态、事件和工具结果，使失败后能够判断哪些工作可以安全复用。
-- 优先保持核心实现可理解，再考虑引入大型 Agent 框架。
+## 产品能力
 
-## 快速启动
+### 研究工作台
 
-环境要求：
+一个支持流式交互和多轮研究的证据工作区，整合对话历史、实时执行时间线、来源检查、笔记、工具审批、官方研究技能和上下文压缩过程。研究任务在后台持续运行，浏览器连接中断后可以自动恢复。
 
-- Node.js 20+
-- pnpm 10+
-- Docker 与 Docker Compose
-- DeepSeek 或 MiniMax API Key
-- 支持 OpenAI Embeddings 协议的 Embedding API Key
+### Durable Agent Task
 
-```bash
-pnpm install
-cp backend/.env.example backend/.env
-pnpm qdrant:up
-pnpm dev
-```
+针对更长的任务，EvidentLoop 展示完整执行生命周期：规划、审批、步骤依赖、执行次数、Reviewer 审查、证据缺口、Checkpoint、取消和最终报告。已经完成的工具调用会用稳定执行键持久化，恢复时可以安全复用，避免重复产生副作用。
 
-启动前编辑 `backend/.env`，选择一个文本模型 Provider，并填写 Embedding Key。DeepSeek 示例：
+### 知识库与 RAG 实验室
 
-```dotenv
-DEEPSEEK_API_KEY=你的_DeepSeek_Key
-EMBEDDING_API_KEY=你的_Embedding_Key
-```
+- 导入 Markdown、TXT、DOCX 和文本型 PDF，同时保留标题结构、页码或原文行号定位。
+- 支持 Dense / Hybrid 检索、FTS5 + Qdrant、RRF 融合、相邻 Chunk 组装、置信度判断和有预算的查询改写。
+- 在真实生产检索链路上计算文件级、章节级和证据级 Recall@3 / MRR@3，覆盖可回答与拒答场景，并支持历史基线和逐问题对比。
 
-MiniMax 示例：
+### 受控联网证据检索
 
-```dotenv
-LLM_PROVIDER=minimax
-MINIMAX_API_KEY=你的_MiniMax_Key
-MINIMAX_MODEL=MiniMax-M3
-MINIMAX_BASE_URL=https://api.minimaxi.com/v1
-EMBEDDING_API_KEY=你的_Embedding_Key
-```
+联网能力不是一次裸 Search API 调用，而是一条有预算的证据流水线：识别查询意图、优先权威域名、改写弱查询、评估页面质量、控制来源多样性、计算 Claim Coverage，并在证据充分时提前停止；证据不足时明确暴露边界。
 
-如果需要使用联网搜索工具，还需配置：
+### 动态工具与 MCP
 
-```dotenv
-TAVILY_API_KEY=你的_Tavily_Key
-```
+内置工具和 MCP 工具共享一套中立 Runtime 契约。每一轮模型调用都会获得不可变工具快照；真正执行前再次校验授权、当前可用性、定义 Hash 和输入 Schema。系统支持 Streamable HTTP、本地 stdio、静态 Headers、OAuth、Schema 持久化、显式审批和一键启用的托管预设，同时不会让 MCP 细节侵入研究领域代码。
 
-访问地址：
+### 文稿工作台
 
-- 前端：http://localhost:5173
-- 后端健康检查：http://localhost:3000/api/health
-- Qdrant 控制台：http://localhost:6333/dashboard
+研究结果可以通过统一生命周期变成演示文稿或长篇文档：创建草稿、编辑、自动保存、确认格式、冻结不可变版本、渲染、检查、修复、预览和下载。DOCX 与 PDF 共用一份长文内容源；PPTX 使用独立的演示模型，但与报告共享引用和研究快照。
 
-首次启动后，可在“知识库”页面上传文件，并保持“保存后自动向量化”开启。当前支持 `.md`、`.txt`、`.docx` 和文本型 `.pdf`。`knowledge-samples/` 仍提供 Markdown 示例；导入的 PDF/DOCX 只读，可下载原件或重新解析。扫描件或无法抽出文本的 PDF 会被拒绝，不会写入空内容。
+## 用数据验证质量
 
-完整的环境变量、首次初始化、功能验收和故障排查见 [运行指南](./RUNNING.md)。
+> **119 条黄金问题** · **97.2% 文件级 Recall@3** · **78 个测试文件**
 
-## 项目结构
+检索改动通过固定语料验证，而不是依赖主观感受。评测集包含 109 条可回答问题和 10 条刻意设计的不可回答问题，从文件、章节和证据三个层级衡量结果，并保留历史基线用于回归分析。项目测试还覆盖 Runtime 恢复、证据链构建、工具安全、MCP 生命周期、流式恢复和文稿生成。
+
+这些数字只描述仓库内固定语料与对应配置，不代表通用模型质量。详细用例与对比方法见 [RAG 检索评测](./docs/development/rag-evaluation.md)。
+
+## 系统架构
 
 ```text
-.
-├── frontend/                   # Vue 3 + Vite + TypeScript
-├── backend/                    # Express + TypeScript + SQLite
-│   └── src/
-│       ├── modules/            # 模块应用层入口与边界
-│       ├── llm/                # LLM Provider 端口与适配器
-│       ├── agent/              # Function Calling Agent Loop
-│       ├── runtime/            # 状态机、Checkpoint、证据链和任务执行
-│       ├── knowledge/          # 多格式导入、解析器、原件存储和来源定位
-│       ├── rag/                # Chunk、检索、融合、改写和评测
-│       ├── tools/              # 工具契约、能力目录与组合注册
-│       └── documents/          # Word 文档 Schema 与渲染
-├── docs/knowledge/             # 内置评测和演示知识文档
-├── knowledge-samples/          # 可导入知识库的示例资料
-├── docker-compose.yml          # 本地 Qdrant
-└── RUNNING.md                  # 完整运行指南
+Vue 3 工作区
+  ├─ 研究工作台           ├─ Durable Task 控制台
+  ├─ 知识库与评测实验室   ├─ 跨会话产物库
+  └─ MCP 管理             └─ 系统设置
+               │ HTTP + 可恢复 SSE
+               ▼
+Express 协议适配层
+               ▼
+模块应用层 API
+  ├─ Research      ├─ Tasks       └─ Artifacts
+               ▼
+领域服务与中立契约
+  ├─ Agent Loop    ├─ Durable Runtime  ├─ Context
+  ├─ RAG / Web     ├─ Evidence Chain   ├─ ToolRuntime
+  └─ Skills        └─ Document Model   └─ Approvals
+               ▼
+基础设施适配器
+  ├─ SQLite / Drizzle  ├─ Qdrant / FTS5
+  ├─ LLM Provider      ├─ MCP SDK
+  └─ DOCX / PDF / PPTX Renderer
 ```
 
-后端模块依赖方向和新增 Provider/Tool 的约定见 [模块化架构约定](./docs/development/modular-architecture.md)。
+后端采用模块化单体，并保留唯一生产组合根。Route 只处理协议，Module 暴露应用用例，领域代码依赖中立契约，Provider 实现对应端口；自动化边界测试持续保护依赖方向。
 
-## 如何参与共创
+## 技术栈
 
-### 适合贡献的方向
+| 分层 | 技术 |
+| --- | --- |
+| 前端 | Vue 3、TypeScript、Vite、Tailwind CSS、Reka UI、VueUse |
+| 后端 | Node.js、Express、TypeScript、Zod、Drizzle ORM |
+| 存储 | SQLite、Qdrant、SQLite FTS5、持久化文件存储 |
+| Agent Runtime | Function Calling、可恢复 SSE、Checkpoint、审批管理、上下文压缩 |
+| 检索 | Dense Embedding、Hybrid RAG、RRF 融合、Query Rewrite、检索评测 |
+| 扩展 | Model Context Protocol、Streamable HTTP、stdio、OAuth、动态工具快照 |
+| 文稿 | DOCX、PDF、PPTX、Playwright、PptxGenJS |
+| 质量 | Node Test Runner、`tsx`、TypeScript 检查、Runtime 不变量验证 |
 
-优先欢迎以下类型的贡献：
+## 仓库导览
 
-| 方向          | 示例                                                  |
-| ------------- | ----------------------------------------------------- |
-| Runtime       | Token/成本/时间预算、恢复语义、并发任务锁、Run Replay |
-| Agent Loop    | 上下文管理、错误恢复、工具调用协议兼容、流式事件      |
-| RAG           | Reranker、检索评测用例、置信度校准、查询融合          |
-| Provider      | LLM Provider、Embedding Provider、兼容 API 适配       |
-| Tool Safety   | Zod 参数校验、权限策略、超时、SSRF 防护               |
-| Frontend      | 任务可观测性、证据链展示、错误反馈、端到端测试        |
-| Documentation | 架构说明、复现实验、英文文档、运行排错                |
-
-第一次参与时，可以从文档、测试、配置校验或小范围 UI 问题开始。涉及 Runtime 状态、数据库结构、工具权限或 Provider 抽象的大改动，建议先创建 Issue 讨论方案。
-
-### 开始开发
-
-1. Fork 仓库并从最新主分支创建功能分支。
-2. 在 Issue 中说明要解决的问题、预期行为和验证方式。
-3. 保持一次 Pull Request 只解决一个主题。
-4. 修改实现时同步补充或更新测试。
-5. 如果改变配置、接口或用户操作方式，同步更新 README 或 `RUNNING.md`。
-6. 提交 Pull Request，并说明改动、设计取舍、验证结果和已知限制。
-
-小型修复可以直接提交 Pull Request；架构调整请先讨论，避免贡献者投入大量工作后才发现方向不一致。
-
-### 本地验证
-
-提交前至少执行：
-
-```bash
-pnpm typecheck
-pnpm test
-pnpm --filter backend runtime:verify
-pnpm build
+```text
+evident-loop/
+├── frontend/                    # Vue 研究工作区
+├── backend/src/
+│   ├── runtime/                 # 状态机、恢复与证据链
+│   ├── research/ + context/     # 流式研究与上下文生命周期
+│   ├── rag/ + web/              # 本地知识与联网证据检索
+│   ├── tools/ + mcp/            # 工具 Runtime、策略与 MCP 连接
+│   ├── artifacts/ + documents/  # 草稿、渲染、质检与持久化
+│   └── modules/                 # 对外应用层边界
+├── packages/stream-protocol/    # 前后端共享流式协议
+├── docs/development/            # 架构与实现文档
+└── docs/knowledge/              # 固定评测语料
 ```
 
-依赖变更还应执行：
+## 适用边界
 
-```bash
-pnpm install --frozen-lockfile
-pnpm audit --registry=https://registry.npmjs.org/ --prod
-```
-
-当前根目录的 `pnpm lint` 只是预留入口，尚未接入正式 Lint 工具，不能代替类型检查和测试。
-
-### Pull Request 检查清单
-
-- [ ] 改动目标清晰，没有混入无关重构
-- [ ] TypeScript 类型检查通过
-- [ ] 现有自动化测试通过
-- [ ] 新行为包含对应测试或说明无法自动测试的原因
-- [ ] 前端变化附带截图或录屏
-- [ ] 配置、接口或运行方式变化已更新文档
-- [ ] 没有提交 `.env`、API Key、数据库、生成文件或个人 IDE 配置
-- [ ] 没有把尚未实现或未经评测的能力描述为完成
-- [ ] 已说明兼容性影响、数据迁移需求和已知限制
-
-## Issue 建议格式
-
-为了让问题更容易复现和认领，Issue 建议包含：
-
-- 问题背景和使用场景
-- 当前行为与期望行为
-- 最小复现步骤
-- Node.js、pnpm、操作系统和相关服务版本
-- 错误日志或界面截图，注意删除密钥和个人数据
-- 如果是功能提案，说明为什么适合进入项目核心，而不是业务定制
-
-可以在标题前使用 `[Runtime]`、`[RAG]`、`[Frontend]`、`[Tool]`、`[Docs]` 等模块标记。
-
-## 数据与安全
-
-- SQLite 数据、会话、任务和生成文档默认写入 `backend/data/`。
-- 导入的知识库原件默认写入 `backend/data/knowledge-files/`。
-- Qdrant 保存派生向量和来源元数据，数据位于本地 Docker volume。
-- `.env`、数据库、构建产物和本地配置禁止提交。
-- 示例配置只能保留空值或无效占位值，禁止放入真实密钥。
-- 当前 API 没有认证和限流，请不要把开发服务器直接暴露到公网。
-- 提交日志、截图或 Issue 前，请检查是否包含对话数据、文档内容、Token 或内部地址。
-
-## 常用命令
-
-```bash
-pnpm dev                 # 同时启动前后端
-pnpm typecheck           # TypeScript 检查
-pnpm test                # 自动化测试
-pnpm build               # 生产构建检查
-pnpm qdrant:up           # 启动 Qdrant
-pnpm qdrant:down         # 停止 Qdrant，保留数据卷
-pnpm rag:sync            # 重建或同步知识库索引
-pnpm rag:eval            # 执行真实检索链路评测
-pnpm rag:eval:smoke      # 执行不依赖外部 Embedding 的冒烟评测
-```
-
-## 贡献目标
-
-这个项目不追求最快堆出最多功能，而是希望形成一个能够回答以下问题的参考实现：
-
-- Agent 中断后，系统如何知道从哪里继续？
-- 工具已经成功但请求断开时，如何避免重复执行？
-- 一条结论如何追溯到具体来源和证据？
-- Reviewer 发现证据不足后，如何进行有预算的补充检索？
-- RAG 优化如何通过固定数据集证明没有回退？
-- 模型、工具和运行时之间的职责边界应该放在哪里？
-
-如果你的贡献能让这些问题更清晰、更可靠或更容易复现，它就非常适合这个项目。
+EvidentLoop 面向可信的本地或私有环境。公网多用户部署还需要外部认证、租户隔离、速率限制与生产级网络安全加固。扫描型 PDF OCR，以及文档中未列出的办公格式导入，不在当前能力范围内。
 
 ## License
 
-EvidentLoop 使用 [Apache License 2.0](./LICENSE) 开源。
+EvidentLoop 基于 [Apache License 2.0](./LICENSE) 开源。

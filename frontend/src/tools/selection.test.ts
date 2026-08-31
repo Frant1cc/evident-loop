@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildSelectedToolPolicy, requiredGroupIds, standaloneTools } from './selection.js';
+import {
+  buildSelectedToolPolicy,
+  requiredGroupIds,
+  standaloneTools
+} from './selection.js';
 
 const tools = [
   { name: 'search_knowledge', label: '检索', description: '' },

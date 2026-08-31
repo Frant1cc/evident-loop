@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import {
   PhArrowCounterClockwise,
+  PhArchive,
   PhBooks,
   PhFlask,
   PhFlowArrow,
@@ -11,7 +12,6 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-
 import {
   defaultTabVisibility,
   type ConfigurableTabKey,
@@ -34,6 +34,12 @@ const tabOptions = [
     label: '研究工作台',
     description: '组织研究任务、来源、过程和最终结论。',
     icon: PhFlask
+  },
+  {
+    key: 'artifacts',
+    label: '产物',
+    description: '集中查看研究文件与 Agent 最终报告。',
+    icon: PhArchive
   },
   {
     key: 'tasks',
@@ -78,6 +84,7 @@ function toggleTab(key: ConfigurableTabKey) {
 function restoreDefaults() {
   emit('update:tabVisibility', { ...defaultTabVisibility });
 }
+
 </script>
 
 <template>
@@ -120,9 +127,10 @@ function restoreDefaults() {
             </div>
           </div>
 
-          <p class="m-0 border-t border-border bg-muted/30 px-5 py-3 text-xs leading-5 text-muted-foreground">固定顺序：研究工作台、Agent 运行时、质量评测、知识库、设置。</p>
+          <p class="m-0 border-t border-border bg-muted/30 px-5 py-3 text-xs leading-5 text-muted-foreground">固定顺序：研究工作台、产物、Agent 运行时、质量评测、知识库、设置。</p>
         </div>
       </section>
+
     </div>
   </section>
 </template>

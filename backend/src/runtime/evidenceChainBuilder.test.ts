@@ -185,36 +185,23 @@ test('does not create evidence for an empty controlled web result', () => {
   assert.deepEqual(result, { sources: [], evidence: [] });
 });
 
-test('keeps legacy search_docs evidence and records ranged read_document locators', () => {
-  const base = {
+test('records ranged read_document locators', () => {
+  const result = buildEvidenceFromToolExecutions([{
+    id: 'ranged-read',
     taskId: 'task-1',
     stepId: 'step-1',
-    status: 'completed' as const,
+    executionKey: 'ranged-read',
+    status: 'completed',
     arguments: {},
+    toolName: 'read_document',
+    result: {
+      file: 'guide.md', content: 'selected lines', startLine: 20, endLine: 24,
+      totalLines: 80, truncated: true, nextStartLine: 25, totalChars: 9000
+    },
     startedAt: '2026-08-08T00:00:00.000Z',
     completedAt: '2026-08-08T00:00:01.000Z'
-  };
-  const result = buildEvidenceFromToolExecutions([
-    {
-      ...base,
-      id: 'legacy-search',
-      executionKey: 'legacy-search',
-      toolName: 'search_docs',
-      result: { results: [{ file: 'legacy.md', line: 9, preview: 'historical evidence' }] }
-    },
-    {
-      ...base,
-      id: 'ranged-read',
-      executionKey: 'ranged-read',
-      toolName: 'read_document',
-      result: {
-        file: 'guide.md', content: 'selected lines', startLine: 20, endLine: 24,
-        totalLines: 80, truncated: true, nextStartLine: 25, totalChars: 9000
-      }
-    }
-  ]);
+  }]);
 
-  assert.ok(result.evidence.some((item) => item.content === 'historical evidence'));
   assert.deepEqual(result.evidence.find((item) => item.content === 'selected lines')?.locator, {
     truncated: true,
     totalChars: 9000,

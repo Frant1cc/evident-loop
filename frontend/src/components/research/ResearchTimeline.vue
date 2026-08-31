@@ -24,14 +24,36 @@ function statusLabel(status: ResearchStep['status']) {
 }
 
 function stepTypeLabel(type: ResearchStep['type']) {
-  return type === 'tool' ? '工具调用' : '模型推理';
+  if (type === 'tool') return '工具调用';
+  if (type === 'context') return '上下文';
+  return '模型推理';
 }
 
 function stepInputSummary(step: ResearchStep) {
+  if (step.type === 'context') {
+    const output = toRecord(step.output);
+    if (typeof output?.beforeTokens === 'number' && typeof output.afterTokens === 'number') {
+      return `${formatTokens(output.beforeTokens)} → ${formatTokens(output.afterTokens)} Tokens，节省 ${formatTokens(Number(output.savedTokens ?? 0))}`;
+    }
+    const input = toRecord(step.input);
+    if (typeof input?.estimatedTokens === 'number' && typeof input.thresholdTokens === 'number') {
+      return `当前 ${formatTokens(input.estimatedTokens)} / 阈值 ${formatTokens(input.thresholdTokens)} Tokens`;
+    }
+  }
   if (!step.input || typeof step.input !== 'object' || Array.isArray(step.input)) return undefined;
   const input = step.input as Record<string, unknown>;
   const summary = input.query ?? input.path ?? input.file ?? input.expression;
   return typeof summary === 'string' ? summary : undefined;
+}
+
+function toRecord(value: unknown) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function formatTokens(value: number) {
+  return Math.round(value).toLocaleString('zh-CN');
 }
 
 function formatTime(value: string) {

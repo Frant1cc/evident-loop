@@ -7,6 +7,36 @@ import { createToolCatalog } from '../tools/registry.js';
 import { createToolRuntime } from '../tools/runtime.js';
 import { runAgentLoop } from './agentLoop.js';
 
+test('sanitizes leaked tool markup before emitting model-response events', async () => {
+  let calls = 0;
+  const eventMessages: unknown[] = [];
+  const llm: LlmProvider = {
+    complete: async () => {
+      calls += 1;
+      return { choices: [{ message: {
+        role: 'assistant',
+        content: '我来查询。\n<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="fake_tool">'
+      } }] };
+    },
+    stream: async () => undefined
+  };
+
+  const result = await runAgentLoop({
+    llm,
+    model: 'test-model',
+    message: '查询 React',
+    systemPrompt: 'Use tools only through function calling.',
+    toolPolicy: { mode: 'none' },
+    onEvent: (event) => {
+      if (event.type === 'llm_response') eventMessages.push(event.assistantMessage);
+    }
+  });
+
+  assert.equal(calls, 2);
+  assert.doesNotMatch(JSON.stringify(eventMessages), /DSML|fake_tool|<｜/);
+  assert.doesNotMatch(result.reply, /DSML|fake_tool|<｜/);
+});
+
 test('uses one injected tool runtime for both model definitions and execution', async () => {
   const observedToolLists: unknown[] = [];
   let calls = 0;
@@ -247,8 +277,11 @@ test('grants one corrective retry when required document tool arguments are inva
 test('runs the controlled web quality loop only once even when the model changes arguments', async () => {
   let requestCount = 0;
   let executionCount = 0;
+  const observedToolNames: string[][] = [];
   const server = createServer(async (_req, res) => {
     requestCount += 1;
+    // The test server receives OpenAI-compatible requests from the default client;
+    // the runtime assertion below uses the injected LLM wrapper instead.
     const message = requestCount <= 2
       ? {
           role: 'assistant',
@@ -275,7 +308,21 @@ test('runs the controlled web quality loop only once even when the model changes
 
   try {
     const result = await runAgentLoop({
-      apiKey: 'test-key',
+      llm: {
+        complete: async (request) => {
+          observedToolNames.push(
+            ((request.tools ?? []) as Array<{ function?: { name?: string } }>)
+              .map((tool) => tool.function?.name ?? '')
+          );
+          const response = await fetch(`http://127.0.0.1:${address.port}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+          });
+          return response.json() as Promise<never>;
+        },
+        stream: async () => undefined
+      },
       model: 'test-model',
       message: 'Find one official fact',
       systemPrompt: 'Use the controlled web tool once.',
@@ -290,6 +337,8 @@ test('runs the controlled web quality loop only once even when the model changes
     assert.equal(executionCount, 1);
     assert.equal(result.toolCalls.length, 2);
     assert.match(result.toolCalls[1]?.error ?? '', /already completed its controlled search loop/);
+    assert.ok(observedToolNames.length >= 2);
+    assert.ok(observedToolNames.every((names) => names.includes('retrieve_web_evidence')));
   } finally {
     if (previousBaseUrl === undefined) delete process.env.DEEPSEEK_BASE_URL;
     else process.env.DEEPSEEK_BASE_URL = previousBaseUrl;

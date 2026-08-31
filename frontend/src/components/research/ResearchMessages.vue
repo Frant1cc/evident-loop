@@ -5,20 +5,26 @@ import { PhArrowDown, PhCode, PhFileText, PhSparkle } from '@phosphor-icons/vue'
 import { Button } from '@/components/ui/button';
 import AgentMessage from '../agent/AgentMessage.vue';
 import ConversationHistoryRail from '../conversation/ConversationHistoryRail.vue';
-import WordArtifactCard from '../documents/WordArtifactCard.vue';
+import DocumentStatusCard from '../documents/DocumentStatusCard.vue';
 import { useMessageAutoScroll } from '../../composables/useMessageAutoScroll';
-import type { WordArtifact } from '../../types/artifacts';
+import type { ArtifactOutput, ResearchArtifactGeneration } from '../../types/artifacts';
 import type { ResearchMessage } from '../../types/research';
+import type { AuxiliaryState } from '../../lib/auxiliaryState';
 
 const props = defineProps<{
   conversationId?: string;
   messages: ResearchMessage[];
-  artifactsByMessageId: Map<string, WordArtifact[]>;
+  generationsByMessageId: Map<string, ResearchArtifactGeneration[]>;
+  auxiliaryStateByMessageId?: Map<string, AuxiliaryState>;
 }>();
 
 const emit = defineEmits<{
   citation: [key: string];
-  preview: [artifact: WordArtifact];
+  'open-workbench': [generation: ResearchArtifactGeneration];
+  'preview-output': [output: ArtifactOutput];
+  generate: [generation: ResearchArtifactGeneration];
+  cancel: [generation: ResearchArtifactGeneration];
+  'retry-output': [generation: ResearchArtifactGeneration, outputId: string];
 }>();
 
 const messageSignature = computed(() => {
@@ -27,6 +33,20 @@ const messageSignature = computed(() => {
     ? `${props.messages.length}:${lastMessage.id}:${lastMessage.content.length}:${lastMessage.status}`
     : 'empty';
 });
+
+const auxiliarySummaryLabel = '生成的文档';
+const auxiliarySummaryActivity = '正在生成文档…';
+
+const EMPTY_AUXILIARY_STATE: AuxiliaryState = {
+  status: 'idle',
+  label: auxiliarySummaryLabel,
+  activity: auxiliarySummaryActivity,
+  count: 0
+};
+
+function auxiliaryStateFor(messageId: string): AuxiliaryState {
+  return props.auxiliaryStateByMessageId?.get(messageId) ?? EMPTY_AUXILIARY_STATE;
+}
 
 const { handleScroll, scrollContainer, scrollToLatest, shouldAutoScroll } = useMessageAutoScroll(
   () => props.conversationId,
@@ -131,13 +151,27 @@ defineExpose({ scrollContainer });
           :data-research-message-id="message.id"
           class="min-w-0 shrink-0 [contain-intrinsic-size:auto_10rem] [content-visibility:auto]"
         >
-          <AgentMessage :message="message" streaming-placeholder="正在生成回复…" @citation="emit('citation', $event)">
-            <WordArtifactCard
-              v-for="artifact in artifactsByMessageId.get(message.id) ?? []"
-              :key="artifact.artifactId"
-              :artifact="artifact"
-              @preview="emit('preview', $event)"
-            />
+          <AgentMessage
+            :message="message"
+            streaming-placeholder="正在生成回复…"
+            :auxiliary-status="auxiliaryStateFor(message.id).status"
+            :auxiliary-label="auxiliaryStateFor(message.id).label"
+            :auxiliary-activity="auxiliaryStateFor(message.id).activity"
+            :auxiliary-count="auxiliaryStateFor(message.id).count"
+            @citation="emit('citation', $event)"
+          >
+            <template #auxiliary>
+              <DocumentStatusCard
+                v-for="generation in generationsByMessageId.get(message.id) ?? []"
+                :key="generation.id"
+                :generation="generation"
+                @open-workbench="emit('open-workbench', generation)"
+                @preview="emit('preview-output', $event)"
+                @generate="emit('generate', generation)"
+                @cancel="emit('cancel', generation)"
+                @retry="emit('retry-output', generation, $event)"
+              />
+            </template>
           </AgentMessage>
         </div>
       </div>

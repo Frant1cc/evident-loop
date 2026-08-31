@@ -182,6 +182,10 @@ export type AgentArtifact = {
   updatedAt: string;
 };
 
+export type AgentArtifactLibraryItem = AgentArtifact & {
+  taskGoal: string;
+};
+
 export type AgentTaskDetail = {
   task: AgentTask;
   steps: AgentPlanStep[];
@@ -194,4 +198,5 @@ export type AgentTaskDetail = {
   toolExecutions: ToolExecution[];
   artifacts: AgentArtifact[];
   latestCheckpoint?: AgentCheckpoint;
+  approvals?: import('./approvals').ToolApproval[];
 };

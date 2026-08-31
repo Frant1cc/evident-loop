@@ -51,10 +51,10 @@ const emit = defineEmits<{
 
   <aside
     v-else
-    class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] border-l border-border bg-card max-md:h-[min(52vh,440px)] max-md:border-l-0 max-md:border-t"
+    class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden border-l border-border bg-card max-md:h-[min(52vh,440px)] max-md:border-l-0 max-md:border-t"
     aria-label="研究检查器"
   >
-    <Tabs v-model="activeTab" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-0">
+    <Tabs v-model="activeTab" class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden">
       <header class="flex items-center gap-2 border-b border-border px-3 py-2.5">
         <TabsList class="flex-1">
           <TabsTrigger value="timeline" class="gap-1.5">
@@ -75,7 +75,7 @@ const emit = defineEmits<{
         </Tooltip>
       </header>
 
-      <div class="min-h-0">
+      <div class="min-h-0 min-w-0 overflow-hidden">
         <TabsContent value="timeline" class="m-0 h-full">
           <ResearchTimeline class="h-full" :steps="steps" :selected-step-id="selectedStep?.id" @select="emit('selectStep', $event)" />
         </TabsContent>

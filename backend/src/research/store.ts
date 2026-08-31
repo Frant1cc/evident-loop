@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { sqlite } from '../db.js';
+import { redactToolArguments } from '../approvals/manager.js';
 import type { RagSource } from '../rag/types.js';
 import { parseLocator } from '../knowledge/locator.js';
 import type { KnowledgeFormat } from '../knowledge/types.js';
@@ -172,7 +173,11 @@ export function updateResearchMessage(id: string, changes: Pick<ResearchMessage,
 
 export function listResearchMessages(conversationId: string) {
   return sqlite
-    .prepare('SELECT * FROM research_messages WHERE conversation_id = ? ORDER BY created_at ASC')
+    // created_at has millisecond precision and concurrent inserts can share a
+    // timestamp. rowid preserves the append order at that boundary so a
+    // completed assistant message cannot move ahead of the user message when
+    // the artifact snapshot is frozen.
+    .prepare('SELECT * FROM research_messages WHERE conversation_id = ? ORDER BY created_at ASC, rowid ASC')
     .all(conversationId)
     .map((row) => toMessage(row as MessageRow));
 }
@@ -435,6 +440,7 @@ function toMessage(row: MessageRow): ResearchMessage {
 }
 
 function toStep(row: StepRow): ResearchStep {
+  const parsedInput = parseJson(row.input_json);
   return {
     id: row.id,
     conversationId: row.conversation_id,
@@ -443,7 +449,9 @@ function toStep(row: StepRow): ResearchStep {
     type: row.type,
     status: row.status,
     title: row.title,
-    ...(parseJson(row.input_json) === undefined ? {} : { input: parseJson(row.input_json) }),
+    ...(parsedInput === undefined ? {} : {
+      input: row.type === 'tool' ? redactToolArguments(parsedInput) : parsedInput
+    }),
     ...(parseJson(row.output_json) === undefined ? {} : { output: parseJson(row.output_json) }),
     ...(row.parent_step_id ? { parentStepId: row.parent_step_id } : {}),
     ...(row.tool_call_id ? { toolCallId: row.tool_call_id } : {}),

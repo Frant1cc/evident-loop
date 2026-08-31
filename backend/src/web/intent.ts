@@ -144,11 +144,11 @@ export function detectRetrievalIntent(question: string): RetrievalIntent {
   };
 }
 
-export function extractUrls(text: string): string[] {
+function extractUrls(text: string): string[] {
   return [...new Set((text.match(URL_PATTERN) ?? []).map((url) => url.replace(/[.,;，。；]+$/, '')))];
 }
 
-export function isPdfUrl(rawUrl: string) {
+function isPdfUrl(rawUrl: string) {
   try {
     const url = new URL(rawUrl);
     return url.pathname.toLowerCase().endsWith('.pdf') || /\/pdf(?:\/|$)/i.test(url.pathname) && /arxiv\.org$/i.test(url.hostname);

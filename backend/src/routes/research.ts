@@ -41,9 +41,9 @@ export function createResearchRouter(research: ResearchApplication) {
     res.json(success(detail));
   });
 
-  router.delete('/research/conversations/:conversationId', (req, res) => {
+  router.delete('/research/conversations/:conversationId', async (req, res) => {
     try {
-      if (!research.deleteConversation(req.params.conversationId)) {
+      if (!await Promise.resolve(research.deleteConversation(req.params.conversationId))) {
         res.status(404).json(failure('Research conversation not found'));
         return;
       }

@@ -27,7 +27,6 @@ export function createResearchSkillRegistry(
 ): ResearchSkillRegistry {
   const byKey = new Map<string, OfficialResearchSkill>();
   const latest = new Map<string, OfficialResearchSkill>();
-  const digestCache = new Map<OfficialResearchSkill, string>();
 
   for (const definition of definitions) {
     validateDefinition(definition, options.knownToolNames);
@@ -41,13 +40,7 @@ export function createResearchSkillRegistry(
     list: () => [...byKey.values()],
     getLatest: (id) => latest.get(id),
     getVersion: (id, version) => byKey.get(skillKey(id, version)),
-    digest: (definition) => {
-      const cached = digestCache.get(definition);
-      if (cached) return cached;
-      const value = computeDigest(definition);
-      digestCache.set(definition, value);
-      return value;
-    }
+    digest: (definition) => computeDigest(definition)
   };
 }
 
@@ -56,7 +49,7 @@ export function skillKey(id: string, version: string) {
 }
 
 /** Deterministic digest over the fields that define a published skill. */
-export function computeDigest(definition: OfficialResearchSkill): string {
+function computeDigest(definition: OfficialResearchSkill): string {
   const canonical = JSON.stringify({
     id: definition.id,
     version: definition.version,

@@ -2,17 +2,23 @@ import type { StreamEventEnvelope } from '@evident-loop/stream-protocol';
 
 import { DEFAULT_MAX_TOOL_ROUNDS } from '../agent/config.js';
 import { runAgentLoop, type AgentLoopEvent, type RunAgentLoopOptions } from '../agent/agentLoop.js';
+import { containsLeakedToolMarkup, stripLeakedToolMarkup } from '../agent/toolMarkup.js';
+import type { ApprovalManager } from '../approvals/contracts.js';
+import { redactToolArguments } from '../approvals/manager.js';
 import type { LlmProvider } from '../llm/contracts.js';
 import { resolveLlmProvider } from '../llm/provider.js';
 import { appendStreamEvent } from '../streaming/eventStore.js';
 import { publishStreamEvent, subscribeToStream } from '../streaming/eventHub.js';
-import { isExplicitWordDocumentRequest } from '../tools/wordDocumentTool.js';
+import { isExplicitDocumentRequest } from '../tools/wordDocumentTool.js';
 import type { ToolPolicy, ToolRuntime } from '../tools/contracts.js';
 import { normalizeToolPolicy } from '../tools/policy.js';
 import type { OfficialResearchSkill, ResearchSkillSnapshot } from '../skills/contracts.js';
 import type { ResearchSkillRuntime } from '../skills/runtime.js';
 import { buildResearchContext, createConversationTitle } from '../context/research/history.js';
-import { createResearchContextManager } from '../context/research/manager.js';
+import {
+  createResearchContextManager,
+  type ResearchContextEvent
+} from '../context/research/manager.js';
 import { resolveExecutionMode } from './executionMode.js';
 import {
   addResearchSource,
@@ -25,6 +31,7 @@ import {
   getResearchRun,
   getResearchRunInput,
   listResearchMessages,
+  listResearchConversations,
   listResearchSources,
   listResearchSteps,
   listUnfinishedResearchRuns,
@@ -47,6 +54,7 @@ const DEFAULT_MODEL = 'deepseek-v4-flash';
 const STOPPED_MESSAGE = '研究任务已停止，未能生成最终回答。';
 const RESTARTED_MESSAGE = '研究服务已重启，先前的后台任务未能继续。请重新发起研究。';
 const activeControllers = new Map<string, AbortController>();
+const activeApprovalManagers = new Map<string, ApprovalManager>();
 
 const AGENT_SYSTEM_PROMPT = `You are EvidentLoop, an evidence-first durable research agent.
 
@@ -67,9 +75,7 @@ Rules:
 - Call retrieve_web_evidence at most once per user request. It already performs query rewriting and progressive search internally; a second call would incorrectly reset the quality budget.
 - Treat retrieve_web_evidence.verdict as authoritative: sufficient may support an answer; exhausted may only support a qualified partial answer; empty must not be presented as evidence. Do not simulate lower-level web_search or fetch_page calls.
 - When retrieved sources support a claim, cite their provided keys such as [S1].
-- Call generate_word_document only when the user explicitly asks to generate, export, download, or create a Word/DOCX file. Ordinary requests to summarize, analyze, or write content should remain normal chat replies.
-- For generate_word_document, always put the complete body in contentMarkdown. Never construct a blocks array. Use <!-- pagebreak --> for explicit page breaks.
-- When generate_word_document succeeds, call it only once. The client renders the document card from the structured tool result, so do not include downloadUrl, previewUrl, localhost URLs, Markdown download links, or redundant download instructions in the final answer. Give only a concise content summary when useful.
+- Call start_document_generation when the user explicitly asks to generate, export, download, or create a document file (Word, DOCX, PDF report, PPT, PPTX, or slides). Set deliverables from the user request: presentation with formats ["pptx"] for PPT/PPTX/slides/演示文稿, longform with formats ["docx"] for Word, longform with formats ["pdf"] for PDF reports/长篇报告, or both deliverable types only when they asked for both presentation and report. Never default to all formats. If the format is unclear, ask which format they want instead of calling the tool. The runtime binds the current conversation and research-run scope; do not include conversationId or invent a scope argument. It creates an editable draft only; never render a document or claim a file exists before the user confirms the outline.
 - If a tool fails, explain the failure based on the tool error instead of pretending it succeeded.
 - Stop calling tools once you have enough information to answer.`;
 
@@ -93,6 +99,8 @@ export type ResearchRunEvent =
   | { type: 'research_step'; step: ResearchStep }
   | { type: 'tool_call_started'; step: ResearchStep }
   | { type: 'tool_call_completed'; step: ResearchStep }
+  | { type: 'tool_approval_requested'; approval: import('../approvals/contracts.js').ToolApprovalDto }
+  | { type: 'tool_approval_resolved'; approval: import('../approvals/contracts.js').ToolApprovalDto }
   | { type: 'research_source_found'; messageId: string; source: ResearchSource }
   | { type: 'assistant_delta'; messageId: string; content: string }
   | {
@@ -108,6 +116,21 @@ export type ResearchRunEvent =
 
 type ResearchAgentRunner = (options: RunAgentLoopOptions) => ReturnType<typeof runAgentLoop>;
 
+type ArtifactDraftCoordinator = {
+  flushPendingDrafts: (conversationId: string, researchRunId?: string) => Promise<unknown>;
+  listDraftRequests: (conversationId: string, researchRunId?: string) => Array<{
+    conversationId: string;
+    researchRunId?: string;
+    status: string;
+  }>;
+  finalizePendingDrafts?: (
+    conversationId: string,
+    status: 'failed' | 'cancelled',
+    researchRunId?: string,
+    error?: string
+  ) => unknown;
+};
+
 export function createAndStartResearchRun(options: {
   conversationId: string;
   content: string;
@@ -119,7 +142,9 @@ export function createAndStartResearchRun(options: {
   llm?: LlmProvider;
   model?: string;
   runAgent?: ResearchAgentRunner;
+  approvalManager?: ApprovalManager;
   schedule?: (callback: () => void) => void;
+  artifactDraftCoordinator?: ArtifactDraftCoordinator;
 }) {
   let conversation = getResearchConversation(options.conversationId);
   if (!conversation) throw new Error('Research conversation not found');
@@ -176,7 +201,9 @@ export function createAndStartResearchRun(options: {
       model: options.model ?? DEFAULT_MODEL,
       runAgent: options.runAgent ?? runAgentLoop,
       toolRuntime: options.toolRuntime,
-      skillRuntime: options.skillRuntime
+      skillRuntime: options.skillRuntime,
+      approvalManager: options.approvalManager,
+      artifactDraftCoordinator: options.artifactDraftCoordinator
     });
   });
 
@@ -190,7 +217,7 @@ export function subscribeToResearchRun(
   return subscribeToStream(id, listener as (envelope: StreamEventEnvelope) => void);
 }
 
-export function getResearchRunSnapshot(id: string): {
+export function getResearchRunSnapshot(id: string, approvalManager?: ApprovalManager): {
   run: ResearchRun;
   detail: ResearchConversationDetail;
 } | undefined {
@@ -202,7 +229,12 @@ export function getResearchRunSnapshot(id: string): {
   const promptPreview = runInput?.promptPreview
     ?? buildResearchContext(conversation, listResearchMessages(conversation.id), '', listResearchSteps(conversation.id)).promptPreview;
   const detail = getResearchConversationDetail(conversation.id, promptPreview);
-  return detail ? { run, detail } : undefined;
+  if (!detail) return undefined;
+  const approvals = approvalManager?.list({ type: 'research_run', id });
+  return {
+    run,
+    detail: approvals ? { ...detail, approvals } : detail
+  };
 }
 
 export function cancelResearchRun(id: string) {
@@ -211,6 +243,10 @@ export function cancelResearchRun(id: string) {
   if (isTerminal(run.status)) return run;
 
   activeControllers.get(id)?.abort(new Error('Research task was explicitly stopped'));
+  // Abort listeners on the approval interceptor also cancel the row. This
+  // explicit call covers a queued/just-created approval before its waiter is
+  // attached and keeps cancellation durable.
+  activeApprovalManagers.get(id)?.cancelScope({ type: 'research_run', id });
   const assistantMessage = updateResearchMessage(run.assistantMessageId, {
     content: STOPPED_MESSAGE,
     status: 'error'
@@ -225,18 +261,60 @@ export function cancelResearchRun(id: string) {
   return cancelled;
 }
 
-export function failOrphanedResearchRuns() {
+export function failOrphanedResearchRuns(artifactDraftCoordinator?: ArtifactDraftCoordinator) {
   for (const run of listUnfinishedResearchRuns()) {
     updateResearchMessage(run.assistantMessageId, {
       content: RESTARTED_MESSAGE,
       status: 'error'
     });
     failRunningSteps(run, RESTARTED_MESSAGE);
-    updateResearchRun(run.id, {
+    const failed = updateResearchRun(run.id, {
       status: 'failed',
       error: RESTARTED_MESSAGE,
       completedAt: new Date().toISOString()
     });
+    if (failed) {
+      artifactDraftCoordinator?.finalizePendingDrafts?.(
+        run.conversationId,
+        'failed',
+        run.id,
+        RESTARTED_MESSAGE
+      );
+    }
+  }
+}
+
+/**
+ * Resume only requests whose originating run already reached completed before
+ * a backend restart. Queued requests from unfinished runs are finalized by
+ * failOrphanedResearchRuns; no request is ever consumed by a later run.
+ */
+export async function recoverCompletedArtifactDraftRequests(artifactDraftCoordinator: ArtifactDraftCoordinator) {
+  for (const conversation of listResearchConversations()) {
+    const requests = artifactDraftCoordinator.listDraftRequests(conversation.id)
+      .filter((request) => request.status === 'queued' && request.researchRunId);
+    for (const request of requests) {
+      const run = getResearchRun(request.researchRunId!);
+      if (run?.status === 'completed') {
+        if (getActiveResearchRun(conversation.id)) {
+          artifactDraftCoordinator.finalizePendingDrafts?.(
+            conversation.id,
+            'failed',
+            run.id,
+            'A later research run is active; the old deferred artifact request was not replayed'
+          );
+          continue;
+        }
+        await artifactDraftCoordinator.flushPendingDrafts(conversation.id, run.id);
+      } else if (run?.status === 'failed' || run?.status === 'cancelled') {
+        artifactDraftCoordinator.finalizePendingDrafts?.(
+          conversation.id,
+          run.status,
+          run.id,
+          run.error ?? `Research run ${run.status}`
+        );
+      }
+    }
   }
 }
 
@@ -248,6 +326,8 @@ async function executePersistedResearchRun(options: {
   runAgent: ResearchAgentRunner;
   toolRuntime: ToolRuntime;
   skillRuntime?: ResearchSkillRuntime;
+  approvalManager?: ApprovalManager;
+  artifactDraftCoordinator?: ArtifactDraftCoordinator;
 }) {
   let run = getResearchRun(options.runId);
   const runInput = getResearchRunInput(options.runId);
@@ -260,24 +340,20 @@ async function executePersistedResearchRun(options: {
 
   const abortController = new AbortController();
   activeControllers.set(run.id, abortController);
+  if (options.approvalManager) activeApprovalManagers.set(run.id, options.approvalManager);
   run = updateResearchRun(run.id, { status: 'running', startedAt: new Date().toISOString() }) ?? run;
   emit(run.id, { type: 'run_updated', run });
 
   if (executionMode === 'quick') {
     await runQuickConversation({ run, runInput, llm: options.llm, model: options.model, abortController });
+    activeApprovalManagers.delete(run.id);
     return;
   }
 
   const activeToolSteps = new Map<string, ResearchStep>();
+  const activeContextSteps = new Map<ResearchContextEvent['level'], ResearchStep>();
   const pendingLlmSteps: ResearchStep[] = [];
   const toolParentStepIds = new Map<string, string>();
-  const contextManager = options.llm || options.apiKey
-    ? createResearchContextManager({
-        conversationId: run.conversationId,
-        llm: resolveLlmProvider({ llm: options.llm, apiKey: options.apiKey }),
-        model: options.model
-      })
-    : undefined;
 
   try {
     // Resolve the exact skill version and verify its digest inside the protected
@@ -289,6 +365,19 @@ async function executePersistedResearchRun(options: {
     let sequence = listResearchSteps(run.conversationId)
       .filter((step) => step.messageId === run!.assistantMessageId)
       .reduce((maximum, step) => Math.max(maximum, step.sequence), 0);
+    const contextManager = options.llm || options.apiKey
+      ? createResearchContextManager({
+          conversationId: run.conversationId,
+          llm: resolveLlmProvider({ llm: options.llm, apiKey: options.apiKey }),
+          model: options.model,
+          onEvent: async (event) => handleContextEvent({
+            event,
+            run: run!,
+            activeContextSteps,
+            nextSequence: () => ++sequence
+          })
+        })
+      : undefined;
     const existingSources = listResearchSources(run.conversationId)
       .filter((source) => source.messageId === run!.assistantMessageId);
     let citationNumber = existingSources.length;
@@ -306,11 +395,14 @@ async function executePersistedResearchRun(options: {
       contextManager,
       toolPolicy,
       toolRuntime: options.toolRuntime,
-      requiredToolName: isExplicitWordDocumentRequest(runInput.content)
-        ? 'generate_word_document'
+      requiredToolName: isExplicitDocumentRequest(runInput.content)
+        ? 'start_document_generation'
         : undefined,
       signal: abortController.signal,
       conversationId: run.conversationId,
+      toolScope: { kind: 'research', runId: run.id, conversationId: run.conversationId },
+      approvalManager: options.approvalManager,
+      approvalScope: { type: 'research_run', id: run.id },
       onEvent: async (event) => handleAgentEvent({
         event,
         run: run!,
@@ -347,6 +439,10 @@ async function executePersistedResearchRun(options: {
       completedAt: new Date().toISOString()
     });
     if (!completedRun) throw new Error('Research task could not be completed');
+    // The artifact tool may have been requested during this run. Create its
+    // plan only after the streaming assistant message is complete so the
+    // frozen snapshot and its later stale check observe the same boundary.
+    await options.artifactDraftCoordinator?.flushPendingDrafts(run.conversationId, run.id);
     emit(run.id, {
       type: 'research_message_completed',
       message: completedMessage,
@@ -364,15 +460,74 @@ async function executePersistedResearchRun(options: {
       const step = updateResearchStep(activeStep.id, { status: 'error', output: undefined, error: message });
       if (step) emit(run.id, { type: 'research_step', step });
     }
+    for (const activeStep of activeContextSteps.values()) {
+      const step = updateResearchStep(activeStep.id, { status: 'error', output: undefined, error: message });
+      if (step) emit(run.id, { type: 'research_step', step });
+    }
     const failedRun = updateResearchRun(run.id, {
       status: 'failed',
       error: message,
       completedAt: new Date().toISOString()
     });
+    if (failedRun) {
+      options.artifactDraftCoordinator?.finalizePendingDrafts?.(
+        run.conversationId,
+        'failed',
+        run.id,
+        message
+      );
+    }
     if (failedRun) emit(run.id, { type: 'error', message, assistantMessage: failedMessage, run: failedRun });
   } finally {
     activeControllers.delete(run.id);
+    activeApprovalManagers.delete(run.id);
   }
+}
+
+async function handleContextEvent(options: {
+  event: ResearchContextEvent;
+  run: ResearchRun;
+  activeContextSteps: Map<ResearchContextEvent['level'], ResearchStep>;
+  nextSequence: () => number;
+}) {
+  if (getResearchRun(options.run.id)?.status === 'cancelled') return;
+  const { event, run } = options;
+  const title = event.level === 'micro' ? '上下文微压缩' : '上下文摘要压缩';
+
+  if (event.type === 'context_compression_started') {
+    const step = createResearchStep({
+      conversationId: run.conversationId,
+      messageId: run.assistantMessageId,
+      sequence: options.nextSequence(),
+      type: 'context',
+      status: 'running',
+      title,
+      input: {
+        level: event.level,
+        estimatedTokens: event.estimatedTokens,
+        thresholdTokens: event.thresholdTokens
+      }
+    });
+    options.activeContextSteps.set(event.level, step);
+    emit(run.id, { type: 'research_step', step });
+    return;
+  }
+
+  const activeStep = options.activeContextSteps.get(event.level);
+  if (!activeStep) return;
+  const step = updateResearchStep(activeStep.id, {
+    status: 'complete',
+    output: {
+      level: event.level,
+      beforeTokens: event.beforeTokens,
+      afterTokens: event.afterTokens,
+      savedTokens: event.savedTokens,
+      thresholdTokens: event.thresholdTokens
+    },
+    error: undefined
+  });
+  options.activeContextSteps.delete(event.level);
+  if (step) emit(run.id, { type: 'research_step', step });
 }
 
 /**
@@ -392,7 +547,7 @@ async function runQuickConversation(options: {
   try {
     if (!options.llm) throw new Error('LLM provider is not configured');
 
-    let reply = '';
+    let rawReply = '';
     await options.llm.stream(
       {
         model: options.model,
@@ -405,14 +560,18 @@ async function runQuickConversation(options: {
       },
       (delta) => {
         if (!delta.content) return;
-        reply += delta.content;
-        emit(run.id, { type: 'assistant_delta', messageId: run.assistantMessageId, content: delta.content });
+        rawReply += delta.content;
       }
     );
 
     if (getResearchRun(run.id)?.status === 'cancelled') return;
+    const leakedToolMarkup = containsLeakedToolMarkup(rawReply);
+    const reply = leakedToolMarkup
+      ? '模型返回了无效的工具调用格式，本次没有执行任何工具。请启用所需工具后重试。'
+      : stripLeakedToolMarkup(rawReply);
     const completedMessage = updateResearchMessage(run.assistantMessageId, { content: reply, status: 'complete' });
     if (!completedMessage) throw new Error('Research assistant message could not be completed');
+    emit(run.id, { type: 'assistant_delta', messageId: completedMessage.id, content: reply });
 
     const conversation = getResearchConversation(run.conversationId);
     if (!conversation) throw new Error('Research conversation disappeared during execution');
@@ -447,6 +606,7 @@ async function runQuickConversation(options: {
     if (failedRun) emit(run.id, { type: 'error', message, assistantMessage: failedMessage, run: failedRun });
   } finally {
     activeControllers.delete(run.id);
+    activeApprovalManagers.delete(run.id);
   }
 }
 
@@ -463,7 +623,10 @@ async function handleAgentEvent(options: {
   nextCitation: () => string;
 }) {
   const { event, run } = options;
-  if (getResearchRun(run.id)?.status === 'cancelled') return;
+  // A cancellation may settle an approval on the next microtask after the run
+  // status is persisted. Keep the terminal approval resolution durable even
+  // though ordinary agent/tool events are no longer accepted for the run.
+  if (getResearchRun(run.id)?.status === 'cancelled' && event.type !== 'tool_approval_resolved') return;
 
   if (event.type === 'llm') {
     const step = createResearchStep({
@@ -507,13 +670,18 @@ async function handleAgentEvent(options: {
       type: 'tool',
       status: 'running',
       title: event.toolCall.name,
-      input: event.toolCall.arguments,
+       input: redactToolArguments(event.toolCall.arguments),
       parentStepId: options.toolParentStepIds.get(event.toolCall.id),
       toolCallId: event.toolCall.id
     });
     options.activeToolSteps.set(event.toolCall.id, step);
     emit(run.id, { type: 'research_step', step });
     emit(run.id, { type: 'tool_call_started', step });
+    return;
+  }
+
+  if (event.type === 'tool_approval_requested' || event.type === 'tool_approval_resolved') {
+    emit(run.id, { type: event.type, approval: event.approval });
     return;
   }
 

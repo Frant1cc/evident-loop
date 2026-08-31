@@ -66,10 +66,3 @@ export interface OriginalFileStore {
 }
 
 export const KNOWLEDGE_FORMATS: KnowledgeFormat[] = ['md', 'txt', 'docx', 'pdf'];
-
-export const KNOWLEDGE_MIME_TYPES: Record<KnowledgeFormat, string> = {
-  md: 'text/markdown',
-  txt: 'text/plain',
-  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  pdf: 'application/pdf'
-};

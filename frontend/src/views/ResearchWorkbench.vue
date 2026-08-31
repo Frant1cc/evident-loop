@@ -19,6 +19,18 @@ import {
   type ResearchToolGroupInfo,
   type ResearchToolInfo
 } from '../api/research';
+import {
+  cancelResearchArtifact,
+  confirmResearchArtifactImageUse,
+  deleteResearchArtifactGeneration,
+  fetchResearchArtifactSourceImage,
+  getResearchArtifactGeneration,
+  listResearchArtifactGenerations,
+  renderResearchArtifact,
+  retryResearchArtifactOutput,
+  updateResearchArtifactDraft
+} from '../api/artifacts';
+import { ApprovalApiError, decideToolApproval } from '../api/approvals';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import PanelResizeHandle from '../components/common/PanelResizeHandle.vue';
@@ -28,9 +40,12 @@ import { useCollapsiblePanel } from '../composables/useResizablePanel';
 import ResearchConversationSidebar from '../components/research/ResearchConversationSidebar.vue';
 import ResearchMainPanel from '../components/research/ResearchMainPanel.vue';
 import ResearchInspector from '../components/research/ResearchInspector.vue';
-import WordPreviewDialog from '../components/documents/WordPreviewDialog.vue';
+import DocumentConfirmDialog from '../components/documents/DocumentConfirmDialog.vue';
+import DocumentPreviewDialog from '../components/documents/DocumentPreviewDialog.vue';
+import DocumentWorkbench from '../components/documents/DocumentWorkbench.vue';
 import { useStreamingMessageRenderer } from '../composables/useStreamingMessageRenderer';
-import { parseWordArtifact, type WordArtifact } from '../types/artifacts';
+import { useDocumentEditor } from '../components/documents/documentEditor';
+import type { ArtifactOutput, ArtifactSpec, LongformBlock, ResearchArtifactGeneration } from '../types/artifacts';
 import type {
   ResearchConversation,
   ResearchConversationDetail,
@@ -42,7 +57,15 @@ import type {
   ResearchStep
 } from '../types/research';
 import type { StreamConnectionState } from '../types/streaming';
-import { buildSelectedToolPolicy, requiredGroupIds, standaloneTools } from '../tools/selection';
+import { buildAuxiliaryState, type AuxiliaryState } from '../lib/auxiliaryState';
+import {
+  buildSelectedToolPolicy,
+  requiredGroupIds,
+  standaloneTools
+} from '../tools/selection';
+import type { ToolApproval, ToolApprovalDecision } from '../types/approvals';
+import type { ToolPolicy } from '../types/tasks';
+import { upsertToolApproval } from '../types/approvals';
 
 defineOptions({ name: 'ResearchWorkbench' });
 
@@ -66,6 +89,7 @@ const selectedStep = ref<ResearchStep>();
 const activeRailTab = ref<'timeline' | 'sources' | 'details'>('timeline');
 const activeDetailsTab = ref<'notes' | 'memory' | 'tool' | 'prompt'>('notes');
 const deleteTarget = ref<ResearchConversation>();
+const deleteArtifactCount = ref<number>();
 const deleting = ref(false);
 const availableTools = ref<ResearchToolInfo[]>([]);
 const availableToolGroups = ref<ResearchToolGroupInfo[]>([]);
@@ -73,9 +97,22 @@ const enabledToolGroups = ref<Record<string, boolean>>({});
 const enabledStandaloneTools = ref<Record<string, boolean>>({});
 const availableSkills = ref<ResearchSkillInfo[]>([]);
 const selectedSkillId = ref<string>();
-const previewArtifact = ref<WordArtifact>();
+const activeWorkbenchGeneration = ref<ResearchArtifactGeneration>();
+const generationConfirmTarget = ref<ResearchArtifactGeneration>();
+const previewOutput = ref<ArtifactOutput>();
+const generations = ref<ResearchArtifactGeneration[]>([]);
+const workbenchBusy = ref(false);
+const documentSessionEpoch = ref(0);
+const documentEditor = useDocumentEditor(
+  () => activeConversationId.value,
+  () => Boolean(activeConversationId.value),
+  () => documentSessionEpoch.value
+);
+const approvals = ref<ToolApproval[]>([]);
+const approvalBusyId = ref<string>();
 let requestController: AbortController | undefined;
 let subscriptionSequence = 0;
+let artifactPollTimer: number | undefined;
 
 // §5.5: low-noise connection status. Reconnects under 1s stay silent; a longer
 // recovery shows a hint, and a successful recovery briefly shows "已恢复".
@@ -105,24 +142,43 @@ const activeConversation = computed(() => conversations.value.find((item) => ite
 
 const standaloneToolList = computed(() => standaloneTools(availableTools.value, availableToolGroups.value));
 
-const artifactsByMessageId = computed(() => {
-  const artifacts = new Map<string, WordArtifact[]>();
+const generationsByMessageId = computed(() => {
+  const map = new Map<string, ResearchArtifactGeneration[]>();
+  const assigned = new Set<string>();
+  let documentHostMessageId: string | undefined;
 
-  for (const step of steps.value) {
-    if (step.type !== 'tool' || step.title !== 'generate_word_document' || step.status !== 'complete') {
+  for (const step of [...steps.value].reverse()) {
+    if (step.type !== 'tool' || step.title !== 'start_document_generation' || step.status !== 'complete') {
       continue;
     }
-    const artifact = parseWordArtifact(step.output);
-    if (!artifact) continue;
-    const messageArtifacts = artifacts.get(step.messageId) ?? [];
-    if (!messageArtifacts.some((item) => item.artifactId === artifact.artifactId)) {
-      messageArtifacts.push(artifact);
-      artifacts.set(step.messageId, messageArtifacts);
+    if (!documentHostMessageId && messages.value.some((message) => message.id === step.messageId)) {
+      documentHostMessageId = step.messageId;
+    }
+    const toolOutput = step.output;
+    if (typeof toolOutput !== 'object' || !toolOutput || !('generationId' in toolOutput)) continue;
+
+    const generation = generations.value.find(g => g.id === toolOutput.generationId);
+    if (!generation) continue;
+
+    const messageGenerations = map.get(step.messageId) ?? [];
+    if (!messageGenerations.some((item) => item.id === generation.id)) {
+      messageGenerations.push(generation);
+      map.set(step.messageId, messageGenerations);
+      assigned.add(generation.id);
     }
   }
 
-  return artifacts;
+  const latestGeneration = generations.value.find((generation) => !assigned.has(generation.id));
+  const fallbackMessageId = documentHostMessageId
+    ?? [...messages.value].reverse().find((message) => message.role === 'assistant')?.id;
+  if (latestGeneration && fallbackMessageId) map.set(fallbackMessageId, [latestGeneration]);
+
+  return map;
 });
+
+const auxiliaryStateByMessageId = computed(() =>
+  buildAuxiliaryState(steps.value, generationsByMessageId.value)
+);
 
 onMounted(async () => {
   await Promise.all([loadConversations(), loadTools(), loadSkills()]);
@@ -135,7 +191,7 @@ async function loadTools() {
     const { tools, groups } = await listResearchTools();
     availableTools.value = tools;
     availableToolGroups.value = groups;
-    // Every conversation starts with all tools OFF so the first turn is a quick chat (§4.1, §7).
+    // MCP tools are controlled by MCP Management and are not shown here.
     enabledToolGroups.value = Object.fromEntries(groups.map((group) => [group.id, false]));
     enabledStandaloneTools.value = Object.fromEntries(standaloneTools(tools, groups).map((tool) => [tool.name, false]));
   } catch {
@@ -182,7 +238,11 @@ function toggleStandaloneTool(name: string) {
   enabledStandaloneTools.value[name] = !enabledStandaloneTools.value[name];
 }
 
-onBeforeUnmount(disconnectResearchStream);
+onBeforeUnmount(() => {
+  disconnectResearchStream();
+  stopArtifactPolling();
+  documentEditor.clearRevisions();
+});
 
 async function loadConversations() {
   const data = await listResearchConversations();
@@ -196,8 +256,8 @@ async function createConversation() {
   await selectConversation(conversation.id);
 }
 
-// §4.1/§7: each conversation opens with no skill and all tools off. Skill/tools belong to the
-// Run, not the conversation, so there is no carry-over between conversations.
+// Skill and selectable built-in tools belong to the Run. MCP tools are added by the backend
+// according to the connection state managed on the MCP page.
 function resetTurnDefaults() {
   selectedSkillId.value = undefined;
   for (const id of Object.keys(enabledToolGroups.value)) enabledToolGroups.value[id] = false;
@@ -206,7 +266,11 @@ function resetTurnDefaults() {
 
 async function selectConversation(id: string) {
   if (id === activeConversationId.value) return;
+  if (!await closeWorkbench()) return;
   disconnectResearchStream();
+  stopArtifactPolling();
+  documentSessionEpoch.value += 1;
+  documentEditor.clearRevisions();
   loading.value = false;
   stopping.value = false;
   activeRun.value = undefined;
@@ -214,6 +278,7 @@ async function selectConversation(id: string) {
   const detail = await getResearchConversation(id);
   activeConversationId.value = id;
   applyConversationDetail(detail);
+  await loadGenerations(id);
   selectedSourceId.value = undefined;
   selectedStep.value = undefined;
   activeRailTab.value = 'timeline';
@@ -233,10 +298,13 @@ async function send() {
   activeRailTab.value = 'timeline';
 
   try {
-    const toolPolicy = buildSelectedToolPolicy(
-      availableToolGroups.value,
-      enabledToolGroups.value,
-      enabledStandaloneTools.value
+    const toolPolicy = withExplicitArtifactTool(
+      content,
+      buildSelectedToolPolicy(
+        availableToolGroups.value,
+        enabledToolGroups.value,
+        enabledStandaloneTools.value
+      )
     );
     const started = await startResearchMessage(conversationId, content, toolPolicy, selectedSkillId.value);
     messageRenderer.upsert(started.userMessage);
@@ -350,7 +418,16 @@ function handleStreamEvent(event: ResearchStreamEvent) {
     applyRun(event.run);
   }
   if (event.type === 'run_updated' || event.type === 'done') applyRun(event.run);
-  if (event.type === 'done') void loadConversations();
+  if (event.type === 'tool_approval_requested' || event.type === 'tool_approval_resolved') {
+    approvals.value = upsertToolApproval(approvals.value, event.approval);
+  }
+  if (event.type === 'tool_call_completed' && event.step.title === 'start_document_generation' && activeConversationId.value) {
+    void loadGenerations(activeConversationId.value);
+  }
+  if (event.type === 'done') {
+    void loadConversations();
+    if (activeConversationId.value) void loadGenerations(activeConversationId.value);
+  }
   if (event.type === 'error') {
     if (event.assistantMessage) messageRenderer.upsert(event.assistantMessage);
     applyRun(event.run);
@@ -391,6 +468,26 @@ async function reloadActiveConversation() {
   }
 }
 
+async function decideApproval(approval: ToolApproval, decision: ToolApprovalDecision) {
+  if (approvalBusyId.value || approval.status !== 'pending') return;
+  approvalBusyId.value = approval.id;
+  error.value = '';
+  try {
+    const result = await decideToolApproval(approval.id, decision);
+    approvals.value = upsertToolApproval(approvals.value, result.approval);
+  } catch (err) {
+    if (err instanceof ApprovalApiError && err.status === 409) {
+      // Another tab/operator may have decided it. The server snapshot is authoritative.
+      await reloadActiveConversation();
+      error.value = '审批状态已变化，已重新同步。';
+    } else {
+      error.value = err instanceof Error ? err.message : '审批操作失败';
+    }
+  } finally {
+    approvalBusyId.value = undefined;
+  }
+}
+
 async function addNote(content: string) {
   if (!activeConversationId.value) return;
   const { note } = await createResearchNote(activeConversationId.value, content);
@@ -413,6 +510,7 @@ async function confirmDeleteConversation() {
     await deleteResearchConversation(conversation.id);
     conversations.value = conversations.value.filter((item) => item.id !== conversation.id);
     deleteTarget.value = undefined;
+    deleteArtifactCount.value = undefined;
 
     if (activeConversationId.value !== conversation.id) return;
 
@@ -424,6 +522,35 @@ async function confirmDeleteConversation() {
     error.value = err instanceof Error ? err.message : '删除会话失败';
   } finally {
     deleting.value = false;
+  }
+}
+
+function withExplicitArtifactTool(content: string, policy: ToolPolicy): ToolPolicy {
+  if (!isExplicitDocumentRequest(content) || !availableTools.value.some((tool) => tool.name === 'start_document_generation')) {
+    return policy;
+  }
+  if (policy.mode === 'all') return policy;
+  const names = policy.mode === 'selected' ? [...policy.names] : [];
+  if (!names.includes('start_document_generation')) names.push('start_document_generation');
+  return { mode: 'selected', names };
+}
+
+function isExplicitDocumentRequest(content: string) {
+  const normalized = content.toLowerCase();
+  const mentionsFormat = /\b(?:pptx?|pdf|docx?)\b|幻灯片|演示文稿|长篇报告|文档|word/.test(normalized);
+  const asksToCreate = /生成|创建|制作|导出|下载|转换|做成|产出/.test(normalized);
+  return mentionsFormat && asksToCreate;
+}
+
+async function prepareDeleteTarget(conversation: ResearchConversation) {
+  deleteTarget.value = conversation;
+  deleteArtifactCount.value = undefined;
+  try {
+    const result = await listResearchArtifactGenerations(conversation.id);
+    if (deleteTarget.value?.id === conversation.id) deleteArtifactCount.value = result.generations.length;
+  } catch {
+    // The delete API remains authoritative; an unavailable history request
+    // should not prevent the user from explicitly confirming deletion.
   }
 }
 
@@ -440,8 +567,17 @@ function clearConversationDetail() {
   activeRailTab.value = 'timeline';
   activeDetailsTab.value = 'notes';
   activeRun.value = undefined;
+  approvals.value = [];
+  approvalBusyId.value = undefined;
   loading.value = false;
   stopping.value = false;
+  generations.value = [];
+  activeWorkbenchGeneration.value = undefined;
+  generationConfirmTarget.value = undefined;
+  previewOutput.value = undefined;
+  stopArtifactPolling();
+  documentSessionEpoch.value += 1;
+  documentEditor.clearRevisions();
 }
 
 function applyConversationDetail(detail: ResearchConversationDetail) {
@@ -450,6 +586,7 @@ function applyConversationDetail(detail: ResearchConversationDetail) {
   sources.value = detail.sources;
   notes.value = detail.notes;
   promptPreview.value = detail.promptPreview;
+  approvals.value = detail.approvals ? [...detail.approvals] : [];
 }
 
 function applyRun(run: ResearchRun) {
@@ -478,6 +615,330 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
   if (index === -1) items.value.push(item);
   else items.value[index] = item;
 }
+
+async function loadGenerations(conversationId: string) {
+  try {
+    const result = await listResearchArtifactGenerations(conversationId);
+    const active = activeWorkbenchGeneration.value;
+    const preserveLocalDraft = active && documentEditor.saveState.value !== 'saved';
+    generations.value = result.generations.map((generation) => {
+      const normalized = normalizeGeneration(generation);
+      return preserveLocalDraft && normalized.id === active.id
+        ? { ...normalized, spec: active.spec }
+        : normalized;
+    });
+    if (active) {
+      const refreshed = generations.value.find((generation) => generation.id === active.id);
+      if (refreshed) activeWorkbenchGeneration.value = refreshed;
+    }
+    syncArtifactPolling();
+  } catch {
+    if (!generations.value.length) generations.value = [];
+  }
+}
+
+function openWorkbench(generation: ResearchArtifactGeneration) {
+  const current = generations.value.find((item) => item.id === generation.id) ?? generation;
+  activeWorkbenchGeneration.value = current;
+  documentEditor.resetRevisionBaseline(current);
+}
+
+function workbenchUpdateSpec(spec: ArtifactSpec) {
+  const generation = activeWorkbenchGeneration.value;
+  if (!generation || generation.status !== 'awaiting_confirmation' || generation.stale) return;
+
+  const updated = { ...generation, spec };
+  activeWorkbenchGeneration.value = updated;
+  upsert({ value: generations.value }, updated);
+  documentEditor.syncDraftRevision(updated);
+  documentEditor.scheduleSave(() => saveWorkbenchDraft(generation.id));
+}
+
+async function saveWorkbenchDraft(generationId: string): Promise<boolean> {
+  const record = documentEditor.revisionRecords.get(generationId);
+  if (!record) return false;
+  if (record.pendingSave) return await record.pendingSave;
+
+  const request = documentEditor.currentSessionToken();
+  const pending = (async () => {
+    while (true) {
+      const current = generations.value.find((item) => item.id === generationId);
+      const currentRecord = documentEditor.revisionRecords.get(generationId);
+      if (!current || !currentRecord || current.status !== 'awaiting_confirmation' || current.stale) return false;
+
+      const targetRevision = currentRecord.draftRevision;
+      const targetSpec = JSON.parse(JSON.stringify(current.spec)) as ArtifactSpec;
+      documentEditor.setSaveState('saving');
+      error.value = '';
+
+      try {
+        const result = await updateResearchArtifactDraft(generationId, targetSpec);
+        if (!documentEditor.isCurrentSession(request)) return false;
+
+        const latest = generations.value.find((item) => item.id === generationId);
+        const latestRecord = documentEditor.revisionRecords.get(generationId);
+        const changedDuringSave = Boolean(latestRecord && latestRecord.draftRevision !== targetRevision);
+        const normalized = normalizeGeneration(result.generation);
+        const merged = changedDuringSave && latest
+          ? { ...normalized, spec: latest.spec }
+          : normalized;
+        upsert({ value: generations.value }, merged);
+        if (activeWorkbenchGeneration.value?.id === generationId) activeWorkbenchGeneration.value = merged;
+
+        const revision = documentEditor.revisionRecords.get(generationId);
+        if (revision) {
+          documentEditor.revisionRecords.set(generationId, {
+            ...revision,
+            persistedRevision: targetRevision,
+            persistedSpecJson: JSON.stringify(targetSpec)
+          });
+        }
+
+        if (!changedDuringSave) {
+          documentEditor.setSaveState('saved');
+          return true;
+        }
+      } catch (cause) {
+        if (documentEditor.isCurrentSession(request)) {
+          error.value = cause instanceof Error ? cause.message : '保存文稿失败';
+          documentEditor.setSaveState('error');
+        }
+        return false;
+      }
+    }
+  })().finally(() => {
+    const latest = documentEditor.revisionRecords.get(generationId);
+    if (latest?.pendingSave === pending) {
+      documentEditor.revisionRecords.set(generationId, { ...latest, pendingSave: undefined });
+    }
+  });
+
+  documentEditor.revisionRecords.set(generationId, { ...record, pendingSave: pending });
+  return pending;
+}
+
+async function closeWorkbench(): Promise<boolean> {
+  const generation = activeWorkbenchGeneration.value;
+  if (generation && documentEditor.saveState.value !== 'saved') {
+    const saved = await documentEditor.flushSave(() => saveWorkbenchDraft(generation.id));
+    if (!saved) return false;
+  }
+  activeWorkbenchGeneration.value = undefined;
+  return true;
+}
+
+function workbenchGenerate(generation: ResearchArtifactGeneration) {
+  if (generation.status !== 'awaiting_confirmation' || generation.stale) return;
+  generationConfirmTarget.value = generation;
+}
+
+async function confirmWorkbenchGenerate() {
+  const generation = generationConfirmTarget.value;
+  if (!generation || workbenchBusy.value) return;
+
+  if (activeWorkbenchGeneration.value?.id === generation.id) {
+    const saved = await documentEditor.flushSave(() => saveWorkbenchDraft(generation.id));
+    if (!saved) {
+      error.value = '草稿保存失败，请重试后再生成';
+      return;
+    }
+  }
+
+  workbenchBusy.value = true;
+  error.value = '';
+  try {
+    const rendered = await renderResearchArtifact(generation.id);
+    const generationResult = normalizeGeneration(rendered.generation);
+    upsert({ value: generations.value }, generationResult);
+    if (activeWorkbenchGeneration.value?.id === generation.id) {
+      activeWorkbenchGeneration.value = generationResult;
+    }
+    syncArtifactPolling();
+    generationConfirmTarget.value = undefined;
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '生成失败';
+  } finally {
+    workbenchBusy.value = false;
+  }
+}
+
+async function workbenchCancel(generation: ResearchArtifactGeneration) {
+  workbenchBusy.value = true;
+  error.value = '';
+  try {
+    const cancelled = await cancelResearchArtifact(generation.id);
+    const generationResult = normalizeGeneration(cancelled.generation);
+    upsert({ value: generations.value }, generationResult);
+    if (activeWorkbenchGeneration.value?.id === generation.id) {
+      activeWorkbenchGeneration.value = generationResult;
+    }
+    syncArtifactPolling();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '取消失败';
+  } finally {
+    workbenchBusy.value = false;
+  }
+}
+
+async function workbenchRetryOutput(generation: ResearchArtifactGeneration, outputId: string) {
+  workbenchBusy.value = true;
+  error.value = '';
+  try {
+    const updated = await retryResearchArtifactOutput(outputId);
+    const generationResult = normalizeGeneration(updated.generation);
+    upsert({ value: generations.value }, generationResult);
+    if (activeWorkbenchGeneration.value?.id === generation.id) {
+      activeWorkbenchGeneration.value = generationResult;
+    }
+    syncArtifactPolling();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '重试失败';
+  } finally {
+    workbenchBusy.value = false;
+  }
+}
+
+async function workbenchSelectGeneration(id: string) {
+  try {
+    const current = activeWorkbenchGeneration.value;
+    if (current && current.id !== id && documentEditor.saveState.value !== 'saved') {
+      const saved = await documentEditor.flushSave(() => saveWorkbenchDraft(current.id));
+      if (!saved) return;
+    }
+    const result = await getResearchArtifactGeneration(id);
+    const generation = normalizeGeneration(result.generation);
+    activeWorkbenchGeneration.value = generation;
+    documentEditor.resetRevisionBaseline(generation);
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '加载版本失败';
+  }
+}
+
+async function workbenchDeleteGeneration(id: string) {
+  workbenchBusy.value = true;
+  error.value = '';
+  try {
+    await deleteResearchArtifactGeneration(id);
+    generations.value = generations.value.filter(g => g.id !== id);
+    if (activeWorkbenchGeneration.value?.id === id) {
+      activeWorkbenchGeneration.value = generations.value[0];
+    }
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '删除失败';
+  } finally {
+    workbenchBusy.value = false;
+  }
+}
+
+async function workbenchConfirmConsent(imageUrl: string, sourceId?: string) {
+  const generation = activeWorkbenchGeneration.value;
+  if (!generation) return;
+
+  try {
+    await confirmResearchArtifactImageUse(generation.id, imageUrl, sourceId);
+    const updated = await getResearchArtifactGeneration(generation.id);
+    const generationResult = normalizeGeneration(updated.generation);
+    upsert({ value: generations.value }, generationResult);
+    activeWorkbenchGeneration.value = generationResult;
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '确认失败';
+  }
+}
+
+async function workbenchFetchSourceImage() {
+  const generation = activeWorkbenchGeneration.value;
+  const consent = generation?.imageConsents?.[0];
+  if (!generation || !consent) {
+    error.value = '请先确认图片来源和使用权限';
+    return;
+  }
+
+  try {
+    await fetchResearchArtifactSourceImage({
+      generationId: generation.id,
+      imageUrl: consent.imageUrl,
+      consentId: consent.id,
+      ...(consent.sourceId ? { sourceId: consent.sourceId } : {})
+    });
+    error.value = '';
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : '获取来源图片失败';
+  }
+}
+
+function syncArtifactPolling() {
+  const shouldPoll = generations.value.some((generation) =>
+    generation.status === 'rendering'
+    || generation.status === 'validating'
+    || generation.status === 'repairing'
+  );
+  if (!shouldPoll) {
+    stopArtifactPolling();
+    return;
+  }
+  if (artifactPollTimer !== undefined) return;
+  artifactPollTimer = window.setTimeout(async () => {
+    artifactPollTimer = undefined;
+    if (activeConversationId.value) await loadGenerations(activeConversationId.value);
+  }, 1_000);
+}
+
+function stopArtifactPolling() {
+  if (artifactPollTimer !== undefined) {
+    window.clearTimeout(artifactPollTimer);
+    artifactPollTimer = undefined;
+  }
+}
+
+function normalizeGeneration(generation: ResearchArtifactGeneration): ResearchArtifactGeneration {
+  if (generation.spec.longform?.blocks) return generation;
+
+  const blocks: LongformBlock[] = generation.spec.pdf.sections.flatMap((section) => [
+    {
+      id: `heading-${section.id}`,
+      type: 'heading' as const,
+      level: 1 as const,
+      text: section.title,
+      citations: [...section.citations]
+    },
+    ...section.paragraphs.map((text, index): LongformBlock => ({
+      id: `paragraph-${section.id}-${index}`,
+      type: 'paragraph',
+      text,
+      citations: [...section.citations]
+    })),
+    ...(section.bullets.length
+      ? [{
+          id: `bullets-${section.id}`,
+          type: 'bulletList' as const,
+          items: [...section.bullets],
+          citations: [...section.citations]
+        }]
+      : [])
+  ]);
+
+  return {
+    ...generation,
+    spec: {
+      ...generation.spec,
+      longform: {
+        blocks,
+        pageSettings: {
+          size: 'A4',
+          orientation: 'portrait',
+          marginTop: 25.4,
+          marginBottom: 25.4,
+          marginLeft: 25.4,
+          marginRight: 25.4,
+          pageNumbers: true
+        }
+      }
+    }
+  };
+}
+
+const workbenchSaveState = documentEditor.saveState;
+const allGenerations = computed(() => generations.value);
 </script>
 
 <template>
@@ -503,7 +964,7 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
           :busy="deleting"
           @create="createConversation"
           @select="selectConversation"
-          @delete="deleteTarget = $event"
+          @delete="prepareDeleteTarget"
           @toggle="collapsed = !collapsed"
         />
       </template>
@@ -513,7 +974,8 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
         :title="activeConversation?.title"
         :conversation-id="activeConversationId"
         :messages="messages"
-        :artifacts-by-message-id="artifactsByMessageId"
+        :generations-by-message-id="generationsByMessageId"
+        :auxiliary-state-by-message-id="auxiliaryStateByMessageId"
         :loading="loading"
         :stopping="stopping"
         :error="error"
@@ -526,13 +988,20 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
         :locked-tool-group-ids="lockedToolGroupIds"
         :skills="availableSkills"
         :selected-skill-id="selectedSkillId"
+        :approvals="approvals"
+        :approval-busy-id="approvalBusyId"
         @send="send"
         @stop="stopResearch"
         @toggle-tool-group="toggleToolGroup"
         @toggle-standalone-tool="toggleStandaloneTool"
         @select-skill="selectSkill"
         @citation="selectCitation"
-        @preview="previewArtifact = $event"
+        @open-workbench="openWorkbench"
+        @preview-output="previewOutput = $event"
+        @generate="workbenchGenerate"
+        @cancel="workbenchCancel"
+        @retry-output="workbenchRetryOutput"
+        @approval-decision="decideApproval"
       />
     </WorkspaceSidebarLayout>
 
@@ -571,7 +1040,7 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
           </div>
           <DialogTitle>删除研究会话</DialogTitle>
           <DialogDescription>
-            “{{ deleteTarget?.title }}”及其消息、来源和笔记将被永久删除，此操作无法撤销。
+            “{{ deleteTarget?.title }}”及其消息、来源、笔记和 {{ deleteArtifactCount ?? '正在读取' }} 个关联产物版本将被永久删除；对应的二进制、预览和中间素材也会物理删除，此操作无法撤销。
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
@@ -584,6 +1053,37 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
       </DialogContent>
     </Dialog>
 
-    <WordPreviewDialog :artifact="previewArtifact" @close="previewArtifact = undefined" />
+    <DocumentConfirmDialog
+      :open="Boolean(generationConfirmTarget)"
+      title="确认生成文档"
+      description="系统会先保存当前草稿，再创建不可变版本并开始渲染。生成后仍可从版本历史查看和下载。"
+      :detail="generationConfirmTarget
+        ? `输出格式：${generationConfirmTarget.spec.formats.map((format) => format.toUpperCase()).join('、')}`
+        : undefined"
+      confirm-label="确认生成"
+      :busy="workbenchBusy"
+      @update:open="generationConfirmTarget = $event ? generationConfirmTarget : undefined"
+      @confirm="confirmWorkbenchGenerate"
+    />
+
+    <DocumentWorkbench
+      v-if="activeWorkbenchGeneration"
+      :generation="activeWorkbenchGeneration"
+      :generations="allGenerations"
+      :save-state="workbenchSaveState"
+      :busy="workbenchBusy"
+      @close="closeWorkbench"
+      @update-spec="workbenchUpdateSpec"
+      @generate="workbenchGenerate(activeWorkbenchGeneration)"
+      @cancel="workbenchCancel(activeWorkbenchGeneration)"
+      @retry-output="workbenchRetryOutput(activeWorkbenchGeneration, $event)"
+      @preview-output="previewOutput = $event"
+      @select-generation="workbenchSelectGeneration"
+      @delete-generation="workbenchDeleteGeneration"
+      @confirm-consent="workbenchConfirmConsent"
+      @fetch-source-image="workbenchFetchSourceImage"
+    />
+
+    <DocumentPreviewDialog :output="previewOutput" @close="previewOutput = undefined" />
   </section>
 </template>

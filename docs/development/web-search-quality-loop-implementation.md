@@ -69,7 +69,7 @@ retrieve_web_evidence
 
 原有 `web_search` 与 `fetch_page` 仍保留为可执行的内部能力，但默认不再暴露给模型和前端工具开关，避免模型绕过评分、重写和预算控制。
 
-每个用户请求只完整执行一次 `retrieve_web_evidence`。首次执行后，外层 Agent 会从下一轮可用工具中移除它；执行层仍保留重复调用保护，防止模型换一组参数重新获得预算。查询改写和渐进式重试全部在这一次调用内部完成。
+每个用户请求只完整执行一次 `retrieve_web_evidence`。首次执行后，外层 Agent 的后续模型轮次仍会收到同一工具定义（工具不会从 schema/tools 数组移除），这样模型可以看到可用能力与既有结果上下文；执行层保留一次性预算门禁，第二次调用不再联网，而是返回结构化 `tool_limit_reached`（`retryable: false`）工具错误，并提示使用首次调用的 verdict 和 sources。查询改写和渐进式重试全部在这一次调用内部完成。
 
 ## 4. 渐进式搜索策略
 
@@ -224,7 +224,7 @@ Agent Loop 会为这些来源发送 `source_found` 事件，研究服务继续�
 - 研究工作台工具列表隐藏底层 `web_search`、`fetch_page`；
 - 任务控制台默认工具改为 `retrieve_web_evidence`；
 - Durable Runtime 将 `retrieve_web_evidence` 识别为检索工具，可用于证据缺口补充步骤；
-- Agent Loop 对完整的 `retrieve_web_evidence` 参数做重复调用去重。
+- Agent Loop 保留 `retrieve_web_evidence` 在每轮工具数组中，但对同一 agentLoop 的第二次调用由执行层结构化拒绝为 `tool_limit_reached`；低层 `web_search`、`fetch_page` 仍隐藏。
 - 历史任务若仍保存 `web_search` 或 `fetch_page` 权限，运行时会兼容映射到 `retrieve_web_evidence`。
 
 ## 11. 主要代码变更

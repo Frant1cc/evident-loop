@@ -63,7 +63,7 @@ test('maps persisted legacy web permissions to the controlled tool', async () =>
       model: 'test-model',
       message: 'external fact',
       systemPrompt: 'Use controlled tools.',
-      allowedToolNames: ['web_search', 'fetch_page']
+      toolPolicy: { mode: 'selected', names: ['web_search', 'fetch_page'] }
     });
     assert.deepEqual(
       requestBody?.tools?.map((tool) => tool.function?.name),

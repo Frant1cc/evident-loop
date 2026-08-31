@@ -221,6 +221,10 @@ export type AgentArtifact = {
   updatedAt: string;
 };
 
+export type AgentArtifactLibraryItem = AgentArtifact & {
+  taskGoal: string;
+};
+
 export type AgentTaskDetail = {
   task: AgentTask;
   steps: AgentPlanStep[];
@@ -232,6 +236,7 @@ export type AgentTaskDetail = {
   claimEvidence: ClaimEvidence[];
   toolExecutions: ToolExecution[];
   artifacts: AgentArtifact[];
+  approvals?: import('../approvals/contracts.js').ToolApprovalDto[];
   latestCheckpoint?: AgentCheckpoint;
 };
 import type { ToolPolicy } from '../tools/contracts.js';

@@ -1,4 +1,5 @@
 import type { LlmProvider } from '../../llm/contracts.js';
+import type { ArtifactApplication } from '../artifacts/index.js';
 import { LlmNotConfiguredError } from '../../llm/errors.js';
 import { buildResearchContext } from '../../context/research/history.js';
 import {
@@ -22,11 +23,14 @@ import {
   updateResearchNote
 } from '../../research/store.js';
 import type { ToolPolicy, ToolRuntime } from '../../tools/contracts.js';
-import { normalizeToolPolicy } from '../../tools/policy.js';
+import type { ApprovalManager } from '../../approvals/contracts.js';
+import { normalizeToolPolicy, restrictToolPolicyToRegistered } from '../../tools/policy.js';
 import type { ResearchSkillRuntime } from '../../skills/runtime.js';
 import { builtInToolGroups, validateToolGroups, type ToolGroupDefinition } from '../../tools/groups.js';
 import type { ResolvedResearchSkill } from '../../skills/contracts.js';
 import { getMaxSequence, listStreamEventsAfter } from '../../streaming/eventStore.js';
+
+const AUTOMATIC_RESEARCH_TOOL_NAMES = new Set(['read_evidence']);
 
 export type ResearchApplicationDependencies = {
   llm?: LlmProvider;
@@ -34,6 +38,8 @@ export type ResearchApplicationDependencies = {
   toolRuntime: ToolRuntime;
   skillRuntime: ResearchSkillRuntime;
   toolGroups?: ToolGroupDefinition[];
+  approvalManager?: ApprovalManager;
+  artifactApplication?: Pick<ArtifactApplication, 'deleteConversationArtifacts' | 'flushPendingDrafts' | 'finalizePendingDrafts' | 'listDraftRequests'>;
 };
 
 /** Use-case boundary for research conversations and durable background runs. */
@@ -46,24 +52,34 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
 
   return {
     listTools: () => dependencies.toolRuntime.listModules()
-      .filter((tool) => tool.exposedToModel !== false)
-      .map((tool) => ({
-        name: tool.definition.function.name,
-        label: tool.label,
-        description: tool.definition.function.description
-      })),
+      .filter((tool) =>
+        tool.exposedToModel !== false &&
+        tool.source !== 'mcp' &&
+        !AUTOMATIC_RESEARCH_TOOL_NAMES.has(tool.definition.function.name)
+      )
+      .map((tool) => {
+        const availability = typeof tool.availability === 'function'
+          ? tool.availability()
+          : tool.availability ?? { status: 'available' as const };
+        return {
+          name: tool.definition.function.name,
+          label: tool.label,
+          description: tool.definition.function.description,
+          source: tool.source ?? 'builtin',
+          ...(tool.sourceInfo?.serverId ? { serverId: tool.sourceInfo.serverId } : {}),
+          ...(tool.sourceInfo?.serverName ? { serverName: tool.sourceInfo.serverName } : {}),
+          ...(tool.sourceInfo?.remoteName ? { remoteName: tool.sourceInfo.remoteName } : {}),
+          status: availability.status,
+          ...(tool.annotations ? { annotations: tool.annotations } : {})
+        };
+      }),
     listToolGroups: () => toolGroups.map((group) => ({ ...group, toolNames: [...group.toolNames] })),
     listSkills: () => dependencies.skillRuntime.list(),
     normalizeToolPolicy: (value: unknown): ToolPolicy => {
       const registered = new Set(
         dependencies.toolRuntime.getDefinitions().map((tool) => tool.function.name)
       );
-      const policy = normalizeToolPolicy(value);
-      if (policy.mode === 'selected') {
-        const unknown = policy.names.filter((name) => !registered.has(name));
-        if (unknown.length) throw new Error(`Unknown tools in toolPolicy: ${unknown.join(', ')}`);
-      }
-      return policy;
+      return restrictToolPolicyToRegistered(normalizeToolPolicy(value), registered);
     },
     listConversations: listResearchConversations,
     createConversation: createResearchConversation,
@@ -71,10 +87,25 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
       const conversation = getResearchConversation(id);
       if (!conversation) return undefined;
       const { promptPreview } = buildResearchContext(conversation, listResearchMessages(id), '', listResearchSteps(id));
-      return getResearchConversationDetail(id, promptPreview);
+       const detail = getResearchConversationDetail(id, promptPreview);
+       if (!detail || !dependencies.approvalManager) return detail;
+       return {
+         ...detail,
+         approvals: detail.activeRun
+           ? dependencies.approvalManager.list({ type: 'research_run', id: detail.activeRun.id })
+           : []
+       };
     },
     deleteConversation: (id: string) => {
       if (getActiveResearchRun(id)) throw new Error('Stop the active research task before deleting this conversation');
+      if (!getResearchConversation(id)) return false;
+      // Binary deletion happens first; the generation repository compensates
+      // removed files when the metadata delete fails, preventing orphaned
+      // Docker-volume files after a conversation is removed.
+      if (dependencies.artifactApplication) {
+        return dependencies.artifactApplication.deleteConversationArtifacts(id, () => deleteResearchConversation(id))
+          .then(() => true);
+      }
       return deleteResearchConversation(id);
     },
     createNote: (conversationId: string, content: string) => {
@@ -89,30 +120,74 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
       toolPolicy: ToolPolicy,
       skillId?: string
     ) => {
+      const effectiveToolPolicy = mergeAutomaticResearchTools(
+        toolPolicy,
+        dependencies.toolRuntime.listModules()
+      );
       const registered = new Set(
         dependencies.toolRuntime.getDefinitions().map((tool) => tool.function.name)
       );
       const skill = skillId
-        ? resolveSkillForRun(dependencies.skillRuntime, skillId, toolPolicy, registered)
+        ? resolveSkillForRun(dependencies.skillRuntime, skillId, effectiveToolPolicy, registered)
         : undefined;
       return createAndStartResearchRun({
         conversationId,
         content,
-        toolPolicy,
+        toolPolicy: effectiveToolPolicy,
         toolRuntime: dependencies.toolRuntime,
         skill: skill?.snapshot,
         skillRuntime: dependencies.skillRuntime,
         llm: requireLlm(),
-        model: dependencies.model
+        model: dependencies.model,
+        approvalManager: dependencies.approvalManager,
+        artifactDraftCoordinator: dependencies.artifactApplication
       });
     },
     getRun: getResearchRun,
-    getRunSnapshot: getResearchRunSnapshot,
+    getRunSnapshot: (id: string) => getResearchRunSnapshot(id, dependencies.approvalManager),
     subscribeToRun: subscribeToResearchRun,
     getStreamEventsAfter: listStreamEventsAfter,
     getStreamMaxSequence: getMaxSequence,
-    cancelRun: cancelResearchRun
+    cancelRun: (id: string) => {
+      const run = cancelResearchRun(id);
+      if (run && run.status === 'cancelled') {
+        dependencies.artifactApplication?.finalizePendingDrafts(
+          run.conversationId,
+          'cancelled',
+          run.id,
+          'The research run was cancelled before artifact planning completed'
+        );
+      }
+      return run;
+    }
   };
+}
+
+export function mergeAutomaticResearchTools(
+  policy: ToolPolicy,
+  modules: ReturnType<ToolRuntime['listModules']>
+): ToolPolicy {
+  if (policy.mode === 'all') return policy;
+  const availableModules = modules
+    .filter((module) => module.exposedToModel !== false && isToolAvailable(module));
+  const mcpToolNames = availableModules
+    .filter((module) => module.source === 'mcp')
+    .map((module) => module.definition.function.name);
+
+  const names = new Set(policy.mode === 'selected' ? policy.names : []);
+  mcpToolNames.forEach((name) => names.add(name));
+  availableModules
+    .filter((module) => AUTOMATIC_RESEARCH_TOOL_NAMES.has(module.definition.function.name))
+    .forEach((module) => names.add(module.definition.function.name));
+  if (!names.size) return policy;
+  return { mode: 'selected', names: [...names] };
+}
+
+function isToolAvailable(module: ReturnType<ToolRuntime['listModules']>[number]): boolean {
+  const availability = typeof module.availability === 'function'
+    ? module.availability()
+    : module.availability ?? { status: 'available' as const };
+  return availability.status === 'available';
 }
 
 export type ResearchApplication = ReturnType<typeof createResearchApplication>;

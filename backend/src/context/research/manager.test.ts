@@ -3,7 +3,12 @@ import test from 'node:test';
 
 import { initDb } from '../../db.js';
 import type { LlmProvider } from '../../llm/contracts.js';
-import { buildEvidenceManifest, createResearchContextManager, formatEvidenceManifest } from './manager.js';
+import {
+  buildEvidenceManifest,
+  createResearchContextManager,
+  formatEvidenceManifest,
+  type ResearchContextEvent
+} from './manager.js';
 import {
   addResearchSource,
   createResearchConversation,
@@ -62,7 +67,13 @@ test('session memory is asynchronous, persisted, and injected as a system messag
 test('large compression persists structured summary with the complete user-message list', async () => {
   const conversation = createResearchConversation();
   try {
-    const manager = createResearchContextManager({ conversationId: conversation.id, llm: provider(validSummary), model: 'test' });
+    const events: ResearchContextEvent[] = [];
+    const manager = createResearchContextManager({
+      conversationId: conversation.id,
+      llm: provider(validSummary),
+      model: 'test',
+      onEvent: (event) => { events.push(event); }
+    });
     const originalUserMessage = `important instruction ${'y'.repeat(440_000)}`;
     const result = await manager.prepare({
       messages: [{ role: 'system', content: 'rules' }, { role: 'user', content: originalUserMessage }],
@@ -73,6 +84,55 @@ test('large compression persists structured summary with the complete user-messa
     assert.match(state?.summary ?? '', /<all-user-messages>/);
     assert.match(state?.summary ?? '', /important instruction/);
     assert.equal(state?.sessionMemory, undefined);
+    assert.deepEqual(events.map((event) => event.type), [
+      'context_compression_started',
+      'context_compression_completed'
+    ]);
+    assert.equal(events[0]?.level, 'summary');
+    assert.equal(events[1]?.level, 'summary');
+  } finally {
+    deleteResearchConversation(conversation.id);
+  }
+});
+
+test('micro compression reports its token delta only once per manager run', async () => {
+  const conversation = createResearchConversation();
+  try {
+    const events: ResearchContextEvent[] = [];
+    const manager = createResearchContextManager({
+      conversationId: conversation.id,
+      llm: provider(validSessionMemory),
+      model: 'test',
+      onEvent: (event) => { events.push(event); }
+    });
+    const messages = [
+      {
+        role: 'assistant' as const,
+        content: '',
+        tool_calls: [{
+          id: 'old-call',
+          type: 'function' as const,
+          function: { name: 'large_result', arguments: '{}' }
+        }]
+      },
+      { role: 'tool' as const, tool_call_id: 'old-call', content: 'x'.repeat(320_000) },
+      ...Array.from({ length: 6 }, (_, index) => ({ role: 'user' as const, content: `recent-${index}` }))
+    ];
+
+    await manager.prepare({ messages, model: 'test' });
+    await manager.prepare({ messages, model: 'test' });
+
+    assert.deepEqual(events.map((event) => event.type), [
+      'context_compression_started',
+      'context_compression_completed'
+    ]);
+    const completed = events[1];
+    assert.equal(completed?.level, 'micro');
+    assert.equal(completed?.type, 'context_compression_completed');
+    if (completed?.type === 'context_compression_completed') {
+      assert.ok(completed.afterTokens < completed.beforeTokens);
+      assert.equal(completed.savedTokens, completed.beforeTokens - completed.afterTokens);
+    }
   } finally {
     deleteResearchConversation(conversation.id);
   }

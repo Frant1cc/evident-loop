@@ -75,13 +75,13 @@ const presets: Record<DocumentPresetName, DocumentPreset> = {
   }
 };
 
-export function getDocumentPreset(name: DocumentPresetName) {
+function getDocumentPreset(name: DocumentPresetName) {
   return presets[name];
 }
 
 export function resolveDocumentSpec(input: DocumentSpecInput): ResolvedDocumentSpec {
-  const overrides = input.format ?? {};
-  const preset = getDocumentPreset(overrides.preset ?? 'simple');
+  const { preset: presetName, ...overrides } = input.format ?? {};
+  const preset = getDocumentPreset(presetName ?? 'simple');
 
   return {
     title: input.title,
@@ -91,21 +91,9 @@ export function resolveDocumentSpec(input: DocumentSpecInput): ResolvedDocumentS
     fileName: ensureDocxExtension(input.fileName?.trim() || input.title),
     format: {
       ...preset,
-      pageSize: overrides.pageSize ?? preset.pageSize,
-      orientation: overrides.orientation ?? preset.orientation,
-      margins: {
-        ...preset.margins,
-        ...overrides.margins
-      },
-      titleFont: overrides.titleFont ?? preset.titleFont,
-      titleFontSize: overrides.titleFontSize ?? preset.titleFontSize,
-      headingFont: overrides.headingFont ?? preset.headingFont,
-      bodyFont: overrides.bodyFont ?? preset.bodyFont,
-      bodyFontSize: overrides.bodyFontSize ?? preset.bodyFontSize,
-      lineSpacing: overrides.lineSpacing ?? preset.lineSpacing,
+      ...overrides,
+      margins: { ...preset.margins, ...overrides.margins },
       primaryColor: normalizeHexColor(overrides.primaryColor ?? preset.primaryColor),
-      showHeader: overrides.showHeader ?? preset.showHeader,
-      showPageNumber: overrides.showPageNumber ?? preset.showPageNumber,
       headerText: overrides.headerText?.trim() || undefined,
       footerText: overrides.footerText?.trim() || undefined
     }

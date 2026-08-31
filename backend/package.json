@@ -8,8 +8,9 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/*.test.ts src/agent/*.test.ts src/context/*.test.ts src/context/research/*.test.ts src/rag/*.test.ts src/runtime/*.test.ts src/documents/*.test.ts src/artifacts/*.test.ts src/research/*.test.ts src/skills/*.test.ts src/streaming/*.test.ts src/tools/*.test.ts src/web/*.test.ts src/web/eval/*.test.ts src/modules/*.test.ts src/llm/*.test.ts src/knowledge/*.test.ts src/routes/*.test.ts",
+    "test": "tsx --test src/*.test.ts src/agent/*.test.ts src/approvals/*.test.ts src/context/*.test.ts src/context/research/*.test.ts src/rag/*.test.ts src/runtime/*.test.ts src/documents/*.test.ts src/artifacts/*.test.ts src/artifacts/generation/*.test.ts src/research/*.test.ts src/skills/*.test.ts src/streaming/*.test.ts src/tools/*.test.ts src/web/*.test.ts src/web/eval/*.test.ts src/modules/*.test.ts src/llm/*.test.ts src/knowledge/*.test.ts src/routes/*.test.ts src/mcp/*.test.ts src/mcp/presets/*.test.ts",
     "runtime:verify": "tsx src/runtime/verify.ts",
+    "artifacts:preflight": "tsx scripts/artifact-preflight.ts",
     "rag:sync": "tsx src/rag/syncCli.ts",
     "rag:eval:validate": "tsx src/rag/eval/validateFixtures.ts",
     "rag:eval": "tsx src/rag/eval/cli.ts",
@@ -17,7 +18,9 @@
   },
   "dependencies": {
     "@evident-loop/stream-protocol": "workspace:*",
+    "@modelcontextprotocol/sdk": "~1.29.0",
     "@qdrant/js-client-rest": "^1.18.0",
+    "ajv": "^8.20.0",
     "better-sqlite3": "^11.7.0",
     "cheerio": "^1.2.0",
     "cors": "^2.8.5",
@@ -25,9 +28,12 @@
     "dotenv": "^16.4.7",
     "drizzle-orm": "^0.45.2",
     "express": "^4.21.2",
+    "jsonrepair": "^3.15.0",
     "mammoth": "^1.12.1",
     "multer": "^2.2.0",
     "pdfjs-dist": "^4.10.38",
+    "playwright": "^1.62.1",
+    "pptxgenjs": "^3.12.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

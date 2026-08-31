@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
 
 import { sqlite } from '../db.js';
+import { redactToolArguments } from '../approvals/manager.js';
 import { normalizeToolPolicy } from '../tools/policy.js';
 import type {
   AgentCheckpoint,
   AgentCheckpointState,
   AgentEvent,
   AgentArtifact,
+  AgentArtifactLibraryItem,
   AgentClaim,
   AgentEvidence,
   AgentReview,
@@ -652,6 +654,16 @@ export function listArtifacts(taskId: string): AgentArtifact[] {
     .map((row) => toArtifact(row as ArtifactRow));
 }
 
+export function listAllArtifacts(): AgentArtifactLibraryItem[] {
+  return sqlite.prepare(`SELECT agent_artifacts.*, agent_tasks.goal AS task_goal
+    FROM agent_artifacts
+    JOIN agent_tasks ON agent_tasks.id = agent_artifacts.task_id
+    ORDER BY agent_artifacts.updated_at DESC`).all().map((row) => {
+      const item = row as ArtifactRow & { task_goal: string };
+      return { ...toArtifact(item), taskGoal: item.task_goal };
+    });
+}
+
 export const runInTransaction = sqlite.transaction.bind(sqlite) as <TArgs extends unknown[], TResult>(
   fn: (...args: TArgs) => TResult
 ) => (...args: TArgs) => TResult;
@@ -821,7 +833,7 @@ function toToolExecution(row: ToolExecutionRow): ToolExecution {
     executionKey: row.execution_key,
     toolName: row.tool_name,
     status: row.status,
-    arguments: parseJson(row.arguments_json),
+    arguments: redactToolArguments(parseJson(row.arguments_json)),
     ...(parseJson(row.result_json) === undefined ? {} : { result: parseJson(row.result_json) }),
     ...(row.error ? { error: row.error } : {}),
     startedAt: row.started_at,
