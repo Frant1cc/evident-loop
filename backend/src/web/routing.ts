@@ -10,6 +10,7 @@ type RouteInput = {
   question: string;
   explicitTimeRange?: 'day' | 'week' | 'month' | 'year';
   includeDomains?: string[];
+  plannedPreferredDomains?: string[];
 };
 
 type ProviderProfile = {
@@ -42,9 +43,7 @@ export function buildRetrievalQueryRoute(intent: RetrievalIntent, input: RouteIn
   const inferredTimeRange = input.explicitTimeRange ?? inferTimeRange(intent);
   const initialQuery = searchRequired ? buildInitialQuery(intent, input.question) : undefined;
   const providerRoutes = intent.requiredCapabilities.map((capability) => routeCapability(capability, intent));
-  const preferredDomains = intent.officialDocs.matched
-    ? inferPreferredOfficialDomains(input.question)
-    : [];
+  const preferredDomains = input.plannedPreferredDomains ?? [];
 
   return {
     policyVersion: 'provider-routing-v1',
@@ -53,7 +52,7 @@ export function buildRetrievalQueryRoute(intent: RetrievalIntent, input: RouteIn
       : intent.officialDocs.matched ? 'official_docs_first'
       : intent.vertical.matched && intent.vertical.confidence >= 0.8 ? 'vertical_first'
       : intent.chinaDomestic.matched && intent.freshness.matched ? 'china_current_first'
-      : intent.freshness.matched ? 'current_web_first'
+      : inferredTimeRange ? 'current_web_first'
       : 'general_web',
     searchRequired,
     directFetchUrls: intent.urls,
@@ -63,18 +62,6 @@ export function buildRetrievalQueryRoute(intent: RetrievalIntent, input: RouteIn
     providerRoutes,
     reasons: buildRouteReasons(intent, input)
   };
-}
-
-export function inferPreferredOfficialDomains(question: string) {
-  const lower = question.toLowerCase();
-  const domains: string[] = [];
-  if (/server-sent events|\bsse\b|eventsource/.test(lower)) {
-    domains.push('developer.mozilla.org', 'html.spec.whatwg.org');
-  }
-  if (/nginx|proxy_buffering|反向代理|缓冲/.test(lower)) domains.push('nginx.org');
-  if (/背压|backpressure|highwatermark|drain event|write buffer/.test(lower)) domains.push('nodejs.org');
-  if (/压缩|compression|gzip|负载均衡|load balanc/.test(lower)) domains.push('nginx.org');
-  return [...new Set(domains)];
 }
 
 function routeCapability(capability: RetrievalCapability, intent: RetrievalIntent): ProviderRoute {

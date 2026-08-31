@@ -6,9 +6,12 @@ import {
   ToolExecutionError,
   type ToolCall as RuntimeToolCall,
   type ToolDefinition,
+  type ToolContext,
+  type ToolProgress,
   type ToolRuntime,
   type ToolSnapshot
 } from '../tools/contracts.js';
+import { serializeToolResultForModel } from './toolResultSerializer.js';
 import type { RagSource } from '../rag/types.js';
 import type {
   AgentTraceStep,
@@ -24,6 +27,7 @@ export type AgentLoopEvent =
   | { type: 'llm'; title: string; model: string; tools?: string[] }
   | { type: 'llm_response'; assistantMessage: ChatMessage }
   | { type: 'tool_started'; toolCall: Pick<ParsedToolCall, 'id' | 'name' | 'arguments'> }
+  | { type: 'tool_progress'; toolCall: Pick<ParsedToolCall, 'id' | 'name'>; progress: ToolProgress }
   | { type: 'tool_completed'; toolCall: ToolTrace }
   | { type: 'tool_approval_requested'; approval: import('../approvals/contracts.js').ToolApprovalDto }
   | { type: 'tool_approval_resolved'; approval: import('../approvals/contracts.js').ToolApprovalDto }
@@ -36,6 +40,8 @@ export type AgentToolExecutor = (
     conversationId?: string;
     toolScope?: import('../tools/contracts.js').ToolScope;
     snapshot?: ToolSnapshot;
+    onProgress?: ToolContext['onProgress'];
+    onSource?: ToolContext['onSource'];
   }
 ) => Promise<unknown>;
 
@@ -61,6 +67,7 @@ type ExecuteToolRoundOptions = {
   toolScope?: import('../tools/contracts.js').ToolScope;
   approvalManager?: ApprovalManager;
   approvalScope?: ToolApprovalScope;
+  originalUserMessage: string;
 };
 
 export type ToolRoundResult = {
@@ -96,7 +103,8 @@ export async function executeToolRound({
   conversationId,
   toolScope,
   approvalManager,
-  approvalScope
+  approvalScope,
+  originalUserMessage
 }: ExecuteToolRoundOptions): Promise<ToolRoundResult> {
   throwIfAborted(signal);
   const preparedMessages = contextManager
@@ -138,7 +146,9 @@ export async function executeToolRound({
     return { assistantMessage, reply, parsedToolCalls: [], toolTraces: [], trace: [] };
   }
 
-  const parsedToolCalls = rawToolCalls.map(parseToolCall);
+  const parsedToolCalls = rawToolCalls
+    .map(parseToolCall)
+    .map((toolCall) => bindOriginalWebQuestion(toolCall, originalUserMessage));
   if (
     requiredSingleToolName &&
     (parsedToolCalls.length !== 1 || parsedToolCalls[0]?.name !== requiredSingleToolName)
@@ -198,6 +208,7 @@ export async function executeToolRound({
       role: 'tool',
       tool_call_id: toolCall.id,
       content: serializeToolResultForModel(
+        toolCall.name,
         toolTrace.error
           ? { error: toolTrace.error, ...(toolTrace.errorDetails ? { details: toolTrace.errorDetails } : {}) }
           : toolTrace.result,
@@ -238,8 +249,12 @@ async function executeParsedToolCall(
     };
   }
 
-  const toolContext = {
+  const toolContext: ToolContext = {
     signal,
+    onProgress: async (progress) => {
+      await onEvent?.({ type: 'tool_progress', toolCall: { id: toolCall.id, name: toolCall.name }, progress });
+    },
+    onSource: async (source) => { await onEvent?.({ type: 'source_found', source }); },
     ...(conversationId ? { conversationId } : {}),
     ...(toolScope ? { toolScope } : {})
   };
@@ -306,6 +321,9 @@ const dedupedSearchToolNames = new Set([
 ]);
 
 function isRepeatedSearch(toolCall: ParsedToolCall, searchToolCalls: Set<string>) {
+  // Malformed calls never reached the controlled search loop and must not
+  // consume its once-per-request budget; the corrective retry needs to run.
+  if (toolCall.parseError) return false;
   if (!dedupedSearchToolNames.has(toolCall.name)) return false;
   // This tool already owns its query-rewrite loop. A second outer call would reset its budget.
   const fingerprint = toolCall.name === 'retrieve_web_evidence'
@@ -345,10 +363,9 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function serializeToolResultForModel(payload: unknown, maxChars: number): string {
-  const serialized = JSON.stringify(payload) ?? 'null';
-  if (serialized.length <= maxChars) return serialized;
-  return `${serialized.slice(0, maxChars)}\n...[tool result truncated: showing first ${maxChars} of ${serialized.length} characters]`;
+function bindOriginalWebQuestion(toolCall: ParsedToolCall, originalUserMessage: string): ParsedToolCall {
+  if (toolCall.name !== 'retrieve_web_evidence' || toolCall.parseError || !toolCall.arguments || typeof toolCall.arguments !== 'object' || Array.isArray(toolCall.arguments)) return toolCall;
+  return { ...toolCall, arguments: { ...(toolCall.arguments as Record<string, unknown>), question: originalUserMessage } };
 }
 
 function getToolErrorLabel(toolCall: ParsedToolCall) {

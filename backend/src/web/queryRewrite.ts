@@ -10,12 +10,14 @@ export type RewriteWebQueryOptions = {
   uncoveredClaims?: string[];
   signal?: AbortSignal;
   llm?: LlmProvider;
+  currentDate?: string;
 };
 
 export async function rewriteWebQuery(options: RewriteWebQueryOptions): Promise<string | undefined> {
   const configuredLlm = createConfiguredLlm();
   if (!configuredLlm.llm && !options.llm) return fallbackRewrite(options);
 
+  const currentDate = normalizeCurrentDate(options.currentDate);
   try {
     const response = await resolveLlmProvider({ llm: options.llm ?? configuredLlm.llm }).complete({
       model: configuredLlm.model,
@@ -26,7 +28,7 @@ export async function rewriteWebQuery(options: RewriteWebQueryOptions): Promise<
         {
           role: 'system',
           content:
-            'Rewrite a web search query to fill a concrete evidence gap. Return JSON only: {"query":"..."}. Keep it focused, preserve named entities and dates, and do not repeat a previous query.'
+            `Rewrite a web search query to fill a concrete evidence gap. Return JSON only: {"query":"..."}. Keep it focused, preserve named entities and dates, and do not repeat a previous query. Current date: ${currentDate}. Never introduce stale years for latest/recent requests; anchor them to the current year when a year improves retrieval.`
         },
         {
           role: 'user',
@@ -34,7 +36,8 @@ export async function rewriteWebQuery(options: RewriteWebQueryOptions): Promise<
             question: options.question,
             previousQueries: options.previousQueries,
             failureReason: options.reason,
-            uncoveredClaims: options.uncoveredClaims ?? []
+            uncoveredClaims: options.uncoveredClaims ?? [],
+            currentDate
           })
         }
       ]
@@ -66,10 +69,9 @@ function fallbackRewrite(options: RewriteWebQueryOptions) {
 }
 
 function extractSubject(question: string) {
-  const sse = question.match(/Server-Sent Events|Server Sent Events|\bSSE\b|EventSource/i)?.[0];
-  if (sse) return sse;
   const api = question.match(/[A-Za-z0-9_.-]+\s+(?:Search\s+)?API/i)?.[0];
-  return api ?? question.split(/[：:，,；;]/)[0]?.trim().slice(0, 80) ?? question.slice(0, 80);
+  const acronym = question.match(/\b[A-Z][A-Z0-9.-]{1,15}\b/)?.[0];
+  return api ?? acronym ?? question.split(/[：:，,；;]/)[0]?.trim().slice(0, 80) ?? question.slice(0, 80);
 }
 
 function hasSeen(query: string, previousQueries: string[]) {
@@ -79,4 +81,9 @@ function hasSeen(query: string, previousQueries: string[]) {
 
 function stripCodeFence(value: string) {
   return value.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+}
+
+function normalizeCurrentDate(value?: string) {
+  const parsed = value ? new Date(value) : new Date();
+  return Number.isNaN(parsed.getTime()) ? new Date().toISOString().slice(0, 10) : parsed.toISOString().slice(0, 10);
 }

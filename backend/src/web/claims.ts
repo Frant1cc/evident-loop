@@ -1,83 +1,124 @@
-import { lexicalRelevance, normalizeQuery } from './quality.js';
+import type { EvidenceJudgment } from './evidenceJudge.js';
+import { fallbackEvidencePlan, type PlannedWebClaim } from './evidencePlanner.js';
+import { lexicalRelevance } from './quality.js';
+import { sourceCanSupportClaim } from './sourcePolicy.js';
 
-export type WebClaim = { id: string; text: string; evidenceGroups: string[][]; subjectTerms: string[] };
-export type ClaimEvidence = { content: string; url: string };
+export type WebClaim = PlannedWebClaim & {
+  /** Present only for evaluator-supplied, exact evidence requirements. */
+  evidenceGroups?: string[][];
+};
+
+export type ClaimEvidence = {
+  content: string;
+  url: string;
+  chunkIndex?: number;
+  judgments?: EvidenceJudgment[];
+  authority?: 'official' | 'third_party' | 'unverified';
+  publishedAt?: string;
+  freshnessStatus?: 'matched' | 'outside_window' | 'unknown' | 'future_date' | 'not_required';
+};
+
+export type ClaimEvidenceReference = {
+  url: string;
+  relation: 'supports' | 'contradicts';
+  confidence: number;
+  evidenceQuote: string;
+  authority: 'official' | 'third_party' | 'unverified';
+  publishedAt?: string;
+  freshnessStatus?: ClaimEvidence['freshnessStatus'];
+};
+
+export type ClaimConflict = {
+  claimId: string;
+  claimText: string;
+  status: 'resolved_supports' | 'resolved_contradicts' | 'unresolved';
+  reason: string;
+  supportingEvidence: ClaimEvidenceReference[];
+  contradictingEvidence: ClaimEvidenceReference[];
+  highRisk: boolean;
+  requiresHumanReview: boolean;
+};
+
 export type ClaimAssessment = WebClaim & {
   score: number;
   supported: boolean;
+  contradicted: boolean;
   matchedGroups: number;
   totalGroups: number;
   sourceUrls: string[];
   subjectMatched: boolean;
   subjectMismatchUrls: string[];
+  supportingEvidence: ClaimEvidenceReference[];
+  contradictingEvidence: ClaimEvidenceReference[];
+  conflict?: ClaimConflict;
 };
+
 export type ClaimCoverage = {
   claims: ClaimAssessment[];
   coverageScore: number;
   supportedClaimRatio: number;
   uncoveredClaims: string[];
+  uncoveredBlockingClaims: string[];
+  supportedBlockingClaimRatio: number;
+  blockingClaimCount: number;
+  blockingCoverageScore: number;
   subjectConsistencyRate: number;
   subjectMismatchUrls: string[];
+  conflicts: ClaimConflict[];
 };
 
-const SUPPORT_THRESHOLD = 0.55;
-const SHORT_TECHNICAL_CLAIMS = new Set([
-  '鉴权', '认证', '授权', '压缩', '缓冲', '心跳', '并发', '重连', '背压'
-]);
+const SUPPORT_THRESHOLD = 0.65;
 
-/** Deterministic extraction keeps retrieval quality independent of an extra LLM call. */
+/** Generic no-LLM fallback retained for offline operation and deterministic tests. */
 export function extractWebClaims(question: string): WebClaim[] {
-  const primarySubject = inferPrimarySubject(question);
-  const cleaned = question
-    .replace(/^(请|麻烦|帮我)\s*/i, '')
-    .replace(/^(联网)?(查询|查找|搜索|查清|核对|确认|研究)\s*/i, '')
-    .replace(/^(please\s+)?(search|find|verify|look up)\s+/i, '')
-    .trim();
-
-  const fragments = cleaned
-    .split(/[；;。！？!?：:\n]+/)
-    .flatMap((fragment) => fragment.split(/[，,、]+/))
-    .flatMap((fragment) => fragment.split(/\s*(?:以及|并且|同时)\s*/))
-    .map(normalizeClaimFragment)
-    .filter((fragment) => fragment.length >= 4 || SHORT_TECHNICAL_CLAIMS.has(fragment.toLowerCase()))
-    .filter((fragment) => !/^(只查询|仅查询|限定在|限制在|只使用|仅使用|只根据|仅根据|依据[^，,]*(官方文档|官方资料)|根据|引用|给出来源|列出来源|并给出|不要猜|不要编造|第一次搜索|如果.*不够|继续.*检索|并列出来源)/.test(fragment));
-
-  const unique = [...new Map(fragments.map((text) => [normalizeQuery(text), text])).values()];
-  const claims = unique.length ? unique : [cleaned || question.trim()];
-  const hasBasicAndAdvanced = /\bbasic\b/i.test(question) && /\badvanced\b/i.test(question);
-  return claims.map((rawText, index) => {
-    const text = rawText
-      .replace(/^依据[^，,]+[，,]\s*/, '')
-      .replace(/(二者|两者)/g, hasBasicAndAdvanced ? 'basic 和 advanced ' : '$1')
-      .replace(/[？?。！!]$/, '')
-      .trim();
-    return { id: `C${index + 1}`, text, evidenceGroups: buildEvidenceGroups(text), subjectTerms: primarySubject };
-  });
+  return fallbackEvidencePlan(question).claims;
 }
 
 export function assessClaimCoverage(claims: WebClaim[], evidence: ClaimEvidence[]): ClaimCoverage {
-  const assessments = claims.map((claim) => {
+  const assessments = claims.map((claim): ClaimAssessment => {
     const matches = evidence
       .map((item) => scoreClaimEvidence(claim, item))
-      .filter((match) => match.score > 0)
+      .filter((match) => match.score > 0 || match.contradicted)
       .sort((left, right) => right.score - left.score);
-    const score = matches[0]?.score ?? 0;
     const best = matches[0];
+    const supportingEvidence = uniqueEvidenceReferences(matches
+      .filter((match) => match.supported)
+      .map((match) => match.reference));
+    const contradictingEvidence = uniqueEvidenceReferences(matches
+      .filter((match) => match.contradicted)
+      .map((match) => match.reference));
+    const conflict = supportingEvidence.length && contradictingEvidence.length
+      ? resolveClaimConflict(claim, supportingEvidence, contradictingEvidence)
+      : undefined;
+    const highRiskNeedsCorroboration = isHighRiskClaim(claim.text)
+      && independentDomains(supportingEvidence) < 2;
+    const supported = supportingEvidence.length > 0
+      && !highRiskNeedsCorroboration
+      && conflict?.status !== 'unresolved'
+      && conflict?.status !== 'resolved_contradicts';
     return {
       ...claim,
-      score,
+      score: best?.score ?? 0,
       matchedGroups: best?.matchedGroups ?? 0,
-      totalGroups: claim.evidenceGroups.length,
-      supported: Boolean(best?.supported),
-      sourceUrls: matches.filter((match) => match.supported).map((match) => match.item.url),
+      totalGroups: claim.evidenceGroups?.length ?? 1,
+      supported,
+      contradicted: contradictingEvidence.length > 0,
+      sourceUrls: supported ? supportingEvidence.map((item) => item.url) : [],
       subjectMatched: Boolean(best?.subjectMatched),
-      subjectMismatchUrls: matches.filter((match) => match.matchedGroups > 0 && !match.subjectMatched).map((match) => match.item.url)
+      subjectMismatchUrls: [...new Set(matches
+        .filter((match) => match.hasRelevantSignal && !match.subjectMatched)
+        .map((match) => match.item.url))],
+      supportingEvidence,
+      contradictingEvidence,
+      ...(conflict ? { conflict } : {})
     };
   });
 
   const supported = assessments.filter((claim) => claim.supported).length;
-  const relevantEvidence = evidence.filter((item) => assessments.some((claim) => scoreClaimEvidence(claim, item).matchedGroups > 0));
-  const consistentEvidence = relevantEvidence.filter((item) => assessments.some((claim) => scoreClaimEvidence(claim, item).subjectMatched));
+  const blocking = assessments.filter((claim) => claim.blocking !== false);
+  const supportedBlocking = blocking.filter((claim) => claim.supported).length;
+  const judgedEvidence = evidence.filter((item) => item.judgments?.length);
+  const consistentEvidence = judgedEvidence.filter((item) => item.judgments?.some((judgment) => judgment.subjectMatched));
   return {
     claims: assessments,
     coverageScore: assessments.length
@@ -85,117 +126,16 @@ export function assessClaimCoverage(claims: WebClaim[], evidence: ClaimEvidence[
       : 0,
     supportedClaimRatio: assessments.length ? supported / assessments.length : 0,
     uncoveredClaims: assessments.filter((claim) => !claim.supported).map((claim) => claim.text),
-    subjectConsistencyRate: relevantEvidence.length ? consistentEvidence.length / relevantEvidence.length : 0,
-    subjectMismatchUrls: [...new Set(assessments.flatMap((claim) => claim.subjectMismatchUrls))]
+    uncoveredBlockingClaims: blocking.filter((claim) => !claim.supported).map((claim) => claim.text),
+    supportedBlockingClaimRatio: blocking.length ? supportedBlocking / blocking.length : 1,
+    blockingClaimCount: blocking.length,
+    blockingCoverageScore: blocking.length
+      ? blocking.reduce((total, claim) => total + claim.score, 0) / blocking.length
+      : 1,
+    subjectConsistencyRate: judgedEvidence.length ? consistentEvidence.length / judgedEvidence.length : 1,
+    subjectMismatchUrls: [...new Set(assessments.flatMap((claim) => claim.subjectMismatchUrls))],
+    conflicts: assessments.flatMap((claim) => claim.conflict ? [claim.conflict] : [])
   };
-}
-
-function buildEvidenceGroups(text: string): string[][] {
-  const lower = text.toLowerCase();
-  const groups: string[][] = [];
-  if (/心跳|heartbeat|keep-?alive/.test(lower)) {
-    groups.push(['心跳机制', '心跳', 'heartbeat', 'keep-alive', 'keepalive', ': ping', 'event: heartbeat']);
-  }
-  if (/断线重连|自动重连|reconnect|last-event-id|\bretry\b/.test(lower)) {
-    groups.push([
-      '断线重连', '自动重连', 'reconnection', 'reconnect', 'last-event-id',
-      'last event id', 'retry field', 'automatic retry', 'resumable stream'
-    ]);
-  }
-  if (/压缩|gzip|compression/.test(lower)) {
-    groups.push(['消息压缩', '压缩', 'gzip', 'compression', 'compress', 'content-encoding']);
-  }
-  if (/缓冲|buffering|proxy_buffering/.test(lower)) {
-    groups.push(['缓冲设置', '关闭缓冲', '代理缓冲', 'buffering', 'proxy_buffering', 'x-accel-buffering']);
-  }
-  if (/并发控制|连接数|backpressure|背压/.test(lower)) {
-    groups.push([
-      'backpressure', '背压', 'highwatermark', 'high water mark', 'drain event',
-      'write buffer', '写缓冲区', 'producer rate', '消费速度'
-    ]);
-  }
-  if (/多路复用|multiplex|http\/2|http2/.test(lower)) {
-    groups.push(['多路复用', 'multiplexing', 'multiplex', 'http/2', 'http2', 'named events', 'event types']);
-  }
-  if (/客户端优化|eventsource|client-side|client optimization/.test(lower)) {
-    groups.push([
-      '客户端优化', 'eventsource', 'client-side', 'client optimization',
-      'onmessage', 'onerror', 'close()', 'retry', 'last-event-id'
-    ]);
-  }
-  if (/鉴权|认证|授权|authentication|authorization/.test(lower)) {
-    groups.push(['鉴权', '认证', '授权', 'authentication', 'authorization', 'access token', 'cookie']);
-  }
-  if (/超时|timeout|超时控制/.test(lower)) {
-    groups.push([
-      '超时', 'timeout', 'idle timeout', 'read timeout', 'proxy_read_timeout',
-      'connection timeout', 'keepalive timeout'
-    ]);
-  }
-  if (/性能|并发优化|吞吐|performance|throughput|scalability/.test(lower)) {
-    groups.push([
-      '性能优化', '并发优化', '高并发', '吞吐', 'performance', 'throughput',
-      'scalability', 'event loop', 'non-blocking', 'worker_connections', 'connection limit'
-    ]);
-  }
-  if (/websocket/.test(lower) && /对比|区别|比较|versus|\bvs\b/.test(lower)) {
-    groups.push(['websocket']);
-    groups.push(['one-way', 'one way', 'unidirectional', 'bidirectional', '双向', '单向']);
-  }
-  if (/search_depth|搜索深度/.test(lower)) groups.push(['search_depth', '搜索深度']);
-  if (/可选值|取值|枚举|allowed|enum/.test(lower)) groups.push(['basic', 'advanced']);
-  if (/作用|定位|用途|purpose|role|snippet|相关性/.test(lower)) {
-    if (/basic/.test(lower)) groups.push(['basic']);
-    if (/advanced/.test(lower)) groups.push(['advanced']);
-    groups.push(['作用', '定位', '用途', 'purpose', 'role', 'snippet', 'relevant']);
-  }
-  if (/计费|定价|价格|成本|积分|credits?|pricing|cost/.test(lower)) {
-    if (/basic/.test(lower)) groups.push(['basic']);
-    if (/advanced/.test(lower)) groups.push(['advanced']);
-    groups.push(['计费', '定价', '价格', '成本', '积分', 'credit', 'pricing', 'cost']);
-  }
-  return groups.length ? groups : [extractAnchorTerms(text)];
-}
-
-function normalizeClaimFragment(fragment: string) {
-  return fragment
-    .trim()
-    .replace(/^(?:包括|包含|涵盖|涉及|以及|并且|同时|及|和)\s*/i, '')
-    .trim();
-}
-
-function scoreClaimEvidence(claim: WebClaim, item: ClaimEvidence) {
-  const content = item.content.toLowerCase();
-  const subjectMatched = !claim.subjectTerms.length || claim.subjectTerms.some((term) => content.includes(term.toLowerCase()));
-  const matchedGroups = claim.evidenceGroups.filter((group) =>
-    group.some((term) => content.includes(term.toLowerCase()))
-  ).length;
-  const groupCoverage = matchedGroups / Math.max(claim.evidenceGroups.length, 1);
-  const lexicalScore = lexicalRelevance(claim.text, item.content);
-  const semanticScore = claim.evidenceGroups.length > 1
-    ? groupCoverage * 0.75 + lexicalScore * 0.25
-    : matchedGroups
-      ? Math.max(lexicalScore, 0.75)
-      : lexicalScore;
-  const score = subjectMatched ? semanticScore : semanticScore * 0.25;
-  return {
-    item,
-    score,
-    matchedGroups,
-    subjectMatched,
-    supported: subjectMatched && matchedGroups === claim.evidenceGroups.length && score >= SUPPORT_THRESHOLD
-  };
-}
-
-function inferPrimarySubject(question: string): string[] {
-  const lower = question.toLowerCase();
-  if (/server-sent events|server sent events|\bsse\b|eventsource/.test(lower)) {
-    return ['server-sent events', 'server sent events', 'sse', 'eventsource'];
-  }
-  // For product APIs, requiring every evidence chunk to repeat the parameter
-  // name rejects legitimate pricing/credits pages. Entity binding is currently
-  // applied only to protocols where cross-topic contamination is common.
-  return [];
 }
 
 export function contentMatchesClaimSubject(claim: WebClaim, content: string) {
@@ -203,7 +143,172 @@ export function contentMatchesClaimSubject(claim: WebClaim, content: string) {
   return !claim.subjectTerms.length || claim.subjectTerms.some((term) => normalized.includes(term.toLowerCase()));
 }
 
-function extractAnchorTerms(text: string) {
-  const terms = text.toLowerCase().match(/[a-z0-9_.-]{2,}|[一-鿿]{2,}/g) ?? [];
-  return [...new Set(terms)].slice(0, 6);
+function scoreClaimEvidence(claim: WebClaim, item: ClaimEvidence) {
+  const authorityMatched = sourceCanSupportClaim(claim, item.url);
+  const judgments = item.judgments?.filter((judgment) => judgment.claimId === claim.id) ?? [];
+  const strongestJudgment = [...judgments].sort((left, right) => right.confidence - left.confidence)[0];
+  if (strongestJudgment) {
+    const supported = strongestJudgment.relation === 'supports'
+      && strongestJudgment.subjectMatched
+      && authorityMatched
+      && strongestJudgment.confidence >= SUPPORT_THRESHOLD;
+    return {
+      item,
+      score: supported ? strongestJudgment.confidence : 0,
+      matchedGroups: supported ? 1 : 0,
+      subjectMatched: strongestJudgment.subjectMatched && authorityMatched,
+      supported,
+      contradicted: strongestJudgment.relation === 'contradicts' && strongestJudgment.confidence >= SUPPORT_THRESHOLD,
+      hasRelevantSignal: strongestJudgment.relation !== 'irrelevant',
+      reference: toEvidenceReference(item, strongestJudgment)
+    };
+  }
+  if (item.judgments?.length) {
+    return {
+      item,
+      score: 0,
+      matchedGroups: 0,
+      subjectMatched: false,
+      supported: false,
+      contradicted: false,
+      hasRelevantSignal: false,
+      reference: emptyEvidenceReference(item)
+    };
+  }
+
+  const content = item.content.toLowerCase();
+  const subjectMatched = contentMatchesClaimSubject(claim, item.content) && authorityMatched;
+  if (claim.evidenceGroups?.length) {
+    const matchedGroups = claim.evidenceGroups.filter((group) =>
+      group.some((term) => content.includes(term.toLowerCase()))
+    ).length;
+    const groupCoverage = matchedGroups / claim.evidenceGroups.length;
+    const score = subjectMatched ? groupCoverage : groupCoverage * 0.25;
+    return {
+      item,
+      score,
+      matchedGroups,
+      subjectMatched,
+      supported: subjectMatched && matchedGroups === claim.evidenceGroups.length && score >= SUPPORT_THRESHOLD,
+      contradicted: false,
+      hasRelevantSignal: matchedGroups > 0,
+      reference: emptyEvidenceReference(item)
+    };
+  }
+
+  const score = lexicalRelevance(`${claim.text} ${claim.searchQueries.join(' ')}`, item.content);
+  return {
+    item,
+    score: subjectMatched ? score : score * 0.25,
+    matchedGroups: score >= SUPPORT_THRESHOLD ? 1 : 0,
+    subjectMatched,
+    supported: subjectMatched && score >= 0.72,
+    contradicted: false,
+    hasRelevantSignal: score > 0,
+    reference: emptyEvidenceReference(item)
+  };
+}
+
+function toEvidenceReference(item: ClaimEvidence, judgment: EvidenceJudgment): ClaimEvidenceReference {
+  return {
+    url: item.url,
+    relation: judgment.relation === 'contradicts' ? 'contradicts' : 'supports',
+    confidence: judgment.confidence,
+    evidenceQuote: judgment.evidenceQuote,
+    authority: item.authority ?? 'unverified',
+    ...(item.publishedAt ? { publishedAt: item.publishedAt } : {}),
+    ...(item.freshnessStatus ? { freshnessStatus: item.freshnessStatus } : {})
+  };
+}
+
+function emptyEvidenceReference(item: ClaimEvidence): ClaimEvidenceReference {
+  return {
+    url: item.url,
+    relation: 'supports',
+    confidence: 0,
+    evidenceQuote: '',
+    authority: item.authority ?? 'unverified',
+    ...(item.publishedAt ? { publishedAt: item.publishedAt } : {}),
+    ...(item.freshnessStatus ? { freshnessStatus: item.freshnessStatus } : {})
+  };
+}
+
+function uniqueEvidenceReferences(values: ClaimEvidenceReference[]) {
+  const byKey = new Map<string, ClaimEvidenceReference>();
+  for (const value of values) {
+    const key = `${value.relation}:${value.url}:${value.evidenceQuote}`;
+    const current = byKey.get(key);
+    if (!current || value.confidence > current.confidence) byKey.set(key, value);
+  }
+  return [...byKey.values()].sort(compareEvidenceStrength);
+}
+
+function resolveClaimConflict(
+  claim: WebClaim,
+  supportingEvidence: ClaimEvidenceReference[],
+  contradictingEvidence: ClaimEvidenceReference[]
+): ClaimConflict {
+  const support = supportingEvidence[0]!;
+  const contradict = contradictingEvidence[0]!;
+  const highRisk = isHighRiskClaim(claim.text);
+  const comparison = compareEvidenceStrength(support, contradict);
+  let status: ClaimConflict['status'] = comparison < 0 ? 'resolved_supports'
+    : comparison > 0 ? 'resolved_contradicts'
+      : 'unresolved';
+  let reason = status === 'unresolved'
+    ? 'The strongest supporting and contradicting evidence have equal authority, freshness and confidence.'
+    : status === 'resolved_supports'
+      ? 'Supporting evidence outranks contradicting evidence by authority, publication time or confidence.'
+      : 'Contradicting evidence outranks supporting evidence by authority, publication time or confidence.';
+
+  if (highRisk) {
+    const winningEvidence = status === 'resolved_supports' ? supportingEvidence
+      : status === 'resolved_contradicts' ? contradictingEvidence
+        : [];
+    if (independentDomains(winningEvidence) < 2) {
+      status = 'unresolved';
+      reason = 'High-risk claims require corroboration from at least two independent domains before a conflict can be resolved automatically.';
+    }
+  }
+
+  return {
+    claimId: claim.id,
+    claimText: claim.text,
+    status,
+    reason,
+    supportingEvidence,
+    contradictingEvidence,
+    highRisk,
+    requiresHumanReview: status === 'unresolved'
+  };
+}
+
+/** Negative means left is stronger, positive means right is stronger. */
+function compareEvidenceStrength(left: ClaimEvidenceReference, right: ClaimEvidenceReference) {
+  const authority = authorityRank(right.authority) - authorityRank(left.authority);
+  if (authority) return authority;
+  const leftDate = parsedDate(left.publishedAt);
+  const rightDate = parsedDate(right.publishedAt);
+  if (leftDate !== rightDate && leftDate !== 0 && rightDate !== 0) return rightDate - leftDate;
+  const confidence = right.confidence - left.confidence;
+  return Math.abs(confidence) >= 0.15 ? confidence : 0;
+}
+
+function authorityRank(value: ClaimEvidenceReference['authority']) {
+  return value === 'official' ? 3 : value === 'third_party' ? 2 : 1;
+}
+
+function parsedDate(value?: string) {
+  const parsed = value ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function independentDomains(values: ClaimEvidenceReference[]) {
+  return new Set(values.map((item) => {
+    try { return new URL(item.url).hostname.toLowerCase(); } catch { return item.url; }
+  })).size;
+}
+
+function isHighRiskClaim(text: string) {
+  return /(?:medical|clinical|diagnos|treatment|medicine|legal|law|regulation|compliance|financial|investment|trading|医疗|临床|诊断|治疗|药物|法律|法规|合规|金融|投资|证券|交易)/iu.test(text);
 }

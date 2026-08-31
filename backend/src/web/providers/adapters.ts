@@ -31,11 +31,12 @@ export const zhipuSearchProvider: SearchProvider = {
         ...(options.includeDomains?.length === 1 ? { search_domain_filter: options.includeDomains[0] } : {})
       }),
       signal
-    }) as { search_result?: Array<{ title?: string; link?: string; content?: string }> };
+    }) as { search_result?: Array<{ title?: string; link?: string; content?: string; publish_date?: string }> };
     return (payload.search_result ?? []).flatMap((item) => item.link ? [{
       title: item.title?.trim() || item.link,
       url: item.link,
       snippet: item.content?.trim().slice(0, 1_200) ?? '',
+      ...(item.publish_date?.trim() ? { publishedAt: item.publish_date.trim() } : {}),
       provider: 'zhipu'
     }] : []);
   }
@@ -59,12 +60,13 @@ export const firecrawlSearchProvider: SearchProvider = {
         ...(options.timeRange ? { tbs: firecrawlTimeRange(options.timeRange) } : {})
       }),
       signal
-    }) as { data?: { web?: Array<{ title?: string; url?: string; description?: string; markdown?: string }> } };
+    }) as { data?: { web?: Array<{ title?: string; url?: string; description?: string; markdown?: string; publishedDate?: string }> } };
     return (payload.data?.web ?? []).flatMap((item) => item.url ? [{
       title: item.title?.trim() || item.url,
       url: item.url,
       snippet: (item.description ?? item.markdown ?? '').trim().slice(0, 1_200),
       ...(item.markdown ? { content: item.markdown.slice(0, 50_000) } : {}),
+      ...(item.publishedDate?.trim() ? { publishedAt: item.publishedDate.trim() } : {}),
       provider: 'firecrawl-search'
     }] : []);
   }
@@ -88,13 +90,14 @@ export const exaDocsProvider: SearchProvider = {
         contents: { highlights: { maxCharacters: 1_200 } }
       }),
       signal
-    }) as { results?: Array<{ title?: string; url?: string; highlights?: string[]; text?: string; score?: number }> };
+    }) as { results?: Array<{ title?: string; url?: string; highlights?: string[]; text?: string; score?: number; publishedDate?: string }> };
     return (payload.results ?? []).flatMap((item) => item.url ? [{
       title: item.title?.trim() || item.url,
       url: item.url,
       snippet: (item.highlights?.join('\n') ?? item.text ?? '').trim().slice(0, 1_200),
       ...(item.highlights?.length || item.text ? { content: (item.highlights?.join('\n\n') ?? item.text ?? '').slice(0, 50_000) } : {}),
       ...(typeof item.score === 'number' ? { score: item.score } : {}),
+      ...(item.publishedDate?.trim() ? { publishedAt: item.publishedDate.trim() } : {}),
       provider: 'exa'
     }] : []);
   }

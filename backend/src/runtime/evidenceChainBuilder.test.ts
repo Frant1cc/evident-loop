@@ -212,6 +212,28 @@ test('records ranged read_document locators', () => {
   });
 });
 
+test('promotes only web sources linked to supported structured claims', () => {
+  const result = buildEvidenceFromToolExecutions([{
+    id: 'tool-execution-1', taskId: 'task-1', stepId: 'step-1', executionKey: 'step-1:web',
+    toolName: 'retrieve_web_evidence', status: 'completed', arguments: { question: 'Broad question' },
+    result: {
+      verdict: 'exhausted',
+      claims: [
+        { id: 'supported', supported: true, sourceUrls: ['https://docs.example.com/supported'] },
+        { id: 'gap', supported: false, sourceUrls: [] }
+      ],
+      sources: [
+        { id: 'supported-source', file: 'https://docs.example.com/supported', content: 'Direct evidence.' },
+        { id: 'unlinked-source', file: 'https://example.com/background', content: 'Background only.' }
+      ]
+    },
+    startedAt: '2026-08-08T00:00:00.000Z', completedAt: '2026-08-08T00:00:01.000Z'
+  }]);
+
+  assert.deepEqual(result.sources.map((source) => source.uri), ['https://docs.example.com/supported']);
+  assert.deepEqual(result.evidence.map((item) => item.content), ['Direct evidence.']);
+});
+
 test('keeps an exact evidence key', () => {
   const evidenceKey = 'knowledge:database-internals.md:6.-mvcc:section-1:part-1';
   const result = parseEvidenceChainClaims(supportedClaim(evidenceKey), new Set([evidenceKey]));

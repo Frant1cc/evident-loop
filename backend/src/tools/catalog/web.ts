@@ -38,7 +38,11 @@ export const webToolModules = [
     description:
       'Retrieve public web evidence through one controlled quality loop. Call this tool at most once per user request: it detects URL/PDF, official-docs, freshness, China-domestic, dynamic-page, verification, and vertical-domain signals; builds an auditable provider route; directly fetches explicit URLs when appropriate; then scores search results, fetches diverse pages, and rewrites weak queries toward uncovered claims within a fixed budget. Treat only sufficient results with adequate claim coverage as strong evidence.',
     inputSchema: retrieveWebEvidenceSchema,
-    execute: (args, context) => retrieveWebEvidence(args, { signal: context?.signal })
+    execute: (args, context) => retrieveWebEvidence(args, {
+      signal: context?.signal,
+      onProgress: context?.onProgress,
+      onSource: context?.onSource
+    })
   }),
   defineTool({
     label: '联网搜索',

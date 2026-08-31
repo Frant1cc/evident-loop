@@ -2,7 +2,7 @@
 import { computed } from 'vue';
 
 import { Badge } from '@/components/ui/badge';
-import type { ResearchStep } from '../../types/research';
+import type { ResearchStep, ToolProgressEntry } from '../../types/research';
 
 const props = defineProps<{
   steps: ResearchStep[];
@@ -56,6 +56,14 @@ function formatTokens(value: number) {
   return Math.round(value).toLocaleString('zh-CN');
 }
 
+function toolProgressHistory(step: ResearchStep): ToolProgressEntry[] {
+  const history = toRecord(step.output)?.progressHistory;
+  return Array.isArray(history) ? history.filter((item): item is ToolProgressEntry => Boolean(
+    item && typeof item === 'object' && typeof (item as ToolProgressEntry).id === 'string'
+      && typeof (item as ToolProgressEntry).message === 'string'
+  )) : [];
+}
+
 function formatTime(value: string) {
   return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(value));
 }
@@ -83,6 +91,8 @@ function formatTime(value: string) {
           </div>
           <p class="m-0 mt-1.5 text-sm font-medium leading-5 text-foreground">{{ step.title }}</p>
           <p v-if="stepInputSummary(step)" class="m-0 mt-1.5 line-clamp-2 text-xs leading-5 text-muted-foreground">{{ stepInputSummary(step) }}</p>
+          <p v-if="toolProgressHistory(step).length" class="m-0 mt-1.5 line-clamp-2 text-xs leading-5 text-primary">{{ toolProgressHistory(step)[toolProgressHistory(step).length - 1]?.message }}</p>
+          <p v-if="toolProgressHistory(step).length" class="m-0 mt-1 text-[10px] text-muted-foreground">联网轨迹 {{ toolProgressHistory(step).length }} 项</p>
           <p v-if="step.error" class="m-0 mt-1.5 line-clamp-2 text-xs leading-5 text-destructive">{{ step.error }}</p>
           <p class="m-0 mt-1.5 font-mono text-[10px] tabular-nums text-muted-foreground">{{ formatTime(step.startedAt) }}</p>
         </button>

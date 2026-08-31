@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
-import type { ResearchNote, ResearchPromptPreview, ResearchStep } from '../../types/research';
+import type { ResearchNote, ResearchPromptPreview, ResearchStep, ToolProgress } from '../../types/research';
 
 type DetailsTab = 'notes' | 'memory' | 'tool' | 'prompt';
 
@@ -108,6 +108,19 @@ function formatTokens(value: number) {
   return Math.round(value).toLocaleString('zh-CN');
 }
 
+function toolProgress(value: unknown): ToolProgress | undefined {
+  const progress = toRecord(toRecord(value)?.progress);
+  return progress && typeof progress.stage === 'string' && typeof progress.message === 'string'
+    ? progress as ToolProgress
+    : undefined;
+}
+
+function progressPercent(progress: ToolProgress) {
+  return progress.total && progress.current !== undefined
+    ? Math.max(0, Math.min(100, Math.round(progress.current / progress.total * 100)))
+    : undefined;
+}
+
 function toRecord(value: unknown) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
@@ -177,6 +190,14 @@ function toRecord(value: unknown) {
             </div>
             <p v-if="compressionStats(selectedStep)!.saved !== undefined" class="m-0 mt-2 text-xs text-muted-foreground">已节省 <strong class="font-mono tabular-nums text-foreground">{{ formatTokens(compressionStats(selectedStep)!.saved!) }}</strong> Tokens</p>
             <p v-if="compressionStats(selectedStep)!.threshold !== undefined" class="m-0 mt-1 text-[11px] text-muted-foreground">触发阈值：{{ formatTokens(compressionStats(selectedStep)!.threshold!) }} Tokens</p>
+          </section>
+          <section v-if="toolProgress(selectedStep.output)" class="rounded-lg border border-primary/30 bg-primary/5 p-3">
+            <div class="flex items-center justify-between gap-3">
+              <p class="m-0 text-xs font-semibold text-foreground">联网检索进度</p>
+              <span v-if="progressPercent(toolProgress(selectedStep.output)!) !== undefined" class="font-mono text-xs tabular-nums text-muted-foreground">{{ progressPercent(toolProgress(selectedStep.output)!) }}%</span>
+            </div>
+            <p class="m-0 mt-1.5 text-[13px] leading-6 text-foreground">{{ toolProgress(selectedStep.output)?.message }}</p>
+            <p v-if="toolProgress(selectedStep.output)?.totalClaims" class="m-0 mt-1 text-xs text-muted-foreground">Claim 覆盖：{{ toolProgress(selectedStep.output)?.coveredClaims ?? 0 }}/{{ toolProgress(selectedStep.output)?.totalClaims }}</p>
           </section>
           <section v-if="inputSummary(selectedStep.input)" class="rounded-lg border border-border bg-background p-3">
             <p class="m-0 text-xs font-semibold text-muted-foreground">调用内容</p>

@@ -408,7 +408,12 @@ function handleStreamEvent(event: ResearchStreamEvent) {
     applyConversationDetail(event.detail);
     applyRun(event.run);
   }
-  if (event.type === 'research_step' || event.type === 'tool_call_started' || event.type === 'tool_call_completed') upsert(steps, event.step);
+  if (
+    event.type === 'research_step'
+    || event.type === 'tool_call_started'
+    || event.type === 'tool_call_progress'
+    || event.type === 'tool_call_completed'
+  ) upsertResearchStep(event.step);
   if (event.type === 'research_source_found') upsert(sources, event.source);
   if (event.type === 'assistant_delta') messageRenderer.append(event.messageId, event.content);
   if (event.type === 'research_message_completed') {
@@ -434,6 +439,11 @@ function handleStreamEvent(event: ResearchStreamEvent) {
     error.value = event.run.status === 'cancelled' ? '' : event.message;
     void loadConversations();
   }
+}
+
+function upsertResearchStep(step: ResearchStep) {
+  upsert(steps, step);
+  if (selectedStep.value?.id === step.id) selectedStep.value = step;
 }
 
 async function stopResearch() {

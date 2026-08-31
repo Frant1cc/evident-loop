@@ -172,12 +172,19 @@ export function buildEvidenceFromToolExecutions(
     if (execution.toolName === 'retrieve_web_evidence') {
       const result = recordValue(execution.result);
       if (result && Array.isArray(result.sources)) {
+        const structuredClaims = Array.isArray(result.claims) ? result.claims : [];
+        const supportedUrls = new Set(structuredClaims.flatMap((rawClaim) => {
+          const claim = recordValue(rawClaim);
+          if (!claim?.supported || !Array.isArray(claim.sourceUrls)) return [];
+          return claim.sourceUrls.flatMap((url) => typeof url === 'string' ? [url] : []);
+        }));
         for (const rawSource of result.sources) {
           const source = recordValue(rawSource);
           if (!source) continue;
           const uri = textValue(source.file);
           const content = textValue(source.content);
           if (!uri || !content) continue;
+          if (structuredClaims.length && !supportedUrls.has(uri)) continue;
           const rawId = textValue(source.id) ?? fingerprint(`${uri}:${content}`);
           const domain = textValue(source.heading);
           const contentType = textValue(source.contentType);

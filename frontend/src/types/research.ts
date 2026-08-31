@@ -31,6 +31,26 @@ export type ResearchStep = {
   completedAt?: string;
 };
 
+export type ToolProgress = {
+  stage: string;
+  message: string;
+  kind?: 'phase' | 'search' | 'page' | 'evidence' | 'coverage' | 'rewrite';
+  status?: 'running' | 'completed' | 'warning';
+  query?: string;
+  url?: string;
+  title?: string;
+  detail?: string;
+  current?: number;
+  total?: number;
+  coveredClaims?: number;
+  totalClaims?: number;
+};
+
+export type ToolProgressEntry = ToolProgress & {
+  id: string;
+  occurredAt: string;
+};
+
 export type ResearchSource = {
   id: string;
   messageId: string;

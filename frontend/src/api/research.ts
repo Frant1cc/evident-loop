@@ -24,6 +24,7 @@ export type ResearchStreamEvent =
   | { type: 'snapshot'; run: ResearchRun; detail: ResearchConversationDetail }
   | { type: 'research_step'; step: ResearchStep }
   | { type: 'tool_call_started'; step: ResearchStep }
+  | { type: 'tool_call_progress'; step: ResearchStep }
   | { type: 'tool_call_completed'; step: ResearchStep }
   | { type: 'research_source_found'; messageId: string; source: ResearchSource }
   | { type: 'assistant_delta'; messageId: string; content: string }
@@ -157,6 +158,7 @@ function toResearchStreamEvent(eventName: string, parsed: Record<string, unknown
   }
   if (eventName === 'research_step') return { type: eventName, step: parsed.step as ResearchStep };
   if (eventName === 'tool_call_started') return { type: eventName, step: parsed.step as ResearchStep };
+  if (eventName === 'tool_call_progress') return { type: eventName, step: parsed.step as ResearchStep };
   if (eventName === 'tool_call_completed') return { type: eventName, step: parsed.step as ResearchStep };
   if (eventName === 'research_source_found') return { type: eventName, messageId: String(parsed.messageId), source: parsed.source as ResearchSource };
   if (eventName === 'assistant_delta') return { type: eventName, messageId: String(parsed.messageId), content: String(parsed.content ?? '') };

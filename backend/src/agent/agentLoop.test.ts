@@ -110,7 +110,7 @@ test('none tool policy exposes no definitions to the model', async () => {
   assert.equal(observedTools, undefined);
 });
 
-test('retries once when an explicit artifact request misses its required tool', async () => {
+test('retries once when an explicit request misses its required tool', async () => {
   const requestBodies: Array<Record<string, unknown>> = [];
   let requestCount = 0;
   const server = createServer(async (req, res) => {
@@ -128,14 +128,11 @@ test('retries once when an explicit artifact request misses its required tool', 
               content: '',
               tool_calls: [
                 {
-                  id: 'call-word-1',
+                  id: 'call-web-1',
                   type: 'function',
                   function: {
-                    name: 'generate_word_document',
-                    arguments: JSON.stringify({
-                      title: 'Required tool test',
-                      blocks: [{ type: 'paragraph', text: 'content' }]
-                    })
+                    name: 'retrieve_web_evidence',
+                    arguments: JSON.stringify({ question: 'Required tool test' })
                   }
                 }
               ]
@@ -158,10 +155,10 @@ test('retries once when an explicit artifact request misses its required tool', 
     const result = await runAgentLoop({
       apiKey: 'test-key',
       model: 'test-model',
-      message: 'Export this as a Word document',
+      message: 'Find one fact',
       systemPrompt: 'Use tools when required.',
-      toolPolicy: { mode: 'selected', names: ['generate_word_document'] },
-      requiredToolName: 'generate_word_document',
+      toolPolicy: { mode: 'selected', names: ['retrieve_web_evidence'] },
+      requiredToolName: 'retrieve_web_evidence',
       executeTool: async () => ({
         downloadUrl: '/api/artifacts/test/download'
       })
@@ -169,7 +166,7 @@ test('retries once when an explicit artifact request misses its required tool', 
 
     assert.equal(requestCount, 3);
     assert.equal(result.toolCalls.length, 1);
-    assert.equal(result.toolCalls[0]?.name, 'generate_word_document');
+    assert.equal(result.toolCalls[0]?.name, 'retrieve_web_evidence');
     assert.doesNotMatch(result.reply, /\/api\/artifacts\/test\/download/);
     assert.match(JSON.stringify(requestBodies[1]), /Call that tool now/);
   } finally {
@@ -181,7 +178,7 @@ test('retries once when an explicit artifact request misses its required tool', 
   }
 });
 
-test('grants one corrective retry when required document tool arguments are invalid JSON', async () => {
+test('grants one corrective retry when required tool arguments are invalid JSON', async () => {
   let requestCount = 0;
   let executionCount = 0;
   const server = createServer(async (_req, res) => {
@@ -194,12 +191,12 @@ test('grants one corrective retry when required document tool arguments are inva
             content: '',
             tool_calls: [
               {
-                id: 'call-word-invalid',
+                  id: 'call-web-invalid',
                 type: 'function',
                 function: {
-                  name: 'generate_word_document',
+                  name: 'retrieve_web_evidence',
                   arguments:
-                    '{"title":"Broken","blocks":[{"type":"bulletList","items":["one"],["two"]}]}'
+                    '{"question":"Broken","filters":["one"],["two"]}'
                 }
               }
             ]
@@ -210,14 +207,11 @@ test('grants one corrective retry when required document tool arguments are inva
               content: '',
               tool_calls: [
                 {
-                  id: 'call-word-corrected',
+                  id: 'call-web-corrected',
                   type: 'function',
                   function: {
-                    name: 'generate_word_document',
-                    arguments: JSON.stringify({
-                      title: 'Corrected',
-                      contentMarkdown: '# Result\n\n- one\n- two'
-                    })
+                    name: 'retrieve_web_evidence',
+                    arguments: JSON.stringify({ question: 'Corrected' })
                   }
                 }
               ]
@@ -240,17 +234,14 @@ test('grants one corrective retry when required document tool arguments are inva
     const result = await runAgentLoop({
       apiKey: 'test-key',
       model: 'test-model',
-      message: 'Export this as a Word document',
+      message: 'Find one fact',
       systemPrompt: 'Use tools when required.',
       maxToolRounds: 1,
-      toolPolicy: { mode: 'selected', names: ['generate_word_document'] },
-      requiredToolName: 'generate_word_document',
+      toolPolicy: { mode: 'selected', names: ['retrieve_web_evidence'] },
+      requiredToolName: 'retrieve_web_evidence',
       executeTool: async (toolCall) => {
         executionCount += 1;
-        assert.deepEqual(toolCall.arguments, {
-          title: 'Corrected',
-          contentMarkdown: '# Result\n\n- one\n- two'
-        });
+        assert.deepEqual(toolCall.arguments, { question: 'Find one fact' });
         return { downloadUrl: '/api/artifacts/test/download' };
       }
     });

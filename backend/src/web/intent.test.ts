@@ -70,10 +70,21 @@ test('does not confuse keep-alive with the freshness word live', () => {
   assert.equal(route.inferredTimeRange, undefined);
 });
 
+test('treats upcoming release language as a freshness request', () => {
+  const intent = detectRetrievalIntent('OpenAI 准备发布什么模型？');
+  const route = buildRetrievalQueryRoute(intent, { question: 'OpenAI 准备发布什么模型？' });
+  assert.equal(intent.freshness.matched, true);
+  assert.equal(route.strategy, 'current_web_first');
+  assert.equal(route.inferredTimeRange, 'month');
+});
+
 test('treats multi-signal technical standards questions as official-docs-first', () => {
   const question = 'SSE 长连接的心跳、EventSource 重连和 Nginx proxy_buffering 最佳实践';
   const intent = detectRetrievalIntent(question);
-  const route = buildRetrievalQueryRoute(intent, { question });
+  const route = buildRetrievalQueryRoute(intent, {
+    question,
+    plannedPreferredDomains: ['developer.mozilla.org', 'html.spec.whatwg.org', 'nginx.org']
+  });
 
   assert.equal(intent.officialDocs.matched, true);
   assert.equal(route.strategy, 'official_docs_first');
