@@ -60,11 +60,24 @@ export type ArtifactImageConsent = {
   confirmedAt: string;
 };
 
+export type ArtifactDraftRequest = {
+  id: string;
+  conversationId: string;
+  researchRunId?: string;
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  generationId?: string;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+};
+
 export type ArtifactSlide = {
   id: string;
   title: string;
   kind: 'title' | 'content' | 'comparison' | 'closing';
   bullets: string[];
+  html?: string;
   speakerNotes?: string;
   citations: string[];
   visual?:
@@ -119,7 +132,7 @@ export type ArtifactSpec = {
     }>;
     citations: Array<{ citationKey: string; sourceId: string; title: string; locator?: string }>;
   };
-  presentation: { slides: ArtifactSlide[]; targetSlideCount: number };
+  presentation: { slides: ArtifactSlide[]; targetSlideCount: number; themeCss?: string };
   longform: { blocks: LongformBlock[]; pageSettings: LongformPageSettings };
   pdf: { sections: Array<{ id: string; title: string; paragraphs: string[]; bullets: string[]; citations: string[] }>; targetPageCount: number };
   formats: Array<'pptx' | 'pdf' | 'docx'>;

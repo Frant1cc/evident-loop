@@ -1,4 +1,4 @@
-import type { ArtifactBranding, ArtifactSpec, ArtifactTheme, ResearchArtifactGeneration } from '../types/artifacts';
+import type { ArtifactBranding, ArtifactDraftRequest, ArtifactSpec, ArtifactTheme, ResearchArtifactGeneration } from '../types/artifacts';
 
 type ApiResponse<T> = { code: 0 | 1; message: string; data: T | null };
 
@@ -15,6 +15,12 @@ export type ArtifactDraftPreferences = {
 export function listResearchArtifactGenerations(conversationId: string) {
   return request<{ generations: ResearchArtifactGeneration[] }>(
     `/api/research/conversations/${encodeURIComponent(conversationId)}/artifacts`
+  );
+}
+
+export function listResearchArtifactDraftRequests(conversationId: string) {
+  return request<{ requests: ArtifactDraftRequest[] }>(
+    `/api/research/conversations/${encodeURIComponent(conversationId)}/artifact-requests`
   );
 }
 

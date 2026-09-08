@@ -48,6 +48,7 @@ const slideSchema = z.object({
   title: text(200),
   kind: z.enum(['title', 'content', 'comparison', 'closing']),
   bullets: z.array(text(1_000)).max(8),
+  html: text(60_000).optional(),
   speakerNotes: text(4_000).optional(),
   citations: citationKeys,
   visual: z.union([
@@ -112,6 +113,7 @@ const presentationDeliverableSchema = z.object({
   documentType: z.literal('presentation'),
   formats: z.tuple([z.literal('pptx')]),
   targetSlideCount: z.number().int().min(8).max(30),
+  themeCss: text(24_000).optional(),
   slides: z.array(slideSchema).min(8).max(30)
 }).strict();
 

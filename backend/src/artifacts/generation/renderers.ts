@@ -16,19 +16,29 @@ import { RendererUnavailableError } from './errors.js';
 import { resolveDocumentSpec } from '../../documents/presets.js';
 import { renderWordDocument } from '../../documents/renderer.js';
 import type { DocumentBlock, DocumentPresetName } from '../../documents/types.js';
+import { createPptxSlideHtmlDocument, pptxViewport } from './pptxHtml.js';
 
 export { RendererUnavailableError } from './errors.js';
 
 export class DefaultPptxRenderer implements ArtifactRenderer {
   async render(spec: ArtifactSpec, _snapshot: ResearchSnapshot, context?: RendererContext): Promise<RendererResult> {
     throwIfAborted(context?.signal);
-    const imported = await importOptional('pptxgenjs');
-    if (!imported) {
+    const [pptxModule, playwrightModule] = await Promise.all([
+      importOptional('pptxgenjs'),
+      importOptional('playwright')
+    ]);
+    if (!pptxModule) {
       throw new RendererUnavailableError(
         'PPTX renderer unavailable: install pptxgenjs and ensure the backend can load it'
       );
     }
-    const PptxGenJS = imported.default ?? imported;
+    const chromium = playwrightModule?.chromium ?? playwrightModule?.default?.chromium;
+    if (!chromium) {
+      throw new RendererUnavailableError(
+        'PPTX renderer unavailable: Playwright Chromium is required for HTML slide rendering'
+      );
+    }
+    const PptxGenJS = pptxModule.default ?? pptxModule;
     const pptx = new PptxGenJS();
     pptx.layout = 'LAYOUT_WIDE';
     pptx.author = 'EvidentLoop';
@@ -42,162 +52,84 @@ export class DefaultPptxRenderer implements ArtifactRenderer {
       lang: 'zh-CN'
     };
 
-    const colors = themeColors(spec);
     const plannedSlides = normalizePresentationSlides(spec.presentation.slides, spec.title);
-    const titleSlide = pptx.addSlide();
-    titleSlide.background = { color: colors.background };
-    titleSlide.addShape(pptx.ShapeType?.rect ?? 'rect', {
-      x: 0,
-      y: 0,
-      w: 13.333,
-      h: 0.22,
-      fill: { color: colors.primary },
-      line: { color: colors.primary }
-    });
-    titleSlide.addText(spec.title, {
-      x: 0.75,
-      y: 2.2,
-      w: 11.8,
-      h: 0.75,
-      fontFace: spec.branding.titleFont ?? 'Aptos Display',
-      fontSize: 29,
-      bold: true,
-      color: colors.primary,
-      margin: 0,
-      breakLine: false,
-      fit: 'shrink'
-    });
-    titleSlide.addText(spec.audience, {
-      x: 0.8,
-      y: 3.15,
-      w: 11.5,
-      h: 0.38,
-      fontSize: 15,
-      color: colors.muted,
-      margin: 0,
-      fit: 'shrink'
-    });
-    titleSlide.addText(spec.brief.executiveSummary, {
-      x: 0.8,
-      y: 4.1,
-      w: 11.3,
-      h: 1.2,
-      fontSize: 16,
-      color: colors.text,
-      margin: 0.04,
-      breakLine: false,
-      fit: 'shrink'
-    });
     const logo = findBrandAsset(spec, context?.assets);
-    if (logo) {
-      titleSlide.addImage({ data: toDataUri(logo), x: 11.45, y: 0.42, w: 1.1, h: 0.55 });
+    let browser: any;
+    try {
+      browser = await chromium.launch({ headless: true });
+    } catch (error) {
+      throw new RendererUnavailableError(
+        `PPTX renderer unavailable: Chromium could not start (${error instanceof Error ? error.message : 'launch failed'})`
+      );
     }
-    context?.onProgress?.('PPTX title slide rendered');
+    try {
+      const browserContext = await browser.newContext({
+        viewport: pptxViewport,
+        deviceScaleFactor: 1,
+        javaScriptEnabled: false
+      });
+      const page = await browserContext.newPage();
+      await page.route('**/*', (route: any) => route.abort('blockedbyclient'));
+      const screenshots: Buffer[] = [];
+      const layoutPages: ArtifactLayoutManifest['pages'] = [];
+      const diagnostics: string[] = [];
+      for (const [index, slidePlan] of plannedSlides.entries()) {
+        throwIfAborted(context?.signal);
+        const html = createPptxSlideHtmlDocument({
+          spec,
+          slide: slidePlan,
+          index,
+          slideCount: plannedSlides.length,
+          ...(logo ? { logoDataUri: toDataUri(logo) } : {})
+        });
+        await page.setContent(html, { waitUntil: 'domcontentloaded' });
+        await page.evaluate(async () => { await document.fonts?.ready; });
+        await fitOversizedPptxVisuals(page);
+        const metrics = await inspectPptxHtmlPage(page, index + 1);
+        if (!metrics.boxes.some((box) => box.id.includes('-content-'))) {
+          diagnostics.push(`HTML slide ${index + 1} has no visible content after sanitization`);
+        }
+        const screenshot = Buffer.from(await page.screenshot({ type: 'png', fullPage: false }));
+        screenshots.push(screenshot);
+        layoutPages.push(metrics);
 
-    const ordinaryAsset = findOrdinaryAsset(spec, context?.assets);
-    for (const slidePlan of plannedSlides.slice(1)) {
-      throwIfAborted(context?.signal);
-      const slide = pptx.addSlide();
-      slide.background = { color: colors.background };
-      slide.addText(slidePlan.title, {
-        x: 0.65,
-        y: 0.42,
-        w: logo ? 10.5 : 12,
-        h: 0.48,
-        fontSize: 24,
-        bold: true,
-        color: colors.primary,
-        margin: 0,
-        fit: 'shrink'
-      });
-      slide.addShape(pptx.ShapeType?.line ?? 'line', {
-        x: 0.65,
-        y: 1.08,
-        w: 12,
-        h: 0,
-        line: { color: colors.rule, width: 1 }
-      });
-      if (logo) slide.addImage({ data: toDataUri(logo), x: 11.45, y: 0.38, w: 1.1, h: 0.55 });
-      const bullets = slidePlan.bullets;
-      const hasVisual = Boolean(slidePlan.visual);
-      if (bullets.length) {
-        slide.addText(bullets.map((text: string) => ({ text, options: { bullet: { indent: 18 } } })), {
-          x: 0.95,
-          y: 1.45,
-          w: hasVisual ? 6.1 : 11.2,
-          h: ordinaryAsset && !hasVisual ? 4.1 : 4.55,
-          fontSize: 20,
-          breakLine: true,
-          color: colors.text,
-          margin: 0.06,
-          paraSpaceAfterPt: 14,
-          fit: 'shrink',
-          valign: 'mid'
-        });
-      }
-      if (slidePlan.visual?.type === 'table') {
-        slide.addTable([slidePlan.visual.headers, ...slidePlan.visual.rows], {
-          x: 7.25,
-          y: 1.65,
-          w: 5.25,
-          h: 3.9,
-          fontSize: 10,
-          border: { type: 'solid', color: colors.rule, pt: 1 },
-          fill: colors.panel,
-          color: colors.text,
-          margin: 0.06,
-          fit: 'shrink'
-        });
-      } else if (slidePlan.visual?.type === 'bar') {
-        const chartType = pptx.ChartType?.bar ?? 'bar';
-        slide.addChart?.(chartType, [{ name: '值', labels: slidePlan.visual.labels, values: slidePlan.visual.values }], {
-          x: 7.25,
-          y: 1.65,
-          w: 5.25,
-          h: 3.9,
-          showLegend: false,
-          showTitle: false,
-          catAxisLabelFontFace: spec.branding.bodyFont ?? 'Aptos',
-          valAxisLabelFontFace: spec.branding.bodyFont ?? 'Aptos',
-          chartColors: [colors.primary]
-        });
-      }
-      if (slidePlan.citations.length) {
-        slide.addText(`来源：${slidePlan.citations.join('、')}`, {
-          x: 0.75,
-          y: 6.75,
-          w: 11.8,
-          h: 0.25,
-          fontSize: 8,
-          color: colors.muted,
-          margin: 0,
-          fit: 'shrink'
-        });
-      }
-      if (ordinaryAsset) {
+        const slide = pptx.addSlide();
+        slide.background = { color: 'FFFFFF' };
         slide.addImage({
-          data: toDataUri(ordinaryAsset),
-          x: hasVisual ? 7.25 : 10.8,
-          y: 5.72,
-          w: hasVisual ? 1.35 : 1.7,
-          h: 0.72
+          data: `data:image/png;base64,${screenshot.toString('base64')}`,
+          x: 0,
+          y: 0,
+          w: 13.333,
+          h: 7.5
         });
+        const notes = [
+          slidePlan.speakerNotes,
+          slidePlan.citations.length ? `来源：${slidePlan.citations.join('、')}` : undefined
+        ].filter((value): value is string => Boolean(value));
+        if (notes.length) slide.addNotes?.(notes.join('\n\n'));
+        context?.onProgress?.(`HTML slide rendered: ${slidePlan.title}`);
       }
-      if (slidePlan.speakerNotes) {
-        slide.addNotes?.(slidePlan.speakerNotes);
-      }
-      context?.onProgress?.(`PPTX slide rendered: ${slidePlan.title}`);
-    }
 
-    const buffer = await pptx.write({ outputType: 'nodebuffer' });
-    return {
-      buffer: Buffer.from(buffer),
-      fileName: `${safeFileStem(spec.title)}.pptx`,
-      contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      provenance: context?.visualProvenance,
-      renderedSpec: spec,
-      layoutManifest: createPptxLayoutManifest(spec, plannedSlides, Boolean(logo), Boolean(ordinaryAsset))
-    };
+      const preview = await createPptxContactSheet(page, screenshots);
+      const buffer = await pptx.write({ outputType: 'nodebuffer' });
+      return {
+        buffer: Buffer.from(buffer),
+        fileName: `${safeFileStem(spec.title)}.pptx`,
+        contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        preview,
+        previewContentType: 'image/png',
+        diagnostics,
+        provenance: context?.visualProvenance,
+        renderedSpec: spec,
+        layoutManifest: {
+          pageCount: layoutPages.length,
+          pages: layoutPages,
+          limitations: ['PPTX slides contain pixel-faithful HTML renderings; text and diagrams inside the slide image are not independently editable.']
+        }
+      };
+    } finally {
+      await browser.close();
+    }
   }
 }
 
@@ -294,6 +226,9 @@ export class DefaultArtifactQualityInspector implements ArtifactQualityInspector
     if (format === 'pdf' && !result.buffer.subarray(0, 4).equals(Buffer.from('%PDF'))) {
       diagnostics.push('PDF output does not have a PDF header');
     }
+    if (format === 'pptx') {
+      diagnostics.push(...validatePresentationVisualDesign(spec));
+    }
 
     // Basic DOCX OOXML structure validation
     if (format === 'docx') {
@@ -360,21 +295,58 @@ function validateLayoutManifest(
     if (page.scrollHeight !== undefined && page.clientHeight !== undefined && page.scrollHeight > page.clientHeight + 1) {
       diagnostics.push(`Layout page ${page.page} has vertical DOM overflow (${page.scrollHeight} > ${page.clientHeight})`);
     }
-    const visible = page.boxes.filter((box) => box.kind !== 'container');
-    for (const box of visible) {
+    for (const box of page.boxes) {
       if (box.x < 0 || box.y < 0 || box.x + box.width > page.width + 0.01 || box.y + box.height > page.height + 0.01) {
         diagnostics.push(`Layout box ${box.id} exceeds page ${page.page} bounds`);
       }
-      if (box.scrollWidth !== undefined && box.clientWidth !== undefined && box.scrollWidth > box.clientWidth + 1) {
+      if (
+        box.overflowX !== 'visible'
+        && box.scrollWidth !== undefined
+        && box.clientWidth !== undefined
+        && box.scrollWidth > box.clientWidth + 1
+      ) {
         diagnostics.push(`Layout box ${box.id} reports horizontal clipping (${box.scrollWidth} > ${box.clientWidth})`);
       }
-      if (box.scrollHeight !== undefined && box.clientHeight !== undefined && box.scrollHeight > box.clientHeight + 1) {
+      const verticalOverflowTolerance = box.id.endsWith('-content-root') && box.clientHeight !== undefined
+        ? Math.max(1, box.clientHeight * 0.05)
+        : 1;
+      if (
+        box.overflowY !== 'visible'
+        && box.scrollHeight !== undefined
+        && box.clientHeight !== undefined
+        && box.scrollHeight > box.clientHeight + verticalOverflowTolerance
+      ) {
         diagnostics.push(`Layout box ${box.id} reports vertical clipping (${box.scrollHeight} > ${box.clientHeight})`);
       }
       if (box.estimatedTextHeight !== undefined && box.estimatedTextHeight > box.height * 1.05) {
         diagnostics.push(`Layout box ${box.id} has estimated text height ${Math.round(box.estimatedTextHeight)} above its ${Math.round(box.height)} box; clipping check is heuristic`);
       }
     }
+    const undersizedText = page.boxes.filter((box) =>
+      box.kind === 'text'
+      && box.id.includes('-content-')
+      && box.textLength
+      && box.fontSizePx !== undefined
+      && box.fontSizePx < 24
+    );
+    if (undersizedText.length) {
+      const smallest = Math.min(...undersizedText.map((box) => box.fontSizePx!));
+      diagnostics.push(`Layout page ${page.page} contains ${undersizedText.length} text element(s) below 24px (minimum ${Math.round(smallest)}px)`);
+    }
+    const unsafeText = page.boxes.filter((box) =>
+      box.kind === 'text'
+      && box.id.includes('-content-')
+      && (
+        box.x < 0.3
+        || box.x + box.width > page.width - 0.3
+        || box.y < 0.25
+        || box.y + box.height > page.height - 0.6
+      )
+    );
+    if (unsafeText.length) {
+      diagnostics.push(`Layout page ${page.page} places ${unsafeText.length} text element(s) outside the title/body safe area or inside the footer zone`);
+    }
+    const visible = page.boxes.filter((box) => box.kind !== 'container');
     for (let left = 0; left < visible.length; left += 1) {
       for (let right = left + 1; right < visible.length; right += 1) {
         const overlap = overlapRatio(visible[left]!, visible[right]!);
@@ -385,6 +357,30 @@ function validateLayoutManifest(
     }
   }
   return diagnostics;
+}
+
+export function validatePresentationVisualDesign(spec: ArtifactSpec) {
+  const authoredSlides = spec.presentation.slides.filter((slide) => Boolean(slide.html?.trim()));
+  if (!authoredSlides.length) return [];
+  const diagnostics: string[] = [];
+  const cardHeavySlides = authoredSlides.filter((slide) => countHtmlClass(slide.html ?? '', 'card') >= 2);
+  if (cardHeavySlides.length >= Math.max(2, Math.ceil(authoredSlides.length * 0.4))) {
+    diagnostics.push(`Presentation repeats card-grid UI composition on ${cardHeavySlides.length} of ${authoredSlides.length} authored slides; use flatter, content-specific layouts`);
+  }
+  const listSlides = authoredSlides.filter((slide) => /<(?:ul|ol)\b/i.test(slide.html ?? ''));
+  if (listSlides.length > authoredSlides.length / 2) {
+    diagnostics.push(`Presentation uses HTML bullet lists on ${listSlides.length} of ${authoredSlides.length} authored slides; replace repeated lists with visual explanations`);
+  }
+  return diagnostics;
+}
+
+function countHtmlClass(html: string, className: string) {
+  let count = 0;
+  const classPattern = /\bclass\s*=\s*(['"])(.*?)\1/gi;
+  for (const match of html.matchAll(classPattern)) {
+    if (match[2]?.split(/\s+/).includes(className)) count += 1;
+  }
+  return count;
 }
 
 function overlapRatio(left: ArtifactLayoutBox, right: ArtifactLayoutBox) {
@@ -478,49 +474,150 @@ type PdfDomMetrics = {
   }>;
 };
 
-function createPptxLayoutManifest(
-  spec: ArtifactSpec,
-  slides: ArtifactSpec['presentation']['slides'],
-  hasLogo: boolean,
-  hasOrdinaryAsset: boolean
-): ArtifactLayoutManifest {
-  const pages = slides.map((slide, index) => {
-    const page = index + 1;
-    const boxes: ArtifactLayoutBox[] = [
-      { id: `slide-${page}`, page, kind: 'container', x: 0, y: 0, width: 13.333, height: 7.5 }
-    ];
-    if (index === 0) {
-      boxes.push(
-        { id: `slide-${page}-top-rule`, page, kind: 'other', x: 0, y: 0, width: 13.333, height: 0.22 },
-        textBox(`slide-${page}-title`, page, spec.title, 0.75, 2.2, 11.8, 0.75, 29),
-        textBox(`slide-${page}-audience`, page, spec.audience, 0.8, 3.15, 11.5, 0.38, 15),
-        textBox(`slide-${page}-summary`, page, spec.brief.executiveSummary, 0.8, 4.1, 11.3, 1.2, 16)
-      );
-      if (hasLogo) boxes.push({ id: `slide-${page}-logo`, page, kind: 'image', x: 11.45, y: 0.42, width: 1.1, height: 0.55 });
-    } else {
-      boxes.push(
-        textBox(`slide-${page}-title`, page, slide.title, 0.65, 0.42, hasLogo ? 10.5 : 12, 0.48, 24),
-        { id: `slide-${page}-rule`, page, kind: 'other', x: 0.65, y: 1.08, width: 12, height: 0.02 }
-      );
-      if (slide.bullets.length) {
-        boxes.push(textBox(`slide-${page}-bullets`, page, slide.bullets.join('\n'), 0.95, 1.45, slide.visual ? 6.1 : 11.2, hasOrdinaryAsset && !slide.visual ? 4.1 : 4.55, 20));
-      }
-      if (slide.visual?.type === 'table') {
-        boxes.push({ id: `slide-${page}-table`, page, kind: 'table', x: 7.25, y: 1.65, width: 5.25, height: 3.9 });
-      } else if (slide.visual?.type === 'bar') {
-        boxes.push({ id: `slide-${page}-chart`, page, kind: 'chart', x: 7.25, y: 1.65, width: 5.25, height: 3.9 });
-      }
-      if (slide.citations.length) boxes.push(textBox(`slide-${page}-citations`, page, slide.citations.join('、'), 0.75, 6.75, 11.8, 0.25, 8));
-      if (hasLogo) boxes.push({ id: `slide-${page}-logo`, page, kind: 'image', x: 11.45, y: 0.38, width: 1.1, height: 0.55 });
-      if (hasOrdinaryAsset) boxes.push({ id: `slide-${page}-asset`, page, kind: 'image', x: slide.visual ? 7.25 : 10.8, y: 5.72, width: slide.visual ? 1.35 : 1.7, height: 0.72 });
+async function fitOversizedPptxVisuals(page: any) {
+  await page.evaluate(() => {
+    const footerSafeTop = 828;
+    for (const visual of document.querySelectorAll<SVGElement>('#slide-content svg')) {
+      const rect = visual.getBoundingClientRect();
+      if (rect.height <= 0 || rect.bottom <= footerSafeTop) continue;
+      const availableHeight = footerSafeTop - rect.top;
+      if (availableHeight < 160) continue;
+      const scale = Math.min(1, availableHeight / rect.height);
+      visual.style.setProperty('width', `${Math.floor(rect.width * scale)}px`, 'important');
+      visual.style.setProperty('height', `${Math.floor(rect.height * scale)}px`, 'important');
+      visual.style.setProperty('max-width', '100%', 'important');
+      visual.style.setProperty('max-height', `${Math.floor(availableHeight)}px`, 'important');
     }
-    return { page, width: 13.333, height: 7.5, boxes };
   });
-  return {
-    pageCount: pages.length,
-    pages,
-    limitations: ['PPTX text height and overlap checks are deterministic estimates; pixel-perfect collision detection is not claimed.']
-  };
+}
+
+async function inspectPptxHtmlPage(page: any, pageNumber: number): Promise<ArtifactLayoutManifest['pages'][number]> {
+  return page.evaluate((input: { pageNumber: number; viewportWidth: number; viewportHeight: number }) => {
+    const slideWidth = 13.333;
+    const slideHeight = 7.5;
+    const scaleX = slideWidth / input.viewportWidth;
+    const scaleY = slideHeight / input.viewportHeight;
+    const stage = document.querySelector<HTMLElement>('#slide-stage');
+    const content = document.querySelector<HTMLElement>('#slide-content');
+    const boxes: Array<{
+      id: string;
+      page: number;
+      kind: 'container' | 'text' | 'image' | 'table' | 'chart' | 'other';
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      textLength?: number;
+      fontSizePx?: number;
+      scrollWidth?: number;
+      clientWidth?: number;
+      scrollHeight?: number;
+      clientHeight?: number;
+      overflowX?: string;
+      overflowY?: string;
+    }> = [{
+      id: `slide-${input.pageNumber}`,
+      page: input.pageNumber,
+      kind: 'container',
+      x: 0,
+      y: 0,
+      width: slideWidth,
+      height: slideHeight
+    }];
+
+    const contentRoot = content?.firstElementChild;
+    if (contentRoot instanceof HTMLElement) {
+      const rect = contentRoot.getBoundingClientRect();
+      const style = getComputedStyle(contentRoot);
+      boxes.push({
+        id: `slide-${input.pageNumber}-content-root`,
+        page: input.pageNumber,
+        kind: 'container',
+        x: rect.x * scaleX,
+        y: rect.y * scaleY,
+        width: rect.width * scaleX,
+        height: rect.height * scaleY,
+        scrollWidth: contentRoot.scrollWidth,
+        clientWidth: contentRoot.clientWidth,
+        scrollHeight: contentRoot.scrollHeight,
+        clientHeight: contentRoot.clientHeight,
+        overflowX: style.overflowX,
+        overflowY: style.overflowY
+      });
+    }
+
+    const elements = Array.from(document.querySelectorAll<HTMLElement>(
+      '#slide-content *, .evident-citations, .evident-page, .evident-logo'
+    )).filter((element) => {
+      if (element.closest('svg') && element.tagName.toLowerCase() !== 'svg') return false;
+      if (element.closest('table') && element.tagName.toLowerCase() !== 'table') return false;
+      if (element.tagName.toLowerCase() === 'svg' || element.tagName.toLowerCase() === 'table') return true;
+      return element.childElementCount === 0 && Boolean(element.textContent?.trim());
+    }).slice(0, 120);
+
+    elements.forEach((element, index) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      if (rect.width <= 0 || rect.height <= 0 || style.display === 'none' || style.visibility === 'hidden') return;
+      const tag = element.tagName.toLowerCase();
+      const kind = tag === 'img'
+        ? 'image'
+        : tag === 'table'
+          ? 'table'
+          : tag === 'svg'
+            ? 'chart'
+            : 'text';
+      const area = element.closest('#slide-content') ? 'content' : 'frame';
+      boxes.push({
+        id: `slide-${input.pageNumber}-${area}-${index + 1}`,
+        page: input.pageNumber,
+        kind,
+        x: rect.x * scaleX,
+        y: rect.y * scaleY,
+        width: rect.width * scaleX,
+        height: rect.height * scaleY,
+        ...(element.textContent?.trim() ? {
+          textLength: element.textContent.trim().length,
+          fontSizePx: Number.parseFloat(style.fontSize)
+        } : {}),
+        scrollWidth: element.scrollWidth,
+        clientWidth: element.clientWidth,
+        scrollHeight: element.scrollHeight,
+        clientHeight: element.clientHeight,
+        overflowX: style.overflowX,
+        overflowY: style.overflowY
+      });
+    });
+
+    return {
+      page: input.pageNumber,
+      width: slideWidth,
+      height: slideHeight,
+      boxes,
+      scrollWidth: Math.max(stage?.scrollWidth ?? 0, content?.scrollWidth ?? 0),
+      clientWidth: input.viewportWidth,
+      scrollHeight: Math.max(stage?.scrollHeight ?? 0, content?.scrollHeight ?? 0),
+      clientHeight: input.viewportHeight
+    };
+  }, { pageNumber, viewportWidth: pptxViewport.width, viewportHeight: pptxViewport.height });
+}
+
+async function createPptxContactSheet(page: any, screenshots: Buffer[]) {
+  const columns = 3;
+  const rows = Math.max(1, Math.ceil(screenshots.length / columns));
+  await page.setViewportSize({ width: 1_200, height: rows * 232 + 36 });
+  const images = screenshots.map((screenshot, index) =>
+    `<figure><img src="data:image/png;base64,${screenshot.toString('base64')}" alt="第 ${index + 1} 页" /><figcaption>${index + 1}</figcaption></figure>`
+  ).join('');
+  await page.setContent(`<!doctype html><html><head><meta charset="utf-8"><style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: #dfe3e6; }
+    body { display: grid; grid-template-columns: repeat(${columns}, 1fr); gap: 18px; padding: 18px; font-family: Arial, sans-serif; }
+    figure { position: relative; margin: 0; overflow: hidden; border-radius: 4px; background: white; box-shadow: 0 2px 8px rgba(20, 30, 35, .18); }
+    img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; }
+    figcaption { position: absolute; right: 8px; bottom: 7px; min-width: 24px; padding: 3px 6px; border-radius: 3px; background: rgba(0, 0, 0, .66); color: white; font-size: 12px; text-align: center; }
+  </style></head><body>${images}</body></html>`, { waitUntil: 'domcontentloaded' });
+  return Buffer.from(await page.screenshot({ type: 'png', fullPage: true }));
 }
 
 function textBox(
@@ -655,11 +752,6 @@ function normalizePresentationSlides(slides: ArtifactSpec['presentation']['slide
 function findBrandAsset(spec: ArtifactSpec, assets: ArtifactRenderAsset[] | undefined) {
   if (!spec.branding.logoUrl || !assets?.length) return undefined;
   return assets.find((asset) => asset.imageUrl === spec.branding.logoUrl || asset.originalPageUrl === spec.branding.logoUrl);
-}
-
-function findOrdinaryAsset(spec: ArtifactSpec, assets: ArtifactRenderAsset[] | undefined) {
-  const logo = findBrandAsset(spec, assets);
-  return assets?.find((asset) => asset.id !== logo?.id);
 }
 
 function toDataUri(asset: ArtifactRenderAsset) {

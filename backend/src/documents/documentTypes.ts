@@ -61,6 +61,7 @@ export type PresentationDeliverable = {
   documentType: 'presentation';
   formats: ['pptx'];
   targetSlideCount: number;
+  themeCss?: string;
   slides: PresentationSlide[];
 };
 
@@ -70,6 +71,7 @@ export type PresentationSlide = {
   title: string;
   kind: 'title' | 'content' | 'comparison' | 'closing';
   bullets: string[];
+  html?: string;
   speakerNotes?: string;
   citations: string[];
   visual?:

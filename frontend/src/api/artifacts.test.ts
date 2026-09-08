@@ -5,6 +5,7 @@ import {
   createResearchArtifactDraft,
   fetchResearchArtifactSourceImage,
   listAllResearchArtifactGenerations,
+  listResearchArtifactDraftRequests,
   renderResearchArtifact,
   updateResearchArtifactDraft
 } from './artifacts';
@@ -53,6 +54,16 @@ test('artifact library API requests the global generation collection', async () 
   };
   await listAllResearchArtifactGenerations();
   assert.equal(requestUrl, '/api/artifacts/generations');
+});
+
+test('artifact draft-request API uses the conversation-scoped endpoint', async () => {
+  let requestUrl = '';
+  globalThis.fetch = async (input) => {
+    requestUrl = String(input);
+    return new Response(JSON.stringify({ code: 1, message: 'ok', data: { requests: [] } }), { status: 200 });
+  };
+  await listResearchArtifactDraftRequests('conversation/1');
+  assert.equal(requestUrl, '/api/research/conversations/conversation%2F1/artifact-requests');
 });
 
 test('artifact library requests the Agent report collection', async () => {

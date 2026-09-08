@@ -25,6 +25,7 @@ import {
   deleteResearchArtifactGeneration,
   fetchResearchArtifactSourceImage,
   getResearchArtifactGeneration,
+  listResearchArtifactDraftRequests,
   listResearchArtifactGenerations,
   renderResearchArtifact,
   retryResearchArtifactOutput,
@@ -43,9 +44,14 @@ import ResearchInspector from '../components/research/ResearchInspector.vue';
 import DocumentConfirmDialog from '../components/documents/DocumentConfirmDialog.vue';
 import DocumentPreviewDialog from '../components/documents/DocumentPreviewDialog.vue';
 import DocumentWorkbench from '../components/documents/DocumentWorkbench.vue';
+import {
+  resolveRequestedGeneration,
+  resolveRunGeneration,
+  shouldApplyGenerationRefresh
+} from '../components/artifacts/generationRefresh';
 import { useStreamingMessageRenderer } from '../composables/useStreamingMessageRenderer';
 import { useDocumentEditor } from '../components/documents/documentEditor';
-import type { ArtifactOutput, ArtifactSpec, LongformBlock, ResearchArtifactGeneration } from '../types/artifacts';
+import type { ArtifactDraftRequest, ArtifactOutput, ArtifactSpec, LongformBlock, ResearchArtifactGeneration } from '../types/artifacts';
 import type {
   ResearchConversation,
   ResearchConversationDetail,
@@ -101,6 +107,7 @@ const activeWorkbenchGeneration = ref<ResearchArtifactGeneration>();
 const generationConfirmTarget = ref<ResearchArtifactGeneration>();
 const previewOutput = ref<ArtifactOutput>();
 const generations = ref<ResearchArtifactGeneration[]>([]);
+const artifactDraftRequests = ref<ArtifactDraftRequest[]>([]);
 const workbenchBusy = ref(false);
 const documentSessionEpoch = ref(0);
 const documentEditor = useDocumentEditor(
@@ -113,6 +120,7 @@ const approvalBusyId = ref<string>();
 let requestController: AbortController | undefined;
 let subscriptionSequence = 0;
 let artifactPollTimer: number | undefined;
+let artifactLoadSequence = 0;
 
 // §5.5: low-noise connection status. Reconnects under 1s stay silent; a longer
 // recovery shows a hint, and a successful recovery briefly shows "已恢复".
@@ -157,7 +165,14 @@ const generationsByMessageId = computed(() => {
     const toolOutput = step.output;
     if (typeof toolOutput !== 'object' || !toolOutput || !('generationId' in toolOutput)) continue;
 
-    const generation = generations.value.find(g => g.id === toolOutput.generationId);
+    const requestOrGenerationId = typeof toolOutput.generationId === 'string'
+      ? toolOutput.generationId
+      : undefined;
+    const generation = resolveRequestedGeneration(
+      requestOrGenerationId,
+      artifactDraftRequests.value,
+      generations.value
+    );
     if (!generation) continue;
 
     const messageGenerations = map.get(step.messageId) ?? [];
@@ -269,12 +284,14 @@ async function selectConversation(id: string) {
   if (!await closeWorkbench()) return;
   disconnectResearchStream();
   stopArtifactPolling();
+  artifactLoadSequence += 1;
   documentSessionEpoch.value += 1;
   documentEditor.clearRevisions();
   loading.value = false;
   stopping.value = false;
   activeRun.value = undefined;
   resetTurnDefaults();
+  error.value = '';
   const detail = await getResearchConversation(id);
   activeConversationId.value = id;
   applyConversationDetail(detail);
@@ -283,7 +300,6 @@ async function selectConversation(id: string) {
   selectedStep.value = undefined;
   activeRailTab.value = 'timeline';
   activeDetailsTab.value = 'notes';
-  error.value = '';
   if (detail.activeRun) connectToRun(detail.activeRun);
 }
 
@@ -431,7 +447,9 @@ function handleStreamEvent(event: ResearchStreamEvent) {
   }
   if (event.type === 'done') {
     void loadConversations();
-    if (activeConversationId.value) void loadGenerations(activeConversationId.value);
+    if (activeConversationId.value) {
+      void loadGenerations(activeConversationId.value, { openForRunId: event.run.id });
+    }
   }
   if (event.type === 'error') {
     if (event.assistantMessage) messageRenderer.upsert(event.assistantMessage);
@@ -582,6 +600,8 @@ function clearConversationDetail() {
   loading.value = false;
   stopping.value = false;
   generations.value = [];
+  artifactDraftRequests.value = [];
+  artifactLoadSequence += 1;
   activeWorkbenchGeneration.value = undefined;
   generationConfirmTarget.value = undefined;
   previewOutput.value = undefined;
@@ -626,9 +646,29 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
   else items.value[index] = item;
 }
 
-async function loadGenerations(conversationId: string) {
+async function loadGenerations(conversationId: string, options: { openForRunId?: string } = {}) {
+  const sequence = ++artifactLoadSequence;
+  const request = {
+    conversationId,
+    sessionEpoch: documentSessionEpoch.value,
+    sequence
+  };
+
   try {
-    const result = await listResearchArtifactGenerations(conversationId);
+    const [result, requestResult] = await Promise.all([
+      listResearchArtifactGenerations(conversationId),
+      listResearchArtifactDraftRequests(conversationId).catch(() => ({
+        requests: artifactDraftRequests.value
+      }))
+    ]);
+    const current = {
+      conversationId: activeConversationId.value ?? '',
+      sessionEpoch: documentSessionEpoch.value,
+      sequence: artifactLoadSequence
+    };
+    if (!shouldApplyGenerationRefresh(request, current)) return;
+
+    artifactDraftRequests.value = requestResult.requests;
     const active = activeWorkbenchGeneration.value;
     const preserveLocalDraft = active && documentEditor.saveState.value !== 'saved';
     generations.value = result.generations.map((generation) => {
@@ -641,9 +681,34 @@ async function loadGenerations(conversationId: string) {
       const refreshed = generations.value.find((generation) => generation.id === active.id);
       if (refreshed) activeWorkbenchGeneration.value = refreshed;
     }
+
+    const latestDraftRequest = artifactDraftRequests.value[artifactDraftRequests.value.length - 1];
+    if (latestDraftRequest?.status === 'failed') {
+      error.value = `草稿生成失败：${latestDraftRequest.error ?? '模型未返回有效的 HTML 演示方案，请重新生成'}`;
+    } else if (error.value.startsWith('草稿生成失败：')) {
+      error.value = '';
+    }
+
+    if (options.openForRunId && !activeWorkbenchGeneration.value) {
+      const requestedGeneration = resolveRunGeneration(
+        options.openForRunId,
+        artifactDraftRequests.value,
+        generations.value
+      );
+      if (requestedGeneration?.status === 'awaiting_confirmation' && !requestedGeneration.stale) {
+        openWorkbench(requestedGeneration);
+      }
+    }
     syncArtifactPolling();
   } catch {
-    if (!generations.value.length) generations.value = [];
+    const current = {
+      conversationId: activeConversationId.value ?? '',
+      sessionEpoch: documentSessionEpoch.value,
+      sequence: artifactLoadSequence
+    };
+    if (shouldApplyGenerationRefresh(request, current) && !generations.value.length) {
+      generations.value = [];
+    }
   }
 }
 

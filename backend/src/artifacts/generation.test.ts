@@ -325,9 +325,31 @@ test('queued artifact requests are cancelled when their research run is cancelle
 
 test('ArtifactAgent sends only the frozen snapshot to the text model and validates structured output', async () => {
   let prompt = '';
+  let planningSystemPrompt = '';
+  let htmlSystemPrompt = '';
+  const reasoningValues: Array<boolean | undefined> = [];
+  const htmlBatchSizes: number[] = [];
   const llm = {
-    complete: async (request: { messages: Array<{ role: string; content: string }> }) => {
-      prompt = request.messages[1]?.content ?? '';
+    complete: async (request: { reasoning?: boolean; messages: Array<{ role: string; content: string }> }) => {
+      const systemPrompt = request.messages[0]?.content ?? '';
+      const userPrompt = request.messages[1]?.content ?? '';
+      reasoningValues.push(request.reasoning);
+      if (systemPrompt.includes('presentation HTML designer')) {
+        htmlSystemPrompt = systemPrompt;
+        const input = JSON.parse(userPrompt) as { slides: Array<{ id: string; title: string }> };
+        htmlBatchSizes.push(input.slides.length);
+        return {
+          choices: [{ message: { role: 'assistant' as const, content: JSON.stringify({
+            themeCss: '.slide { background: #f5f1e8; }',
+            slides: input.slides.map((slide) => ({
+              id: slide.id,
+              html: `<main class="slide"><h1>${slide.title}</h1></main>`
+            }))
+          }) } }]
+        };
+      }
+      planningSystemPrompt = systemPrompt;
+      prompt = userPrompt;
       return {
         choices: [{ message: { role: 'assistant' as const, content: JSON.stringify({
           brief: {
@@ -372,8 +394,16 @@ test('ArtifactAgent sends only the frozen snapshot to the text model and validat
   const spec = await createArtifactAgent({ llm, model: 'artifact-model' }).plan(snapshot);
   assert.equal(spec.title, '研究');
   assert.equal(spec.presentation.slides.length, spec.presentation.targetSlideCount);
+  assert.equal(spec.presentation.themeCss, '.slide { background: #f5f1e8; }');
+  assert.match(spec.presentation.slides[0]?.html ?? '', /<h1>研究<\/h1>/);
+  assert.deepEqual(htmlBatchSizes, [2, 2, 2, 2]);
+  assert.equal(reasoningValues.every((value) => value === false), true);
   assert.match(prompt, /会话/);
   assert.doesNotMatch(prompt, /system prompt|tool trace|shell command/i);
+  assert.match(planningSystemPrompt, /Do not generate HTML or CSS/);
+  assert.match(htmlSystemPrompt, /class="slide"/);
+  assert.match(htmlSystemPrompt, /Avoid repeated card grids/);
+  assert.match(htmlSystemPrompt, /do not style html or body/);
 });
 
 test('ArtifactAgent explicitly orchestrates renderer, frozen assets, and quality inspection', async () => {
@@ -403,6 +433,95 @@ test('ArtifactAgent explicitly orchestrates renderer, frozen assets, and quality
   });
   assert.equal(execution.quality.ok, true);
   assert.deepEqual(events, ['builtin', 'inspect']);
+});
+
+test('ArtifactAgent creates a renderer-ready fallback when the text model returns empty content', async () => {
+  const conversation = createResearchConversation();
+  createResearchMessage({ conversationId: conversation.id, role: 'user', content: '生成 PPT', status: 'complete' });
+  const snapshot = createResearchSnapshot(conversation.id);
+  const llm = {
+    complete: async () => ({
+      choices: [{ message: { role: 'assistant' as const, content: '' } }]
+    })
+  };
+
+  const spec = await createArtifactAgent({ llm, model: 'test' }).plan(snapshot, { formats: ['pptx'] });
+  assert.equal(spec.formats.includes('pptx'), true);
+  assert.ok(spec.presentation.slides.length >= 8);
+  assert.equal(spec.presentation.slides.length, spec.presentation.targetSlideCount);
+});
+
+test('ArtifactAgent bounds long fallback and model-authored list items before strict validation', async () => {
+  const conversation = createResearchConversation();
+  createResearchMessage({ conversationId: conversation.id, role: 'user', content: '生成 PDF', status: 'complete' });
+  createResearchMessage({ conversationId: conversation.id, role: 'assistant', content: '长'.repeat(1_500), status: 'complete' });
+  const snapshot = createResearchSnapshot(conversation.id);
+  const fallback = await createArtifactAgent({ model: 'test' }).plan(snapshot, { formats: ['pdf'] });
+  assert.equal(fallback.brief.keyFindings.every((item) => item.length <= 1_000), true);
+  assert.equal(fallback.presentation.slides.flatMap((slide) => slide.bullets).every((item) => item.length <= 1_000), true);
+  assert.equal(fallback.pdf.sections.flatMap((section) => section.bullets).every((item) => item.length <= 1_000), true);
+
+  const longItem = '模型长要点'.repeat(300);
+  const llm = {
+    complete: async () => ({
+      choices: [{ message: { role: 'assistant' as const, content: JSON.stringify({
+        brief: {
+          ...fallback.brief,
+          keyFindings: [longItem],
+          sections: fallback.brief.sections.map((section) => ({ ...section, keyPoints: [longItem] }))
+        },
+        presentation: {
+          ...fallback.presentation,
+          slides: fallback.presentation.slides.map((slide) => ({ ...slide, bullets: [longItem] }))
+        },
+        pdf: {
+          ...fallback.pdf,
+          sections: fallback.pdf.sections.map((section) => ({ ...section, bullets: [longItem] }))
+        }
+      }) } }]
+    })
+  };
+  const spec = await createArtifactAgent({ llm, model: 'test' }).plan(snapshot, { formats: ['pdf'] });
+  assert.equal(spec.brief.keyFindings[0]?.length, 1_000);
+  assert.equal(spec.brief.sections.every((section) => section.keyPoints.every((item) => item.length <= 1_000)), true);
+  assert.equal(spec.presentation.slides.every((slide) => slide.bullets.every((item) => item.length <= 1_000)), true);
+  assert.equal(spec.pdf.sections.every((section) => section.bullets.every((item) => item.length <= 1_000)), true);
+});
+
+test('ArtifactAgent recovers from truncated planning JSON and retries malformed HTML batches per slide', async () => {
+  const conversation = createResearchConversation();
+  createResearchMessage({ conversationId: conversation.id, role: 'user', content: '生成 PPT', status: 'complete' });
+  const snapshot = createResearchSnapshot(conversation.id);
+  const htmlBatchSizes: number[] = [];
+  let failedFirstBatch = false;
+  const llm = {
+    complete: async (request: { messages: Array<{ role: string; content: string }> }) => {
+      const systemPrompt = request.messages[0]?.content ?? '';
+      if (!systemPrompt.includes('presentation HTML designer')) {
+        return { choices: [{ message: { role: 'assistant' as const, content: '{"brief":{"title":"被截断' } }] };
+      }
+      const input = JSON.parse(request.messages[1]?.content ?? '{}') as { slides: Array<{ id: string; title: string }> };
+      htmlBatchSizes.push(input.slides.length);
+      if (!failedFirstBatch && input.slides.length === 2) {
+        failedFirstBatch = true;
+        return { choices: [{ message: { role: 'assistant' as const, content: '{"slides":[{"id":"broken","html":"被截断' } }] };
+      }
+      return {
+        choices: [{ message: { role: 'assistant' as const, content: JSON.stringify({
+          themeCss: '.slide { background: white; color: black; }',
+          slides: input.slides.map((slide) => ({
+            id: slide.id,
+            html: `<section class="slide"><h1>${slide.title}</h1></section>`
+          }))
+        }) } }]
+      };
+    }
+  };
+
+  const spec = await createArtifactAgent({ llm, model: 'test' }).plan(snapshot, { formats: ['pptx'] });
+  assert.equal(spec.presentation.slides.length, 8);
+  assert.equal(spec.presentation.slides.every((slide) => slide.html?.includes('class="slide"')), true);
+  assert.deepEqual(htmlBatchSizes, [2, 1, 1, 2, 2, 2]);
 });
 
 test('ArtifactAgent rejects an undersized model plan instead of inventing filler pages', async () => {

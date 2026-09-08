@@ -43,6 +43,7 @@ const slideSchema = z.object({
   title: text(200),
   kind: z.enum(['title', 'content', 'comparison', 'closing']),
   bullets: z.array(text(1_000)).max(8),
+  html: text(60_000).optional(),
   speakerNotes: text(4_000).optional(),
   citations: citationKeys,
   visual: z.union([
@@ -64,12 +65,14 @@ export const presentationPlanSchema = z.object({
   // outline. Short model plans are rejected during planning; the renderer
   // never invents filler slides.
   slides: z.array(slideSchema).min(8).max(30),
-  targetSlideCount: z.number().int().min(8).max(15)
+  targetSlideCount: z.number().int().min(8).max(15),
+  themeCss: text(24_000).optional()
 }).strict();
 
 const modelPresentationPlanSchema = z.object({
   slides: z.array(slideSchema).min(3).max(30),
-  targetSlideCount: z.number().int().min(8).max(15)
+  targetSlideCount: z.number().int().min(8).max(15),
+  themeCss: text(24_000).optional()
 }).strict();
 
 const reportSectionSchema = z.object({
@@ -163,13 +166,22 @@ function unwrapPlanRoot(value: unknown): Record<string, unknown> {
   return value;
 }
 
-function asNonEmptyString(value: unknown) {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+function asNonEmptyString(value: unknown, maxLength?: number) {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  const trimmed = value.trim();
+  if (maxLength === undefined || trimmed.length <= maxLength) return trimmed;
+  const clipped = trimmed.slice(0, maxLength);
+  // Avoid leaving a dangling UTF-16 high surrogate when clipping emoji or
+  // supplementary characters at a schema boundary.
+  return /[\uD800-\uDBFF]$/.test(clipped) ? clipped.slice(0, -1) : clipped;
 }
 
-function asStringArray(value: unknown, max: number) {
+function asStringArray(value: unknown, maxItems: number, maxItemLength: number) {
   if (!Array.isArray(value)) return undefined;
-  const items = value.map((item) => asNonEmptyString(item)).filter((item): item is string => Boolean(item)).slice(0, max);
+  const items = value
+    .map((item) => asNonEmptyString(item, maxItemLength))
+    .filter((item): item is string => Boolean(item))
+    .slice(0, maxItems);
   return items;
 }
 
@@ -195,11 +207,11 @@ function completePlanModelOutput(value: unknown, fallback: ArtifactPlanModelOutp
 
   return {
     brief: {
-      title: asNonEmptyString(briefIn.title) ?? fallback.brief.title,
-      audience: asNonEmptyString(briefIn.audience) ?? fallback.brief.audience,
-      executiveSummary: asNonEmptyString(briefIn.executiveSummary) ?? fallback.brief.executiveSummary,
-      keyFindings: asStringArray(briefIn.keyFindings, 20) ?? fallback.brief.keyFindings,
-      recommendations: asStringArray(briefIn.recommendations, 20) ?? fallback.brief.recommendations,
+      title: asNonEmptyString(briefIn.title, 200) ?? fallback.brief.title,
+      audience: asNonEmptyString(briefIn.audience, 300) ?? fallback.brief.audience,
+      executiveSummary: asNonEmptyString(briefIn.executiveSummary, 8_000) ?? fallback.brief.executiveSummary,
+      keyFindings: asStringArray(briefIn.keyFindings, 20, 1_000) ?? fallback.brief.keyFindings,
+      recommendations: asStringArray(briefIn.recommendations, 20, 1_000) ?? fallback.brief.recommendations,
       sections: sections.length ? sections : fallback.brief.sections,
       citations
     },
@@ -207,7 +219,10 @@ function completePlanModelOutput(value: unknown, fallback: ArtifactPlanModelOutp
       slides: slides.length ? slides : fallback.presentation.slides,
       targetSlideCount: typeof presentationIn?.targetSlideCount === 'number'
         ? presentationIn.targetSlideCount
-        : (slides.length ? slides.length : fallback.presentation.targetSlideCount)
+        : (slides.length ? slides.length : fallback.presentation.targetSlideCount),
+      ...(asNonEmptyString(presentationIn?.themeCss, 24_000) || fallback.presentation.themeCss
+        ? { themeCss: asNonEmptyString(presentationIn?.themeCss, 24_000) ?? fallback.presentation.themeCss }
+        : {})
     },
     pdf: {
       sections: pdfSections.length ? pdfSections : fallback.pdf.sections,
@@ -220,34 +235,34 @@ function completePlanModelOutput(value: unknown, fallback: ArtifactPlanModelOutp
 
 function completeCitation(value: unknown) {
   if (!isRecord(value)) return undefined;
-  const citationKey = asNonEmptyString(value.citationKey);
-  const sourceId = asNonEmptyString(value.sourceId);
-  const title = asNonEmptyString(value.title);
+  const citationKey = asNonEmptyString(value.citationKey, 80);
+  const sourceId = asNonEmptyString(value.sourceId, 120);
+  const title = asNonEmptyString(value.title, 500);
   if (!citationKey || !sourceId || !title) return undefined;
-  const locator = asNonEmptyString(value.locator);
+  const locator = asNonEmptyString(value.locator, 300);
   return locator ? { citationKey, sourceId, title, locator } : { citationKey, sourceId, title };
 }
 
 function completeBriefSection(value: unknown) {
   if (!isRecord(value)) return undefined;
-  const id = asNonEmptyString(value.id);
-  const title = asNonEmptyString(value.title);
-  const summary = asNonEmptyString(value.summary);
-  const keyPoints = asStringArray(value.keyPoints, 12);
+  const id = asNonEmptyString(value.id, 80);
+  const title = asNonEmptyString(value.title, 200);
+  const summary = asNonEmptyString(value.summary, 4_000);
+  const keyPoints = asStringArray(value.keyPoints, 12, 1_000);
   if (!id || !title || !summary || !keyPoints?.length) return undefined;
   return {
     id,
     title,
     summary,
     keyPoints,
-    citations: asStringArray(value.citations, 24) ?? []
+    citations: asStringArray(value.citations, 24, 80) ?? []
   };
 }
 
 function completeSlide(value: unknown): PresentationSlide | undefined {
   if (!isRecord(value)) return undefined;
-  const id = asNonEmptyString(value.id);
-  const title = asNonEmptyString(value.title);
+  const id = asNonEmptyString(value.id, 80);
+  const title = asNonEmptyString(value.title, 200);
   const kind = value.kind === 'title' || value.kind === 'content' || value.kind === 'comparison' || value.kind === 'closing'
     ? value.kind
     : 'content';
@@ -256,26 +271,50 @@ function completeSlide(value: unknown): PresentationSlide | undefined {
     id,
     title,
     kind,
-    bullets: asStringArray(value.bullets, 8) ?? [],
-    citations: asStringArray(value.citations, 24) ?? []
+    bullets: asStringArray(value.bullets, 8, 1_000) ?? [],
+    citations: asStringArray(value.citations, 24, 80) ?? []
   };
-  const speakerNotes = asNonEmptyString(value.speakerNotes);
+  const html = asNonEmptyString(value.html, 60_000);
+  if (html) slide.html = html;
+  const speakerNotes = asNonEmptyString(value.speakerNotes, 4_000);
   if (speakerNotes) slide.speakerNotes = speakerNotes;
-  if (isRecord(value.visual)) slide.visual = value.visual as PresentationSlide['visual'];
+  const visual = completeVisual(value.visual);
+  if (visual) slide.visual = visual;
   return slide;
+}
+
+function completeVisual(value: unknown): PresentationSlide['visual'] | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.type === 'table') {
+    const headers = asStringArray(value.headers, 12, 200);
+    const rows = Array.isArray(value.rows)
+      ? value.rows.slice(0, 50).map((row) => asStringArray(row, 12, 500) ?? [])
+      : [];
+    if (!headers?.length || !rows.length) return undefined;
+    return { type: 'table', headers, rows };
+  }
+  if (value.type === 'bar') {
+    const labels = asStringArray(value.labels, 20, 120);
+    const values = Array.isArray(value.values)
+      ? value.values.filter((item): item is number => typeof item === 'number' && Number.isFinite(item)).slice(0, 20)
+      : [];
+    if (!labels?.length || !values.length) return undefined;
+    return { type: 'bar', labels, values };
+  }
+  return undefined;
 }
 
 function completePdfSection(value: unknown) {
   if (!isRecord(value)) return undefined;
-  const id = asNonEmptyString(value.id);
-  const title = asNonEmptyString(value.title);
+  const id = asNonEmptyString(value.id, 80);
+  const title = asNonEmptyString(value.title, 200);
   if (!id || !title) return undefined;
   return {
     id,
     title,
-    paragraphs: asStringArray(value.paragraphs, 12) ?? [],
-    bullets: asStringArray(value.bullets, 20) ?? [],
-    citations: asStringArray(value.citations, 24) ?? []
+    paragraphs: asStringArray(value.paragraphs, 12, 8_000) ?? [],
+    bullets: asStringArray(value.bullets, 20, 1_000) ?? [],
+    citations: asStringArray(value.citations, 24, 80) ?? []
   };
 }
 

@@ -50,7 +50,12 @@ function selectSlide(id: string) {
 
 function updateCurrentSlide(updates: Partial<ArtifactSlide>) {
   if (!currentSlide.value) return;
-  emit('update-slide', currentSlide.value.id, { ...currentSlide.value, ...updates });
+  const invalidatesHtml = 'title' in updates || 'kind' in updates || 'bullets' in updates || 'visual' in updates;
+  emit('update-slide', currentSlide.value.id, {
+    ...currentSlide.value,
+    ...updates,
+    ...(invalidatesHtml ? { html: undefined } : {})
+  });
 }
 
 function updateBullet(index: number, value: string) {

@@ -280,6 +280,7 @@ function handleGenerate() {
             <PresentationPreview
               v-if="activeDeliverableTab === 'presentation'"
               :slides="spec.presentation.slides"
+              :theme-css="spec.presentation.themeCss"
               :current-slide-id="currentSlideId"
               @update:current-slide-id="currentSlideId = $event"
             />
@@ -379,6 +380,7 @@ function handleGenerate() {
             <PresentationPreview
               v-if="activeDeliverableTab === 'presentation'"
               :slides="spec.presentation.slides"
+              :theme-css="spec.presentation.themeCss"
               :current-slide-id="currentSlideId"
               @update:current-slide-id="currentSlideId = $event; mobileTab = 'edit'"
             />

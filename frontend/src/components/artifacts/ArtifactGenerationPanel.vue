@@ -388,8 +388,14 @@ function stopPolling() {
   }
 }
 
-function setSlideBullets(slide: { bullets: string[] }, value: string) {
+function setSlideTitle(slide: { title: string; html?: string }, value: string) {
+  slide.title = value;
+  delete slide.html;
+}
+
+function setSlideBullets(slide: { bullets: string[]; html?: string }, value: string) {
   slide.bullets = value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean).slice(0, 8);
+  delete slide.html;
 }
 
 function parseLines(value: string, max: number) {
@@ -546,7 +552,7 @@ function syncConsentForGeneration(generation: ResearchArtifactGeneration | undef
           <summary class="cursor-pointer text-xs font-semibold text-[var(--agent-text-muted)]">编辑幻灯片大纲（{{ selected.spec.presentation.slides.length }} 页）</summary>
           <div class="mt-2 grid gap-2">
             <div v-for="slide in selected.spec.presentation.slides" :key="slide.id" class="grid gap-1 rounded-md border border-[var(--agent-border)] p-2">
-              <input v-model="slide.title" class="rounded border border-[var(--agent-border)] bg-transparent px-2 py-1 text-xs font-bold text-[var(--agent-text)]" @blur="saveDraft" />
+              <input :value="slide.title" class="rounded border border-[var(--agent-border)] bg-transparent px-2 py-1 text-xs font-bold text-[var(--agent-text)]" @input="setSlideTitle(slide, ($event.target as HTMLInputElement).value)" @blur="saveDraft" />
               <textarea :value="slide.bullets.join('\n')" rows="3" class="rounded border border-[var(--agent-border)] bg-transparent px-2 py-1 text-xs text-[var(--agent-text)]" @change="setSlideBullets(slide, ($event.target as HTMLTextAreaElement).value); saveDraft()" />
             </div>
           </div>

@@ -92,6 +92,12 @@ export type PresentationSlide = {
   title: string;
   kind: 'title' | 'content' | 'comparison' | 'closing';
   bullets: string[];
+  /**
+   * AI-authored semantic slide markup. The renderer sanitizes this fragment,
+   * applies presentation.themeCss, renders it in an isolated browser page,
+   * and captures the exact 16:9 result for the PPTX slide.
+   */
+  html?: string;
   speakerNotes?: string;
   citations: string[];
   visual?:
@@ -102,6 +108,8 @@ export type PresentationSlide = {
 export type PresentationPlan = {
   slides: PresentationSlide[];
   targetSlideCount: number;
+  /** Shared AI-authored CSS for all slide HTML fragments. */
+  themeCss?: string;
 };
 
 export type PdfReportSection = {
@@ -241,12 +249,15 @@ export type ArtifactLayoutBox = {
   width: number;
   height: number;
   textLength?: number;
+  fontSizePx?: number;
   estimatedTextHeight?: number;
   containerId?: string;
   scrollWidth?: number;
   clientWidth?: number;
   scrollHeight?: number;
   clientHeight?: number;
+  overflowX?: string;
+  overflowY?: string;
 };
 
 export type ArtifactLayoutPage = {
@@ -377,6 +388,7 @@ export type PresentationDeliverable = {
   documentType: 'presentation';
   formats: ['pptx'];
   targetSlideCount: number;
+  themeCss?: string;
   slides: PresentationSlide[];
 };
 

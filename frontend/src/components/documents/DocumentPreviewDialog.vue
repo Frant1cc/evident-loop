@@ -221,6 +221,7 @@ function unlockBodyScroll() {
             </div>
             <PresentationPreview
               :slides="slides"
+              :theme-css="output.renderedSpec?.presentation.themeCss"
               :current-slide-id="currentSlideId"
               @update:current-slide-id="currentSlideId = $event"
             />

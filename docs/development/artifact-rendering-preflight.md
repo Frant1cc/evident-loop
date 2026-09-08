@@ -13,9 +13,10 @@ tool loop.
 pnpm --filter backend artifacts:preflight
 ```
 
-The check requires Playwright's Chromium browser for semantic HTML → PDF. PPTX
-is written by PptxGenJS and does not need LibreOffice. Visual raster QA with
-LibreOffice/Poppler is not part of the generation pipeline.
+The check requires Playwright's Chromium browser for semantic HTML → PDF and
+for AI-authored 16:9 HTML → PNG slide rendering. PptxGenJS packages those
+pixel-faithful slide renders into PPTX and does not need LibreOffice. Visual
+raster QA with LibreOffice/Poppler is not part of the generation pipeline.
 
 Slide/page targets are soft planning goals: the Artifact Agent must produce
 substantive content, then persist the actual planned count (PPTX 8-15; PDF

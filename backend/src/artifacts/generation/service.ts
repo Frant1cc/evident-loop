@@ -550,8 +550,9 @@ export function createArtifactGenerationService(options: {
       try {
         const renderer = renderers[format];
         // Word currently has no image blocks, so it must not perform media IO.
-        // Fixed-layout outputs can consume only user-authorized source assets;
-        // when none are available their renderers use deterministic geometry.
+        // Fixed-layout outputs can consume only user-authorized source assets.
+        // PPTX layout itself comes from isolated HTML rendering and needs no
+        // external imagery to remain visual.
         const resolvedAssets = format === 'docx'
           ? { assets: [], provenance: [] }
           : await resolveRenderAssets(output.generationId, binaryStore);
