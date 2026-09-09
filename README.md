@@ -80,9 +80,9 @@ Research output can become a presentation or long-form document through a single
 
 ## Quality, measured
 
-> **119 golden questions** · **97.2% file-level Recall@3** · **78 test files**
+> **Answerable + abstention cases** · **97.2% file-level Recall@3** · **78 test files**
 
-Retrieval changes are checked against a fixed corpus instead of judged by impression. The evaluation covers 109 answerable and 10 deliberately unanswerable questions, measures results at file, section, and evidence level, and records historical baselines for regression analysis. The wider test suite covers runtime recovery, evidence construction, tool safety, MCP lifecycle, streaming resume, and document generation.
+Retrieval changes are checked against a fixed corpus instead of judged by impression. The evaluation covers both answerable and deliberately unanswerable questions, measures results at file, section, and evidence level, and records historical baselines for regression analysis. The wider test suite covers runtime recovery, evidence construction, tool safety, MCP lifecycle, streaming resume, and document generation.
 
 These numbers describe the checked-in corpus and configuration—not universal model quality. See the [evaluation methodology](./docs/development/rag-evaluation.md) for the fixtures and comparison process.
 
