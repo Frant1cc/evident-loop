@@ -192,7 +192,7 @@ const generationsByMessageId = computed(() => {
 });
 
 const auxiliaryStateByMessageId = computed(() =>
-  buildAuxiliaryState(steps.value, generationsByMessageId.value)
+  buildAuxiliaryState(steps.value, generationsByMessageId.value, artifactDraftRequests.value)
 );
 
 onMounted(async () => {

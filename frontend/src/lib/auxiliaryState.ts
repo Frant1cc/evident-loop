@@ -1,5 +1,5 @@
 import type { ResearchStep } from '../types/research';
-import type { ResearchArtifactGeneration } from '../types/artifacts';
+import type { ArtifactDraftRequest, ResearchArtifactGeneration } from '../types/artifacts';
 
 export type AuxiliaryStatus = 'idle' | 'running' | 'complete' | 'error';
 
@@ -38,9 +38,11 @@ function labelsFor(toolName: string) {
  */
 export function buildAuxiliaryState(
   steps: ResearchStep[],
-  generationsByMessageId: Map<string, ResearchArtifactGeneration[]>
+  generationsByMessageId: Map<string, ResearchArtifactGeneration[]>,
+  draftRequests: ArtifactDraftRequest[] = []
 ): Map<string, AuxiliaryState> {
   const states = new Map<string, AuxiliaryState>();
+  const requestsById = new Map(draftRequests.map((request) => [request.id, request]));
 
   for (const step of steps) {
     if (step.type !== 'tool') continue;
@@ -52,9 +54,16 @@ export function buildAuxiliaryState(
       states.set(step.messageId, state);
     }
 
-    if (step.status === 'running') {
+    const draftRequest = step.title === 'start_document_generation'
+      ? requestsById.get(readDraftRequestId(step.output))
+      : undefined;
+
+    if (step.status === 'running' || draftRequest?.status === 'queued' || draftRequest?.status === 'running') {
       state.status = 'running';
-    } else if (step.status === 'error' && state.status !== 'running') {
+    } else if (
+      (step.status === 'error' || draftRequest?.status === 'failed' || draftRequest?.status === 'cancelled')
+      && state.status !== 'running'
+    ) {
       state.status = 'error';
     }
   }
@@ -76,4 +85,11 @@ export function buildAuxiliaryState(
   }
 
   return states;
+}
+
+function readDraftRequestId(output: unknown) {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return '';
+  const value = output as { generationId?: unknown; requestId?: unknown };
+  if (typeof value.generationId === 'string') return value.generationId;
+  return typeof value.requestId === 'string' ? value.requestId : '';
 }

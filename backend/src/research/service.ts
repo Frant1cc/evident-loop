@@ -118,7 +118,11 @@ export type ResearchRunEvent =
 type ResearchAgentRunner = (options: RunAgentLoopOptions) => ReturnType<typeof runAgentLoop>;
 
 type ArtifactDraftCoordinator = {
-  flushPendingDrafts: (conversationId: string, researchRunId?: string) => Promise<unknown>;
+  flushPendingDrafts: (
+    conversationId: string,
+    researchRunId?: string,
+    lifecycle?: { allowActiveResearchRun?: boolean; signal?: AbortSignal }
+  ) => Promise<unknown>;
   listDraftRequests: (conversationId: string, researchRunId?: string) => Array<{
     conversationId: string;
     researchRunId?: string;
@@ -435,22 +439,29 @@ async function executePersistedResearchRun(options: {
       runInput.content,
       listResearchSteps(run.conversationId)
     ).promptPreview;
-    const completedRun = updateResearchRun(run.id, {
-      status: 'completed',
-      completedAt: new Date().toISOString()
-    });
-    if (!completedRun) throw new Error('Research task could not be completed');
-    // The artifact tool may have been requested during this run. Create its
-    // plan only after the streaming assistant message is complete so the
-    // frozen snapshot and its later stale check observe the same boundary.
-    await options.artifactDraftCoordinator?.flushPendingDrafts(run.conversationId, run.id);
+    // Finish the visible answer before the optional artifact planner starts.
+    // The run itself remains active so a second turn cannot mutate the frozen
+    // conversation boundary while its document draft is being prepared.
     emit(run.id, {
       type: 'research_message_completed',
       message: completedMessage,
       sources: researchSources,
       promptPreview,
-      run: completedRun
+      run
     });
+
+    await options.artifactDraftCoordinator?.flushPendingDrafts(
+      run.conversationId,
+      run.id,
+      { allowActiveResearchRun: true, signal: abortController.signal }
+    );
+    if (getResearchRun(run.id)?.status === 'cancelled') return;
+
+    const completedRun = updateResearchRun(run.id, {
+      status: 'completed',
+      completedAt: new Date().toISOString()
+    });
+    if (!completedRun) throw new Error('Research task could not be completed');
     emit(run.id, { type: 'run_updated', run: completedRun });
     emit(run.id, { type: 'done', run: completedRun });
   } catch (error) {

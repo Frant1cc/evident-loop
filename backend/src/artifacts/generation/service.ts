@@ -102,11 +102,22 @@ export function createArtifactGenerationService(options: {
     return generation;
   };
 
-  const createDraft = async (conversationId: string, rawPreferences?: unknown, signal?: AbortSignal) => {
+  const createDraft = (
+    conversationId: string,
+    rawPreferences?: unknown,
+    signal?: AbortSignal
+  ) => createDraftWithLifecycle(conversationId, rawPreferences, signal);
+
+  const createDraftWithLifecycle = async (
+    conversationId: string,
+    rawPreferences?: unknown,
+    signal?: AbortSignal,
+    lifecycle: { allowActiveResearchRun?: boolean } = {}
+  ) => {
     if (deletingConversations.has(conversationId)) {
       throw new ArtifactStateError('Research conversation artifacts are being deleted');
     }
-    if (options.isResearchConversationActive?.(conversationId)) {
+    if (!lifecycle.allowActiveResearchRun && options.isResearchConversationActive?.(conversationId)) {
       throw new ArtifactStateError('Wait for the active research run to complete before creating an artifact draft');
     }
     const parsedPreferences = rawPreferences === undefined ? undefined : parseArtifactPreferences(rawPreferences);
@@ -124,7 +135,7 @@ export function createArtifactGenerationService(options: {
     // before persistence so a draft can never be created from a moving
     // conversation boundary; callers should queue it for the run-complete
     // coordinator instead.
-    if (options.isResearchConversationActive?.(conversationId)) {
+    if (!lifecycle.allowActiveResearchRun && options.isResearchConversationActive?.(conversationId)) {
       throw new ArtifactStateError('Research run started while the artifact draft was being planned');
     }
     return createArtifactGeneration({ conversationId, snapshot, spec, status: 'awaiting_confirmation' });
@@ -156,7 +167,11 @@ export function createArtifactGenerationService(options: {
     };
   };
 
-  const flushPendingDrafts = async (conversationId: string, researchRunId?: string) => {
+  const flushPendingDrafts = async (
+    conversationId: string,
+    researchRunId?: string,
+    lifecycle: { allowActiveResearchRun?: boolean; signal?: AbortSignal } = {}
+  ) => {
     const requests = listArtifactDraftRequests(conversationId, researchRunId)
       .filter((request) => request.status === 'queued');
     const generations = [];
@@ -164,7 +179,12 @@ export function createArtifactGenerationService(options: {
       const claimed = claimArtifactDraftRequest(request.id);
       if (!claimed) continue;
       try {
-        const generation = await createDraft(conversationId, claimed.preferences);
+        const generation = await createDraftWithLifecycle(
+          conversationId,
+          claimed.preferences,
+          lifecycle.signal,
+          lifecycle
+        );
         finishArtifactDraftRequest({ id: claimed.id, status: 'completed', generationId: generation.id });
         generations.push(generation);
       } catch (error) {

@@ -18,7 +18,8 @@ import { createDefaultResearchSkillRuntime } from '../skills/runtime.js';
 import {
   cancelResearchRun,
   createAndStartResearchRun,
-  recoverCompletedArtifactDraftRequests
+  recoverCompletedArtifactDraftRequests,
+  subscribeToResearchRun
 } from './service.js';
 import {
   createResearchConversation,
@@ -213,6 +214,76 @@ test('natural-language artifact tool queues during streaming and creates a rende
     await artifactApplication.waitForRender(generation.id);
     assert.equal(artifactApplication.getGeneration(generation.id)?.outputs.every((output) => output.status === 'completed'), true);
   } finally {
+    deleteResearchConversation(conversation.id);
+  }
+});
+
+test('completes the visible answer before deferred document planning finishes', async () => {
+  const conversation = createResearchConversation();
+  let scheduled: (() => void) | undefined;
+  let releasePlanning!: () => void;
+  let planningStarted = false;
+  const planningGate = new Promise<void>((resolve) => { releasePlanning = resolve; });
+  const baseAgent = createArtifactAgent({ model: 'test' });
+  const generationService = createArtifactGenerationService({
+    model: 'test',
+    agent: {
+      ...baseAgent,
+      plan: async (...args) => {
+        planningStarted = true;
+        await planningGate;
+        return baseAgent.plan(...args);
+      }
+    },
+    isResearchConversationActive: (conversationId) => Boolean(getActiveResearchRun(conversationId))
+  });
+  const artifactApplication = createArtifactApplication({ model: 'test', generationService });
+  const artifactTool = createStartArtifactGenerationTool(artifactApplication);
+  const artifactRuntime = createToolRuntime(new Map([
+    ...toolCatalog,
+    [artifactTool.definition.function.name, artifactTool]
+  ]));
+  const eventTypes: string[] = [];
+  let unsubscribe: (() => void) | undefined;
+
+  try {
+    const started = createAndStartResearchRun({
+      conversationId: conversation.id,
+      content: '研究完成后生成一份 PDF',
+      toolPolicy: allTools,
+      toolRuntime: artifactRuntime,
+      artifactDraftCoordinator: artifactApplication,
+      apiKey: 'test-only',
+      schedule: (callback) => { scheduled = callback; },
+      runAgent: async (options) => {
+        await artifactRuntime.execute('start_artifact_generation', { formats: ['pdf'] }, {
+          conversationId: options.conversationId,
+          toolScope: options.toolScope,
+          signal: options.signal
+        });
+        return { reply: '回答正文已经完成。', toolCalls: [], trace: [], sources: [] };
+      }
+    });
+    unsubscribe = subscribeToResearchRun(started.run.id, (envelope) => eventTypes.push(envelope.type));
+    assert.ok(scheduled);
+    scheduled();
+
+    await waitFor(() => planningStarted);
+    const assistant = listResearchMessages(conversation.id).find(
+      (message) => message.id === started.assistantMessage.id
+    );
+    assert.equal(assistant?.status, 'complete');
+    assert.equal(assistant?.content, '回答正文已经完成。');
+    assert.equal(getResearchRun(started.run.id)?.status, 'running');
+    assert.ok(eventTypes.includes('research_message_completed'));
+    assert.equal(eventTypes.includes('done'), false);
+
+    releasePlanning();
+    await waitFor(() => getResearchRun(started.run.id)?.status === 'completed');
+    assert.ok(eventTypes.indexOf('research_message_completed') < eventTypes.indexOf('done'));
+  } finally {
+    releasePlanning();
+    unsubscribe?.();
     deleteResearchConversation(conversation.id);
   }
 });

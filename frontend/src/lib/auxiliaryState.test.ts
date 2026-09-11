@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { buildAuxiliaryState } from './auxiliaryState';
-import type { ResearchArtifactGeneration } from '../types/artifacts';
+import type { ArtifactDraftRequest, ResearchArtifactGeneration } from '../types/artifacts';
 import type { ResearchStep } from '../types/research';
 
 const step = (overrides: Partial<ResearchStep>): ResearchStep => ({
@@ -28,6 +28,16 @@ const generation = (id: string): ResearchArtifactGeneration => ({
   outputs: [],
   createdAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z'
+});
+
+const draftRequest = (overrides: Partial<ArtifactDraftRequest>): ArtifactDraftRequest => ({
+  id: 'request-1',
+  conversationId: 'conv-1',
+  researchRunId: 'run-1',
+  status: 'queued',
+  createdAt: '2026-01-01T00:00:00.000Z',
+  updatedAt: '2026-01-01T00:00:00.000Z',
+  ...overrides
 });
 
 test('returns empty map when no signals are present', () => {
@@ -128,4 +138,25 @@ test('labels start_document_generation as 文档草稿', () => {
   assert.equal(state?.label, '文档草稿');
   assert.equal(state?.activity, '正在准备文档草稿…');
   assert.equal(state?.status, 'running');
+});
+
+test('keeps the document activity running while its deferred draft is being planned', () => {
+  const result = buildAuxiliaryState(
+    [step({ status: 'complete', output: { generationId: 'request-1' } })],
+    new Map(),
+    [draftRequest({ status: 'running' })]
+  );
+  const state = result.get('msg-1');
+  assert.equal(state?.status, 'running');
+  assert.equal(state?.activity, '正在准备文档草稿…');
+  assert.equal(state?.count, 0);
+});
+
+test('reports a deferred draft planning failure after its tool call completed', () => {
+  const result = buildAuxiliaryState(
+    [step({ status: 'complete', output: { generationId: 'request-1' } })],
+    new Map(),
+    [draftRequest({ status: 'failed', error: 'invalid plan' })]
+  );
+  assert.equal(result.get('msg-1')?.status, 'error');
 });
