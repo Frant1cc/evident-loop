@@ -281,6 +281,11 @@ function handleGenerate() {
               v-if="activeDeliverableTab === 'presentation'"
               :slides="spec.presentation.slides"
               :theme-css="spec.presentation.themeCss"
+              :theme="spec.theme"
+              :branding="spec.branding"
+              :deck-title="spec.title"
+              :audience="spec.audience"
+              :executive-summary="spec.brief.executiveSummary"
               :current-slide-id="currentSlideId"
               @update:current-slide-id="currentSlideId = $event"
             />
@@ -381,6 +386,11 @@ function handleGenerate() {
               v-if="activeDeliverableTab === 'presentation'"
               :slides="spec.presentation.slides"
               :theme-css="spec.presentation.themeCss"
+              :theme="spec.theme"
+              :branding="spec.branding"
+              :deck-title="spec.title"
+              :audience="spec.audience"
+              :executive-summary="spec.brief.executiveSummary"
               :current-slide-id="currentSlideId"
               @update:current-slide-id="currentSlideId = $event; mobileTab = 'edit'"
             />

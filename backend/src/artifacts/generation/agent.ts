@@ -2,6 +2,12 @@ import type { LlmProvider } from '../../llm/contracts.js';
 import { lastUserTextFromSnapshot, resolveArtifactFormats } from './formats.js';
 import { parseArtifactPlanModelOutput, parseArtifactSpec } from './schema.js';
 import { parseModelJsonObject } from './parseModelJson.js';
+import {
+  appendPresentationThemeCss,
+  getSlideCssClassNames,
+  getSlideHtmlClassNames,
+  validatePresentationSlideHtml
+} from './pptxHtml.js';
 import type {
   ArtifactPreferences,
   ArtifactQualityInspector,
@@ -96,7 +102,7 @@ async function planArtifact(
     signal,
     messages: [
       { role: 'system', content: artifactPlanningSystemPrompt },
-      { role: 'user', content: createPlanningPrompt(snapshot, preferences) }
+      { role: 'user', content: createPlanningPrompt(snapshot, preferences, fallback.formats) }
     ]
   });
   throwIfAborted(signal);
@@ -111,7 +117,7 @@ async function planArtifact(
       brief: fallback.brief,
       presentation: fallback.presentation,
       pdf: fallback.pdf
-    });
+    }, fallback.formats);
     spec = mergePlan(snapshot, plan.brief, plan.presentation, plan.pdf, preferences);
   } catch (error) {
     if (isLikelyTruncatedModelOutput(error)) {
@@ -176,7 +182,8 @@ async function authorPresentationHtml(
   if (!options.llm || !spec.formats.includes('pptx')) return spec;
 
   const authoredHtml = new Map<string, string>();
-  let authoredThemeCss: string | undefined;
+  let authoredThemeCss = spec.presentation.themeCss?.trim() || undefined;
+  const authoringFailures = new Map<string, string[]>();
   const storyOutline = spec.presentation.slides.map((slide) => ({
     id: slide.id,
     title: slide.title,
@@ -186,7 +193,7 @@ async function authorPresentationHtml(
   for (let index = 0; index < spec.presentation.slides.length; index += presentationHtmlBatchSize) {
     throwIfAborted(signal);
     const batch = spec.presentation.slides.slice(index, index + presentationHtmlBatchSize);
-    const sharedThemeCss = authoredThemeCss ?? (diagnostics.length ? undefined : spec.presentation.themeCss);
+    const sharedThemeCss = authoredThemeCss;
     const result = await requestPresentationHtmlBatch(
       options,
       spec,
@@ -196,41 +203,91 @@ async function authorPresentationHtml(
       diagnostics,
       signal
     );
-    if (result?.themeCss && !authoredThemeCss) authoredThemeCss = result.themeCss;
-    for (const slide of result?.slides ?? []) authoredHtml.set(slide.id, slide.html);
+    acceptPresentationHtmlBatch(result, authoredHtml, authoringFailures, {
+      get themeCss() { return authoredThemeCss; },
+      updateThemeCss: (value) => { authoredThemeCss = value; }
+    });
 
-    // A malformed two-slide response is retried one slide at a time. This
-    // bounds the retry output and prevents one truncated JSON string from
-    // discarding an otherwise usable presentation draft.
+    // A malformed or contract-breaking batch is retried one slide at a time.
+    // Retries receive exact validation feedback and must use the same frozen
+    // theme, so a late batch cannot silently introduce a second design system.
     const missingSlides = batch.filter((slide) => !authoredHtml.has(slide.id));
-    if (batch.length > 1 && missingSlides.length) {
+    if (missingSlides.length) {
       for (const slide of missingSlides) {
-        const singleResult = await requestPresentationHtmlBatch(
-          options,
-          spec,
-          storyOutline,
-          [slide],
-          authoredThemeCss ?? sharedThemeCss,
-          diagnostics,
-          signal
-        );
-        if (singleResult?.themeCss && !authoredThemeCss) authoredThemeCss = singleResult.themeCss;
-        for (const authoredSlide of singleResult?.slides ?? []) authoredHtml.set(authoredSlide.id, authoredSlide.html);
+        for (let retry = 0; retry < 2 && !authoredHtml.has(slide.id); retry += 1) {
+          const slideDiagnostics = authoringFailures.get(slide.id) ?? [];
+          const singleResult = await requestPresentationHtmlBatch(
+            options,
+            spec,
+            storyOutline,
+            [slide],
+            authoredThemeCss,
+            [...diagnostics, ...slideDiagnostics.map((issue) => `Slide ${slide.id}: ${issue}`)],
+            signal
+          );
+          acceptPresentationHtmlBatch(singleResult, authoredHtml, authoringFailures, {
+            get themeCss() { return authoredThemeCss; },
+            updateThemeCss: (value) => { authoredThemeCss = value; }
+          });
+        }
       }
     }
+  }
+
+  const missingSlides = spec.presentation.slides.filter((slide) => !authoredHtml.has(slide.id));
+  // A wholly unavailable visual-authoring pass may still use the renderer's
+  // single deterministic layout system. What is forbidden is a mixed deck in
+  // which only some pages silently fall back to a different design.
+  if (!authoredThemeCss && authoredHtml.size === 0) return spec;
+  if (!authoredThemeCss || missingSlides.length) {
+    const details = missingSlides.map((slide) => {
+      const issues = authoringFailures.get(slide.id);
+      return issues?.length ? `${slide.id} (${issues.join('; ')})` : slide.id;
+    });
+    if (!authoredThemeCss) details.unshift('shared themeCss was not produced');
+    throw new ArtifactPlanningError(`Presentation HTML authoring incomplete: ${details.join(', ')}`);
   }
 
   return parseArtifactSpec({
     ...spec,
     presentation: {
       ...spec.presentation,
-      themeCss: authoredThemeCss ?? spec.presentation.themeCss,
+      themeCss: authoredThemeCss,
       slides: spec.presentation.slides.map((slide) => ({
         ...slide,
-        html: authoredHtml.get(slide.id) ?? slide.html
+        html: authoredHtml.get(slide.id)
       }))
     }
   });
+}
+
+function acceptPresentationHtmlBatch(
+  result: AuthoredHtmlBatch | undefined,
+  authoredHtml: Map<string, string>,
+  authoringFailures: Map<string, string[]>,
+  theme: { readonly themeCss: string | undefined; updateThemeCss: (value: string) => void }
+) {
+  if (!result) return;
+  const requiredClasses = new Set(
+    result.slides.flatMap((slide) => [...getSlideHtmlClassNames(slide.html)])
+  );
+  const candidateThemeCss = theme.themeCss
+    ? appendPresentationThemeCss(theme.themeCss, result.themeCss ?? '', requiredClasses)
+    : result.themeCss?.trim();
+  if (candidateThemeCss && candidateThemeCss !== theme.themeCss) {
+    theme.updateThemeCss(candidateThemeCss);
+  }
+  for (const slide of result.slides) {
+    const issues = candidateThemeCss
+      ? validatePresentationSlideHtml(slide.html, candidateThemeCss)
+      : ['shared themeCss is required before slide HTML can be accepted'];
+    if (issues.length) {
+      authoringFailures.set(slide.id, issues);
+      continue;
+    }
+    authoredHtml.set(slide.id, slide.html);
+    authoringFailures.delete(slide.id);
+  }
 }
 
 async function requestPresentationHtmlBatch(
@@ -267,7 +324,8 @@ async function requestPresentationHtmlBatch(
               storyOutline
             },
             slides,
-            existingThemeCss: themeCss?.slice(0, 16_000),
+            existingThemeCss: themeCss?.slice(0, 20_000),
+            existingThemeClasses: themeCss ? [...getSlideCssClassNames(themeCss)].sort() : [],
             diagnostics
           })
         }
@@ -438,21 +496,22 @@ function mergePlan(
   const audience = preferences?.audience ?? brief.audience ?? '研究参与者与决策者';
   const theme = preferences?.theme ?? 'research';
   const branding = { ...preferences?.branding };
-  const slideCount = presentation.slides.length;
-  if (slideCount < 8 || slideCount > 15) {
-    throw new ArtifactPlanningError(`Presentation plan contains ${slideCount} content slides; plan between 8 and 15 substantive slides`);
-  }
-  if (!presentation.slides.some((slide) => slide.kind === 'title')) {
-    throw new ArtifactPlanningError('Presentation plan must include a substantive title slide');
-  }
-  const pageCount = pdf.sections.length + 2;
-  if (pageCount < 6 || pageCount > 20) {
-    throw new ArtifactPlanningError(`PDF plan resolves to ${pageCount} pages; plan between 6 and 20 substantive pages`);
-  }
   const formats = resolveArtifactFormats({
     requested: preferences?.formats,
     userText: lastUserTextFromSnapshot(snapshot)
   });
+  const slideCount = presentation.slides.length;
+  if (formats.includes('pptx') && (slideCount < 8 || slideCount > 15)) {
+    throw new ArtifactPlanningError(`Presentation plan contains ${slideCount} content slides; plan between 8 and 15 substantive slides`);
+  }
+  if (formats.includes('pptx') && !presentation.slides.some((slide) => slide.kind === 'title')) {
+    throw new ArtifactPlanningError('Presentation plan must include a substantive title slide');
+  }
+  const pageCount = pdf.sections.length + 2;
+  const wantsLongform = formats.includes('pdf') || formats.includes('docx');
+  if (wantsLongform && (pageCount < 6 || pageCount > 20)) {
+    throw new ArtifactPlanningError(`PDF plan resolves to ${pageCount} pages; plan between 6 and 20 substantive pages`);
+  }
   return parseArtifactSpec({
     title,
     audience,
@@ -480,9 +539,14 @@ function mergePlan(
   });
 }
 
-function createPlanningPrompt(snapshot: ResearchSnapshot, preferences?: ArtifactPreferences) {
+function createPlanningPrompt(
+  snapshot: ResearchSnapshot,
+  preferences: ArtifactPreferences | undefined,
+  requestedFormats: ArtifactFormat[]
+) {
   return JSON.stringify({
     preferences,
+    requestedFormats,
     snapshot: {
       conversationId: snapshot.conversationId,
       conversationTitle: snapshot.conversationTitle,
@@ -492,7 +556,7 @@ function createPlanningPrompt(snapshot: ResearchSnapshot, preferences?: Artifact
       sources: snapshot.sources,
       notes: snapshot.notes
     },
-    output: 'Return JSON only with keys brief, presentation, pdf. Plan slide content only: do not include presentation HTML or CSS because those are authored separately in bounded batches. Do not include Markdown fences. preferences.formats is the user-requested file set.'
+    output: 'Return JSON only with keys brief, presentation, pdf. Plan slide content only: do not include presentation HTML or CSS because those are authored separately in bounded batches. Do not include Markdown fences. requestedFormats is authoritative; only requested output plans must satisfy their full count constraints.'
   });
 }
 
@@ -505,7 +569,7 @@ const artifactPresentationDesignGuide = `Adapt these frontend-design principles 
 - Slides are static screenshots. Do not use animations, transitions, hover states, or interactions. Complexity must serve the explanation, not decoration.
 - Every slide.html must have exactly one root element with class="slide". That root must fill 1600x900, reserve at least 72px at the bottom for the renderer footer, and keep all visible content inside its bounds. Use at least 24px for compact labels, 30px for body copy, 46px for slide titles, and 68px for the cover title. Prefer cutting copy or changing composition over shrinking text.`;
 
-const artifactPlanningSystemPrompt = `You are EvidentLoop's ArtifactAgent content planner. Convert a frozen research snapshot into one factually consistent ResearchBrief, PresentationPlan, and PdfReportPlan. Plan 8-15 substantive slides and enough substantive report sections for 6-20 actual PDF pages; requested target counts are soft goals and must be normalized to the real plan. Never add filler or no-information pages just to reach a target. Only use facts and citations present in the snapshot; say that evidence is insufficient when needed. Keep the same citation keys across both outputs. preferences.formats lists the files the user asked to generate (pptx, pdf, or both); still return both plans so the shared brief stays consistent, but do not pad a format they did not request.
+const artifactPlanningSystemPrompt = `You are EvidentLoop's ArtifactAgent content planner. Convert a frozen research snapshot into one factually consistent ResearchBrief, PresentationPlan, and PdfReportPlan. requestedFormats is authoritative. For requested PPTX output, plan 8-15 substantive slides. For requested PDF or DOCX output, plan enough substantive report sections for 6-20 actual pages. Requested target counts are soft goals and must be normalized to the real plan. Never add filler or no-information pages just to reach a target. Only use facts and citations present in the snapshot; say that evidence is insufficient when needed. Keep the same citation keys across outputs. Always return all three required JSON keys, but unrequested output plans are compatibility placeholders and do not need to meet their full count constraints.
 
 This is a compact narrative planning pass. Do not generate HTML or CSS here. A separate bounded visual-design pass will author each slide after this JSON has been validated.
 Write concise atomic findings and bullets, not copied transcripts or long prose blocks. Keep every key finding, recommendation, key point, slide bullet, and report bullet below 500 characters.
@@ -580,10 +644,10 @@ const artifactPresentationHtmlSystemPrompt = `You are EvidentLoop's presentation
 
 ${artifactPresentationDesignGuide}
 
-Use only HTML, inline SVG, and CSS. Never use scripts, event handlers, forms, iframes, external URLs, remote fonts, data URLs, or fabricated images. The renderer supplies the page number, source strip, and brand logo. Keep markup concise: reuse classes in themeCss rather than repeating long inline styles, and keep each slide HTML comfortably below 6,000 characters.
+Use only HTML, inline SVG, and CSS. Never use scripts, event handlers, forms, iframes, external URLs, remote fonts, data URLs, or fabricated images. The renderer supplies the page number, source strip, and brand logo. Keep markup concise: reuse classes in themeCss rather than repeating long inline styles, and keep each slide HTML comfortably below 6,000 characters. Never put a style element inside slide HTML.
 Scope every selector to .slide or its descendants; do not style html or body because the renderer owns the outer document and frame.
 
-The user input contains the whole deck outline for continuity, the current slides to author, optional existingThemeCss, and optional renderer diagnostics. When existingThemeCss is supplied, reuse it and omit themeCss unless a diagnostic requires a correction. When it is absent, return a coherent shared themeCss. Diagnostics apply only to visual layout and must not change facts or sibling formats.
+The user input contains the whole deck outline for continuity, the current slides to author, optional existingThemeCss, its complete existingThemeClasses list, and optional renderer diagnostics. The first successful response freezes the core design system for the entire deck. When existingThemeCss is supplied, prefer its existing classes. If the current composition genuinely needs new classes, return themeCss containing only additive .slide-scoped rules for those new classes and define every new class used by the returned HTML. Never return rules that target only existing classes and never redefine .slide or an existing class: the server discards overriding rules and keeps only safe append-only additions. When existingThemeCss is absent, return a coherent shared themeCss that defines .slide and every class used by the returned HTML. Every class used in HTML is validated against the accumulated theme and any incomplete slide is rejected and retried. Diagnostics apply only to visual layout and must not change facts or sibling formats.
 
 Return exactly one JSON object with this shape and no other keys:
 {

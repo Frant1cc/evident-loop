@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { normalizeArtifactFormats } from './formats.js';
 import type {
+  ArtifactFormat,
   ArtifactPreferences,
   ArtifactSpec,
   PdfReportPlan,
@@ -66,13 +67,13 @@ export const presentationPlanSchema = z.object({
   // never invents filler slides.
   slides: z.array(slideSchema).min(8).max(30),
   targetSlideCount: z.number().int().min(8).max(15),
-  themeCss: text(24_000).optional()
+  themeCss: text(64_000).optional()
 }).strict();
 
 const modelPresentationPlanSchema = z.object({
   slides: z.array(slideSchema).min(3).max(30),
   targetSlideCount: z.number().int().min(8).max(15),
-  themeCss: text(24_000).optional()
+  themeCss: text(64_000).optional()
 }).strict();
 
 const reportSectionSchema = z.object({
@@ -140,14 +141,37 @@ export function parseArtifactPreferences(value: unknown): ArtifactPreferences {
   return artifactPreferencesSchema.parse(value) as ArtifactPreferences;
 }
 
-export function parseArtifactPlanModelOutput(value: unknown, fallback?: ArtifactPlanModelOutput): ArtifactPlanModelOutput {
+export function parseArtifactPlanModelOutput(
+  value: unknown,
+  fallback?: ArtifactPlanModelOutput,
+  requestedFormats?: ArtifactFormat[]
+): ArtifactPlanModelOutput {
   const completed = fallback ? completePlanModelOutput(value, fallback) : value;
-  const parsed = z.object({
-    brief: researchBriefSchema,
-    presentation: modelPresentationPlanSchema,
-    pdf: modelPdfReportPlanSchema
+  if (!fallback || !requestedFormats) {
+    const parsed = z.object({
+      brief: researchBriefSchema,
+      presentation: modelPresentationPlanSchema,
+      pdf: modelPdfReportPlanSchema
+    }).strict().parse(completed);
+    return parsed as ArtifactPlanModelOutput;
+  }
+
+  const root = z.object({
+    brief: z.unknown(),
+    presentation: z.unknown(),
+    pdf: z.unknown()
   }).strict().parse(completed);
-  return parsed as ArtifactPlanModelOutput;
+  const wantsPresentation = requestedFormats.includes('pptx');
+  const wantsLongform = requestedFormats.includes('pdf') || requestedFormats.includes('docx');
+  return {
+    brief: researchBriefSchema.parse(root.brief) as ResearchBrief,
+    presentation: wantsPresentation
+      ? modelPresentationPlanSchema.parse(root.presentation) as PresentationPlan
+      : fallback.presentation,
+    pdf: wantsLongform
+      ? modelPdfReportPlanSchema.parse(root.pdf) as PdfReportPlan
+      : fallback.pdf
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -220,8 +244,8 @@ function completePlanModelOutput(value: unknown, fallback: ArtifactPlanModelOutp
       targetSlideCount: typeof presentationIn?.targetSlideCount === 'number'
         ? presentationIn.targetSlideCount
         : (slides.length ? slides.length : fallback.presentation.targetSlideCount),
-      ...(asNonEmptyString(presentationIn?.themeCss, 24_000) || fallback.presentation.themeCss
-        ? { themeCss: asNonEmptyString(presentationIn?.themeCss, 24_000) ?? fallback.presentation.themeCss }
+      ...(asNonEmptyString(presentationIn?.themeCss, 64_000) || fallback.presentation.themeCss
+        ? { themeCss: asNonEmptyString(presentationIn?.themeCss, 64_000) ?? fallback.presentation.themeCss }
         : {})
     },
     pdf: {

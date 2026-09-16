@@ -113,7 +113,7 @@ const presentationDeliverableSchema = z.object({
   documentType: z.literal('presentation'),
   formats: z.tuple([z.literal('pptx')]),
   targetSlideCount: z.number().int().min(8).max(30),
-  themeCss: text(24_000).optional(),
+  themeCss: text(64_000).optional(),
   slides: z.array(slideSchema).min(8).max(30)
 }).strict();
 

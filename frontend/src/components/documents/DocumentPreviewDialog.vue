@@ -222,6 +222,11 @@ function unlockBodyScroll() {
             <PresentationPreview
               :slides="slides"
               :theme-css="output.renderedSpec?.presentation.themeCss"
+              :theme="output.renderedSpec?.theme"
+              :branding="output.renderedSpec?.branding"
+              :deck-title="output.renderedSpec?.title"
+              :audience="output.renderedSpec?.audience"
+              :executive-summary="output.renderedSpec?.brief.executiveSummary"
               :current-slide-id="currentSlideId"
               @update:current-slide-id="currentSlideId = $event"
             />

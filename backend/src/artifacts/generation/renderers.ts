@@ -16,13 +16,21 @@ import { RendererUnavailableError } from './errors.js';
 import { resolveDocumentSpec } from '../../documents/presets.js';
 import { renderWordDocument } from '../../documents/renderer.js';
 import type { DocumentBlock, DocumentPresetName } from '../../documents/types.js';
-import { createPptxSlideHtmlDocument, pptxViewport } from './pptxHtml.js';
+import {
+  createPptxSlideHtmlDocument,
+  pptxViewport,
+  validatePresentationAuthoringCompleteness
+} from './pptxHtml.js';
 
 export { RendererUnavailableError } from './errors.js';
 
 export class DefaultPptxRenderer implements ArtifactRenderer {
   async render(spec: ArtifactSpec, _snapshot: ResearchSnapshot, context?: RendererContext): Promise<RendererResult> {
     throwIfAborted(context?.signal);
+    const authoringDiagnostics = validatePresentationAuthoringCompleteness(spec);
+    if (authoringDiagnostics.length) {
+      throw new Error(`PPTX authoring is incomplete: ${authoringDiagnostics.join('; ')}`);
+    }
     const [pptxModule, playwrightModule] = await Promise.all([
       importOptional('pptxgenjs'),
       importOptional('playwright')
@@ -227,6 +235,7 @@ export class DefaultArtifactQualityInspector implements ArtifactQualityInspector
       diagnostics.push('PDF output does not have a PDF header');
     }
     if (format === 'pptx') {
+      diagnostics.push(...validatePresentationAuthoringCompleteness(spec));
       diagnostics.push(...validatePresentationVisualDesign(spec));
     }
 

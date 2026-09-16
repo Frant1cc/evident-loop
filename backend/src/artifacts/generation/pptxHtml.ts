@@ -112,6 +112,113 @@ export function sanitizeSlideCss(value: string) {
     .replace(/javascript\s*:/gi, '');
 }
 
+export function getSlideHtmlClassNames(html: string) {
+  const $ = cheerio.load(sanitizeSlideHtml(html), undefined, false);
+  const classes = new Set<string>();
+  $('[class]').each((_index, element) => {
+    for (const className of ($(element).attr('class') ?? '').split(/\s+/).filter(Boolean)) {
+      classes.add(className);
+    }
+  });
+  return classes;
+}
+
+export function getSlideCssClassNames(css: string) {
+  return new Set(
+    [...sanitizeSlideCss(css).matchAll(/\.([_a-zA-Z][\w-]*)/g)].map((match) => match[1]!)
+  );
+}
+
+/**
+ * Extend a frozen theme without allowing a later batch to override it. Only
+ * rules scoped to .slide and introducing a class needed by the current HTML
+ * are appended; rules that target existing classes alone are discarded.
+ */
+export function appendPresentationThemeCss(
+  frozenCss: string,
+  extensionCss: string,
+  requiredClasses: Iterable<string>,
+  maximumLength = 64_000
+) {
+  const base = sanitizeSlideCss(frozenCss).trim();
+  const existingClasses = getSlideCssClassNames(base);
+  const missingClasses = new Set(
+    [...requiredClasses].filter((className) => !existingClasses.has(className))
+  );
+  if (!missingClasses.size) return base;
+
+  const acceptedRules: string[] = [];
+  const sanitizedExtension = sanitizeSlideCss(extensionCss);
+  for (const match of sanitizedExtension.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selector = match[1]?.trim() ?? '';
+    const declarations = match[2]?.trim() ?? '';
+    if (!selector || !declarations || selector.startsWith('@')) continue;
+    const selectors = selector.split(',').map((part) => part.trim()).filter(Boolean);
+    const acceptedSelectors = selectors.filter((part) => {
+      if (!/\.slide\b/.test(part)) return false;
+      return [...getSlideCssClassNames(part)].some((className) => missingClasses.has(className));
+    });
+    if (!acceptedSelectors.length) continue;
+    acceptedRules.push(`${acceptedSelectors.join(', ')} { ${declarations} }`);
+  }
+
+  const merged = [base, ...acceptedRules].filter(Boolean).join('\n');
+  return merged.length <= maximumLength ? merged : base;
+}
+
+/**
+ * Validate the authored fragment against the frozen deck stylesheet before it
+ * can enter preview or rendering. A class without a matching shared rule is
+ * visually indistinguishable from lost CSS, so treat it as incomplete output
+ * instead of allowing a partially styled slide to fall through.
+ */
+export function validatePresentationSlideHtml(html: string, themeCss: string) {
+  const diagnostics: string[] = [];
+  const sanitizedHtml = sanitizeSlideHtml(html);
+  const sanitizedCss = sanitizeSlideCss(themeCss);
+  const $ = cheerio.load(sanitizedHtml, undefined, false);
+  const roots = $.root().children().toArray();
+
+  if (roots.length !== 1) {
+    diagnostics.push(`must contain exactly one root element; received ${roots.length}`);
+  } else if (!$(roots[0]).hasClass('slide')) {
+    diagnostics.push('root element must include class "slide"');
+  }
+  if ($('style').length) {
+    diagnostics.push('must not contain a style element; all shared styles belong in themeCss');
+  }
+
+  const usedClasses = getSlideHtmlClassNames(sanitizedHtml);
+  const definedClasses = getSlideCssClassNames(sanitizedCss);
+  const undefinedClasses = [...usedClasses]
+    .filter((className) => !definedClasses.has(className))
+    .sort();
+  if (undefinedClasses.length) {
+    diagnostics.push(`uses classes missing from frozen themeCss: ${undefinedClasses.join(', ')}`);
+  }
+
+  return diagnostics;
+}
+
+export function validatePresentationAuthoringCompleteness(spec: ArtifactSpec) {
+  const authoredSlides = spec.presentation.slides.filter((slide) => Boolean(slide.html?.trim()));
+  if (!authoredSlides.length) return [];
+
+  const diagnostics: string[] = [];
+  const themeCss = spec.presentation.themeCss?.trim() ?? '';
+  if (!themeCss) diagnostics.push('Authored presentation is missing its frozen themeCss');
+  for (const slide of spec.presentation.slides) {
+    if (!slide.html?.trim()) {
+      diagnostics.push(`Slide ${slide.id} is missing authored HTML`);
+      continue;
+    }
+    for (const issue of validatePresentationSlideHtml(slide.html, themeCss)) {
+      diagnostics.push(`Slide ${slide.id} ${issue}`);
+    }
+  }
+  return diagnostics;
+}
+
 export function createPptxSlideHtmlDocument(input: SlideHtmlInput) {
   const colors = themeColors(input.spec);
   const authoredHtml = input.slide.html ? sanitizeSlideHtml(input.slide.html) : '';
