@@ -5,7 +5,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently -n backend,frontend -c cyan,green \"pnpm --filter backend dev\" \"pnpm --filter frontend dev\"",
+    "predev": "pnpm --filter @evident-loop/stream-protocol build",
+    "dev": "concurrently -n backend,frontend -c cyan,green \"pnpm --filter backend dev\" \"pnpm --filter frontend dev:serve\"",
     "build": "pnpm --filter backend build && pnpm --filter frontend build",
     "lint": "pnpm -r --if-present lint",
     "typecheck": "pnpm -r --if-present typecheck",

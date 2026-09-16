@@ -24,7 +24,7 @@ importers:
         specifier: ~1.29.0
         version: 1.29.0(zod@4.4.3)
       '@qdrant/js-client-rest':
-        specifier: ^1.18.0
+        specifier: 1.18.0
         version: 1.18.0(typescript@5.9.3)
       ajv:
         specifier: ^8.20.0

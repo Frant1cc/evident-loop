@@ -27,6 +27,8 @@ import { createSdkAdapterFactory } from './adapters/sdk.js';
 
 type FakeAdapterState = {
   tools: McpToolDescriptor[];
+  connectCalls: number;
+  connectDelayMs: number;
   listCalls: number;
   callCalls: number;
   concurrentLists: number;
@@ -59,6 +61,8 @@ function descriptor(name: string, inputSchema: Record<string, unknown> = objectS
 
 function createFakeAdapter(state: FakeAdapterState): McpAdapterFactory {
   return async (_config, callbacks) => {
+    state.connectCalls += 1;
+    if (state.connectDelayMs) await delay(state.connectDelayMs);
     state.callbacks = callbacks;
     const connection: McpConnection = {
       listTools: async () => {
@@ -111,6 +115,8 @@ function createFixture(options: {
   const database = new Database(':memory:');
   const state: FakeAdapterState = {
     tools: [descriptor('search')],
+    connectCalls: 0,
+    connectDelayMs: 0,
     listCalls: 0,
     callCalls: 0,
     concurrentLists: 0,
@@ -171,6 +177,8 @@ test('managed preset enables a pinned package and remains idempotent', async () 
   const enabled = await fixture.manager.enablePreset('context7', 1);
   assert.equal(enabled.status, 'connected');
   assert.equal(enabled.enabled, true);
+  assert.equal(fixture.state.listCalls, 1);
+  assert.equal(fixture.state.closeCalls, 0);
   const persisted = fixture.store.getServer(enabled.id)!;
   assert.equal(persisted.command, process.platform === 'win32' ? 'npx.cmd' : 'npx');
   assert.deepEqual(persisted.args, ['--yes', '@upstash/context7-mcp@4.0.3']);
@@ -187,6 +195,37 @@ test('managed preset enables a pinned package and remains idempotent', async () 
   assert.equal(fixture.manager.listServers().length, 1);
 
   await fixture.manager.stop();
+  fixture.database.close();
+});
+
+test('concurrent connection requests share one in-flight MCP process', async () => {
+  const fixture = createFixture({ state: { connectDelayMs: 30 } });
+  const server = saveDraft(fixture.manager);
+  await fixture.manager.testServer(server.id);
+  const baselineConnects = fixture.state.connectCalls;
+
+  await fixture.manager.setEnabled(server.id, true);
+  await Promise.all([
+    fixture.manager.refresh(server.id),
+    fixture.manager.refresh(server.id)
+  ]);
+
+  assert.equal(fixture.state.connectCalls, baselineConnects + 1);
+  assert.equal(fixture.manager.getServer(server.id)?.status, 'connected');
+  await fixture.manager.stop();
+  fixture.database.close();
+});
+
+test('shutdown waits for an in-flight MCP connection before returning', async () => {
+  const fixture = createFixture({ state: { connectDelayMs: 30 } });
+  const server = saveDraft(fixture.manager);
+  await fixture.manager.testServer(server.id);
+  const baselineCloses = fixture.state.closeCalls;
+
+  await fixture.manager.setEnabled(server.id, true);
+  await fixture.manager.stop();
+
+  assert.equal(fixture.state.closeCalls, baselineCloses + 1);
   fixture.database.close();
 });
 
@@ -425,8 +464,8 @@ test('missing-key manager edits can explicitly clear old OAuth ciphertext withou
     runtime,
     store: withoutKey,
     adapterFactory: createFakeAdapter({
-      tools: [], listCalls: 0, callCalls: 0, concurrentLists: 0, maxConcurrentLists: 0,
-      listDelayMs: 0, authPending: false, authorized: false,
+      tools: [], connectCalls: 0, connectDelayMs: 0, listCalls: 0, callCalls: 0,
+      concurrentLists: 0, maxConcurrentLists: 0, listDelayMs: 0, authPending: false, authorized: false,
       authorizationUrl: 'http://127.0.0.1:3000/authorize', closeCalls: 0
     })
   });

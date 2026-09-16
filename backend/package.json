@@ -19,7 +19,7 @@
   "dependencies": {
     "@evident-loop/stream-protocol": "workspace:*",
     "@modelcontextprotocol/sdk": "~1.29.0",
-    "@qdrant/js-client-rest": "^1.18.0",
+    "@qdrant/js-client-rest": "1.18.0",
     "ajv": "^8.20.0",
     "better-sqlite3": "^11.7.0",
     "cheerio": "^1.2.0",

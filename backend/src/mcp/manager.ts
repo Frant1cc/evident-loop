@@ -26,6 +26,7 @@ type Entry = {
   config: McpServerConfig;
   state: McpServerState;
   connection?: McpConnection;
+  connectPromise?: Promise<void>;
   reconnectTimer?: ReturnType<typeof setTimeout>;
   refreshTimer?: ReturnType<typeof setTimeout>;
   refreshPromise?: Promise<void>;
@@ -73,17 +74,9 @@ export class McpManagerImpl implements McpManager {
 
   async stop() {
     this.stopped = true;
-    const closes: Promise<void>[] = [];
-    for (const entry of this.entries.values()) {
-      entry.generation += 1;
-      if (entry.reconnectTimer) clearTimeout(entry.reconnectTimer);
-      if (entry.refreshTimer) clearTimeout(entry.refreshTimer);
-      entry.reconnectTimer = undefined;
-      entry.refreshTimer = undefined;
-      if (entry.connection) closes.push(entry.connection.close().catch(() => undefined));
-      entry.connection = undefined;
-    }
-    await Promise.allSettled(closes);
+    await Promise.allSettled(
+      [...this.entries.values()].map((entry) => this.disconnectEntry(entry))
+    );
   }
 
   listServers(): McpPublicServer[] {
@@ -157,7 +150,7 @@ export class McpManagerImpl implements McpManager {
     return this.toPublicServer(entry);
   }
 
-  async testServer(id: string): Promise<McpPublicServer> {
+  async testServer(id: string, retainConnection = false): Promise<McpPublicServer> {
     const entry = this.requireEntry(id);
     await this.disconnectEntry(entry);
     entry.validated = false;
@@ -170,10 +163,12 @@ export class McpManagerImpl implements McpManager {
       await this.connectEntry(entry, true);
       if (entry.state.status === 'connected') {
         entry.validated = true;
-        await this.disconnectEntry(entry);
-        const lastRefreshedAt = entry.state.lastRefreshedAt;
-        entry.state = { status: 'disabled', ...(lastRefreshedAt ? { lastRefreshedAt } : {}) };
-        this.store.setServerState(id, entry.state);
+        if (!retainConnection) {
+          await this.disconnectEntry(entry);
+          const lastRefreshedAt = entry.state.lastRefreshedAt;
+          entry.state = { status: 'disabled', ...(lastRefreshedAt ? { lastRefreshedAt } : {}) };
+          this.store.setServerState(id, entry.state);
+        }
       } else entry.validated = false;
     } catch (error) {
       // connectEntry records authorization_required/unavailable; preserve the
@@ -198,6 +193,10 @@ export class McpManagerImpl implements McpManager {
     }
     this.assertTransportAllowed(entry.config);
     entry.config = this.store.saveServer({ ...entry.config, enabled: true });
+    if (entry.connection && entry.state.status === 'connected') {
+      this.store.setServerState(id, entry.state);
+      return this.toPublicServer(entry);
+    }
     void this.connectEntry(entry, false).catch(() => undefined);
     return this.toPublicServer(entry);
   }
@@ -359,7 +358,10 @@ export class McpManagerImpl implements McpManager {
       return this.toPublicServer(entry);
     }
 
-    await this.testServer(server.id);
+    // Keep the successfully tested stdio session and promote that same session
+    // connection below. Closing it only to spawn the same process again can
+    // make MCP servers write a final response into a closed pipe (EPIPE).
+    await this.testServer(server.id, true);
     await this.setEnabled(server.id, true);
 
     // 等待 connected（30秒超时，500ms 轮询）
@@ -429,6 +431,16 @@ export class McpManagerImpl implements McpManager {
   }
 
   private async connectEntry(entry: Entry, forTest: boolean): Promise<void> {
+    if (entry.connection) return;
+    if (entry.connectPromise) return entry.connectPromise;
+    const connectPromise = this.connectEntryOnce(entry, forTest).finally(() => {
+      if (entry.connectPromise === connectPromise) entry.connectPromise = undefined;
+    });
+    entry.connectPromise = connectPromise;
+    return connectPromise;
+  }
+
+  private async connectEntryOnce(entry: Entry, forTest: boolean): Promise<void> {
     if (this.stopped && !forTest) return;
     if (!forTest && !entry.config.enabled) return;
     if (entry.config.transport === 'stdio' && !isLoopbackHost(this.host)) {
@@ -499,6 +511,7 @@ export class McpManagerImpl implements McpManager {
       entry.backoffAttempt = 0;
       await this.refreshEntry(entry);
       if (entry.generation !== generation || this.entries.get(entry.config.id) !== entry) {
+        if (entry.connection === connection) entry.connection = undefined;
         await connection.close().catch(() => undefined);
         return;
       }
@@ -787,6 +800,8 @@ export class McpManagerImpl implements McpManager {
     if (entry.refreshTimer) clearTimeout(entry.refreshTimer);
     entry.reconnectTimer = undefined;
     entry.refreshTimer = undefined;
+    const connectPromise = entry.connectPromise;
+    if (connectPromise) await connectPromise.catch(() => undefined);
     const connection = entry.connection;
     entry.connection = undefined;
     if (connection) await connection.close().catch(() => undefined);
