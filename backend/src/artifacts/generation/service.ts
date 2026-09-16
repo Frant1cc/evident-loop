@@ -645,7 +645,8 @@ export function createArtifactGenerationService(options: {
         if (signal.aborted) {
           throwIfAborted(signal);
         }
-        lastDiagnostics = [...lastDiagnostics, getErrorMessage(error)];
+        const currentDiagnostic = getErrorMessage(error);
+        lastDiagnostics = [...lastDiagnostics, currentDiagnostic];
         if (error instanceof RendererUnavailableError || isRendererUnavailable(error)) {
           updateArtifactOutput(output.id, {
             status: 'failed',
@@ -668,7 +669,7 @@ export function createArtifactGenerationService(options: {
           // a PPTX retry cannot rewrite the shared brief used by PDF (or vice
           // versa); only the successful attempt's effective spec is persisted
           // on that output.
-          const repaired = await agent.repair(spec, format, lastDiagnostics, signal);
+          const repaired = await agent.repair(spec, format, [currentDiagnostic], signal, attempt);
           if (repaired) spec = mergeFormatLocalRepair(spec, repaired, format);
         } catch (repairError) {
           lastDiagnostics.push(getErrorMessage(repairError));

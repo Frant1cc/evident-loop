@@ -6,6 +6,7 @@ import {
   appendPresentationThemeCss,
   getSlideCssClassNames,
   getSlideHtmlClassNames,
+  sanitizeSlideCss,
   validatePresentationSlideHtml
 } from './pptxHtml.js';
 import type {
@@ -36,7 +37,13 @@ export class ArtifactPlanningError extends Error {
 
 export type ArtifactAgent = {
   plan: (snapshot: ResearchSnapshot, preferences?: ArtifactPreferences, signal?: AbortSignal) => Promise<ArtifactSpec>;
-  repair: (spec: ArtifactSpec, format: ArtifactFormat, diagnostics: string[], signal?: AbortSignal) => Promise<ArtifactSpec>;
+  repair: (
+    spec: ArtifactSpec,
+    format: ArtifactFormat,
+    diagnostics: string[],
+    signal?: AbortSignal,
+    repairRound?: number
+  ) => Promise<ArtifactSpec>;
   /**
    * Execute one deterministic output attempt under the agent's narrow seams.
    * The service owns persistence and retry state; the agent owns the explicit
@@ -66,7 +73,8 @@ export function createArtifactAgent(options: {
 }): ArtifactAgent {
   return {
     plan: (snapshot, preferences, signal) => planArtifact(options, snapshot, preferences, signal),
-    repair: (spec, format, diagnostics, signal) => repairArtifact(options, spec, format, diagnostics, signal),
+    repair: (spec, format, diagnostics, signal, repairRound) =>
+      repairArtifact(options, spec, format, diagnostics, signal, repairRound),
     execute: async ({ renderer, qualityInspector, spec, snapshot, context, format }) => {
       throwIfAborted(context.signal);
       // Assets are resolved by the application boundary after consent and
@@ -135,13 +143,17 @@ async function repairArtifact(
   spec: ArtifactSpec,
   format: ArtifactFormat,
   diagnostics: string[],
-  signal: AbortSignal | undefined
+  signal: AbortSignal | undefined,
+  repairRound = 1
 ) {
   throwIfAborted(signal);
-  if (!options.llm) return spec;
   if (format === 'pptx') {
-    return authorPresentationHtml(options, spec, signal, diagnostics);
+    if (repairRound >= 2) return repairPresentationWithSafeLayouts(spec, diagnostics);
+    if (!options.llm) return repairPresentationWithSafeLayouts(spec, diagnostics);
+    const repairSlideIds = presentationRepairSlideIds(spec, diagnostics);
+    return authorPresentationHtml(options, spec, signal, diagnostics, repairSlideIds);
   }
+  if (!options.llm) return spec;
   const completion = await options.llm.complete({
     model: options.model,
     temperature: 0.1,
@@ -167,7 +179,7 @@ async function repairArtifact(
 }
 
 type AuthoredHtmlBatch = {
-  themeCss?: string;
+  themeExtensionCss?: string;
   slides: Array<{ id: string; html: string }>;
 };
 
@@ -177,36 +189,55 @@ async function authorPresentationHtml(
   options: { llm?: ArtifactTextModel; model: string },
   spec: ArtifactSpec,
   signal: AbortSignal | undefined,
-  diagnostics: string[] = []
+  diagnostics: string[] = [],
+  targetSlideIds?: Set<string>
 ): Promise<ArtifactSpec> {
   if (!options.llm || !spec.formats.includes('pptx')) return spec;
 
   const authoredHtml = new Map<string, string>();
   let authoredThemeCss = spec.presentation.themeCss?.trim() || undefined;
   const authoringFailures = new Map<string, string[]>();
+  const slidesToAuthor = targetSlideIds?.size
+    ? spec.presentation.slides.filter((slide) => targetSlideIds.has(slide.id) || !slide.html?.trim())
+    : spec.presentation.slides;
+  if (targetSlideIds?.size) {
+    for (const slide of spec.presentation.slides) {
+      if (!slidesToAuthor.includes(slide) && slide.html?.trim()) authoredHtml.set(slide.id, slide.html);
+    }
+  }
   const storyOutline = spec.presentation.slides.map((slide) => ({
     id: slide.id,
     title: slide.title,
     kind: slide.kind
   }));
+  if (!authoredThemeCss) {
+    authoredThemeCss = await requestPresentationThemeLibrary(options, spec, storyOutline, signal)
+      ?? fallbackPresentationThemeCss;
+  }
+  authoredThemeCss = installPresentationCoreComponents(authoredThemeCss);
 
-  for (let index = 0; index < spec.presentation.slides.length; index += presentationHtmlBatchSize) {
+  for (let index = 0; index < slidesToAuthor.length; index += presentationHtmlBatchSize) {
     throwIfAborted(signal);
-    const batch = spec.presentation.slides.slice(index, index + presentationHtmlBatchSize);
+    const batch = slidesToAuthor.slice(index, index + presentationHtmlBatchSize);
     const sharedThemeCss = authoredThemeCss;
+    const batchDiagnostics = presentationDiagnosticsForSlides(spec, batch, diagnostics);
+    const forbiddenRepairClasses = presentationDiagnosticClassNames(batchDiagnostics);
     const result = await requestPresentationHtmlBatch(
       options,
       spec,
       storyOutline,
       batch,
       sharedThemeCss,
-      diagnostics,
+      batchDiagnostics,
       signal
     );
     acceptPresentationHtmlBatch(result, authoredHtml, authoringFailures, {
       get themeCss() { return authoredThemeCss; },
       updateThemeCss: (value) => { authoredThemeCss = value; }
-    });
+    }, batchDiagnostics.length ? {
+      originalHtml: new Map(batch.map((slide) => [slide.id, slide.html?.trim() ?? ''])),
+      forbiddenClasses: forbiddenRepairClasses
+    } : undefined);
 
     // A malformed or contract-breaking batch is retried one slide at a time.
     // Retries receive exact validation feedback and must use the same frozen
@@ -222,12 +253,20 @@ async function authorPresentationHtml(
             storyOutline,
             [slide],
             authoredThemeCss,
-            [...diagnostics, ...slideDiagnostics.map((issue) => `Slide ${slide.id}: ${issue}`)],
+            [
+              ...presentationDiagnosticsForSlides(spec, [slide], diagnostics),
+              ...slideDiagnostics.map((issue) => `Slide ${slide.id}: ${issue}`)
+            ],
             signal
           );
           acceptPresentationHtmlBatch(singleResult, authoredHtml, authoringFailures, {
             get themeCss() { return authoredThemeCss; },
             updateThemeCss: (value) => { authoredThemeCss = value; }
+          }, {
+            originalHtml: new Map([[slide.id, slide.html?.trim() ?? '']]),
+            forbiddenClasses: presentationDiagnosticClassNames(
+              presentationDiagnosticsForSlides(spec, [slide], diagnostics)
+            )
           });
         }
       }
@@ -235,17 +274,9 @@ async function authorPresentationHtml(
   }
 
   const missingSlides = spec.presentation.slides.filter((slide) => !authoredHtml.has(slide.id));
-  // A wholly unavailable visual-authoring pass may still use the renderer's
-  // single deterministic layout system. What is forbidden is a mixed deck in
-  // which only some pages silently fall back to a different design.
-  if (!authoredThemeCss && authoredHtml.size === 0) return spec;
-  if (!authoredThemeCss || missingSlides.length) {
-    const details = missingSlides.map((slide) => {
-      const issues = authoringFailures.get(slide.id);
-      return issues?.length ? `${slide.id} (${issues.join('; ')})` : slide.id;
-    });
-    if (!authoredThemeCss) details.unshift('shared themeCss was not produced');
-    throw new ArtifactPlanningError(`Presentation HTML authoring incomplete: ${details.join(', ')}`);
+  for (const slide of missingSlides) {
+    const slideIndex = spec.presentation.slides.findIndex((candidate) => candidate.id === slide.id);
+    authoredHtml.set(slide.id, createSafePresentationSlideHtml(slide, slideIndex));
   }
 
   return parseArtifactSpec({
@@ -261,23 +292,221 @@ async function authorPresentationHtml(
   });
 }
 
+function presentationRepairSlideIds(spec: ArtifactSpec, diagnostics: string[]) {
+  const pages = new Set<number>();
+  for (const diagnostic of diagnostics) {
+    for (const match of diagnostic.matchAll(/(?:slide-|Layout page\s+)(\d+)/gi)) {
+      const page = Number(match[1]);
+      if (Number.isInteger(page) && page >= 1 && page <= spec.presentation.slides.length) pages.add(page);
+    }
+  }
+  return new Set(
+    [...pages].map((page) => spec.presentation.slides[page - 1]?.id).filter((id): id is string => Boolean(id))
+  );
+}
+
+type SafePresentationLayout = 'list' | 'grid-2x2' | 'bar' | 'table';
+
+const fallbackPresentationThemeCss = `
+.slide { --el-accent: #d39b42; --el-text: #f4f1ea; --el-muted: #a9a69f; --el-surface: rgba(255,255,255,0.06); --el-border: rgba(255,255,255,0.18); position: relative; width: 1600px; height: 900px; overflow: hidden; box-sizing: border-box; background: #17191d; color: var(--el-text); font-family: var(--slide-font); }
+.slide::before { content: ''; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(90deg, transparent 0 7%, rgba(255,255,255,0.035) 7% 7.08%, transparent 7.08% 100%); }
+`;
+
+const safePresentationThemeCss = `
+.slide .el-safe-frame { position: absolute; inset: 64px 80px 100px; display: flex; flex-direction: column; color: inherit; }
+.slide .el-safe-eyebrow { flex: 0 0 auto; margin-bottom: 12px; color: inherit; opacity: 0.62; font-size: 24px; line-height: 1.2; letter-spacing: 0.08em; }
+.slide .el-safe-title { flex: 0 0 auto; margin: 0; max-width: 1360px; color: inherit; font-size: 48px; font-weight: 650; line-height: 1.18; letter-spacing: -0.02em; }
+.slide .el-safe-rule { flex: 0 0 auto; width: 120px; height: 4px; margin: 22px 0 28px; background: var(--el-accent, #58a6ff); }
+.slide .el-safe-body { min-height: 0; flex: 1 1 auto; }
+.slide .el-safe-list { display: grid; grid-template-columns: 1fr; align-content: start; gap: 18px; }
+.slide .el-safe-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; gap: 18px 28px; }
+.slide .el-safe-item { min-width: 0; display: grid; grid-template-columns: 46px minmax(0, 1fr); gap: 14px; align-items: start; padding: 16px 18px; border-top: 1px solid var(--el-border, rgba(139, 148, 158, 0.38)); background: var(--el-surface, transparent); }
+.slide .el-safe-index { color: var(--el-accent, #58a6ff); font-size: 24px; line-height: 1.35; font-variant-numeric: tabular-nums; }
+.slide .el-safe-copy { min-width: 0; color: inherit; opacity: 0.84; font-size: 26px; line-height: 1.42; overflow-wrap: anywhere; }
+.slide .el-safe-bars { display: grid; align-content: start; gap: 18px; }
+.slide .el-safe-bar-row { display: grid; grid-template-columns: 260px minmax(0, 1fr) 120px; gap: 18px; align-items: center; }
+.slide .el-safe-bar-label { color: inherit; opacity: 0.84; font-size: 24px; line-height: 1.3; }
+.slide .el-safe-bar-track { height: 24px; background: var(--el-surface, rgba(139, 148, 158, 0.18)); overflow: hidden; }
+.slide .el-safe-bar-fill { height: 100%; min-width: 4px; background: var(--el-accent, #58a6ff); }
+.slide .el-safe-bar-value { color: inherit; font-size: 24px; line-height: 1.3; text-align: right; font-variant-numeric: tabular-nums; }
+.slide .el-safe-table { width: 100%; border-collapse: collapse; table-layout: fixed; color: inherit; }
+.slide .el-safe-table th { padding: 12px 14px; border-bottom: 2px solid var(--el-accent, #58a6ff); color: inherit; font-size: 23px; line-height: 1.25; text-align: left; }
+.slide .el-safe-table td { padding: 12px 14px; border-bottom: 1px solid var(--el-border, rgba(139, 148, 158, 0.32)); font-size: 22px; line-height: 1.32; vertical-align: top; overflow-wrap: anywhere; }
+`;
+
+function installPresentationCoreComponents(themeCss: string) {
+  return appendPresentationThemeCss(
+    themeCss,
+    safePresentationThemeCss,
+    getSlideCssClassNames(safePresentationThemeCss)
+  );
+}
+
+function repairPresentationWithSafeLayouts(spec: ArtifactSpec, diagnostics: string[]) {
+  const targetSlideIds = presentationRepairSlideIds(spec, diagnostics);
+  if (!targetSlideIds.size) return spec;
+
+  const repairedSlides = spec.presentation.slides.map((slide, index) =>
+    targetSlideIds.has(slide.id)
+      ? { ...slide, html: createSafePresentationSlideHtml(slide, index) }
+      : slide
+  );
+  const requiredClasses = new Set(
+    repairedSlides
+      .filter((slide) => targetSlideIds.has(slide.id))
+      .flatMap((slide) => [...getSlideHtmlClassNames(slide.html ?? '')])
+  );
+  const themeCss = appendPresentationThemeCss(
+    spec.presentation.themeCss?.trim() ?? '',
+    safePresentationThemeCss,
+    requiredClasses
+  );
+
+  return parseArtifactSpec({
+    ...spec,
+    presentation: {
+      ...spec.presentation,
+      themeCss,
+      slides: repairedSlides
+    }
+  });
+}
+
+function createSafePresentationSlideHtml(
+  slide: ArtifactSpec['presentation']['slides'][number],
+  index: number
+) {
+  const layout = chooseSafePresentationLayout(slide);
+  const body = layout === 'bar'
+    ? renderSafeBarLayout(slide)
+    : layout === 'table'
+      ? renderSafeTableLayout(slide)
+      : renderSafeListLayout(slide, layout === 'grid-2x2');
+  return `<div class="slide"><div class="el-safe-frame" data-layout="${layout}"><div class="el-safe-eyebrow">${String(index + 1).padStart(2, '0')} · ${escapeSlideHtml(safeSlideKindLabel(slide))}</div><h1 class="el-safe-title">${escapeSlideHtml(slide.title)}</h1><div class="el-safe-rule"></div>${body}</div></div>`;
+}
+
+function safeSlideKindLabel(slide: ArtifactSpec['presentation']['slides'][number]) {
+  if (!/[\u3400-\u9fff]/u.test(`${slide.title}${slide.bullets.join('')}`)) return slide.kind;
+  return {
+    title: '封面',
+    content: '内容',
+    comparison: '对比',
+    closing: '结语'
+  }[slide.kind];
+}
+
+function chooseSafePresentationLayout(
+  slide: ArtifactSpec['presentation']['slides'][number]
+): SafePresentationLayout {
+  if (slide.visual?.type === 'bar' && slide.visual.values.length <= 8) return 'bar';
+  if (
+    slide.visual?.type === 'table'
+    && slide.visual.headers.length <= 4
+    && slide.visual.rows.length <= 6
+  ) return 'table';
+  return slide.bullets.length >= 4 ? 'grid-2x2' : 'list';
+}
+
+function renderSafeListLayout(
+  slide: ArtifactSpec['presentation']['slides'][number],
+  grid: boolean
+) {
+  const items = slide.bullets.length ? slide.bullets : [slide.speakerNotes ?? slide.title];
+  return `<div class="el-safe-body ${grid ? 'el-safe-grid' : 'el-safe-list'}">${items.map((item, index) => `<div class="el-safe-item"><span class="el-safe-index">${String(index + 1).padStart(2, '0')}</span><span class="el-safe-copy">${escapeSlideHtml(item)}</span></div>`).join('')}</div>`;
+}
+
+function renderSafeBarLayout(slide: ArtifactSpec['presentation']['slides'][number]) {
+  if (slide.visual?.type !== 'bar') return renderSafeListLayout(slide, false);
+  const maximum = Math.max(...slide.visual.values.map((value) => Math.abs(value)), 1);
+  const rows = slide.visual.labels.map((label, index) => {
+    const value = slide.visual?.type === 'bar' ? slide.visual.values[index] ?? 0 : 0;
+    const width = Math.max(1, Math.min(100, Math.abs(value) / maximum * 100));
+    return `<div class="el-safe-bar-row"><div class="el-safe-bar-label">${escapeSlideHtml(label)}</div><div class="el-safe-bar-track"><div class="el-safe-bar-fill" style="width:${width.toFixed(2)}%"></div></div><div class="el-safe-bar-value">${escapeSlideHtml(String(value))}</div></div>`;
+  }).join('');
+  return `<div class="el-safe-body el-safe-bars">${rows}</div>`;
+}
+
+function renderSafeTableLayout(slide: ArtifactSpec['presentation']['slides'][number]) {
+  if (slide.visual?.type !== 'table') return renderSafeListLayout(slide, false);
+  const head = `<tr>${slide.visual.headers.map((cell) => `<th>${escapeSlideHtml(cell)}</th>`).join('')}</tr>`;
+  const rows = slide.visual.rows.map((row) => `<tr>${slide.visual?.type === 'table' ? slide.visual.headers.map((_header, index) => `<td>${escapeSlideHtml(row[index] ?? '')}</td>`).join('') : ''}</tr>`).join('');
+  return `<div class="el-safe-body"><table class="el-safe-table"><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function escapeSlideHtml(value: string) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function presentationDiagnosticsForSlides(
+  spec: ArtifactSpec,
+  slides: ArtifactSpec['presentation']['slides'],
+  diagnostics: string[]
+) {
+  const slideIds = new Set(slides.map((slide) => slide.id));
+  const pages = new Set(
+    slides
+      .map((slide) => spec.presentation.slides.findIndex((candidate) => candidate.id === slide.id) + 1)
+      .filter((page) => page > 0)
+  );
+  const clauses = diagnostics.flatMap((diagnostic) =>
+    diagnostic.split(/;\s+(?=Layout (?:box|boxes|page)\b)/i)
+  );
+  return [...new Set(clauses.filter((diagnostic) =>
+    [...slideIds].some((id) => diagnostic.includes(`${id}-`))
+    || [...pages].some((page) => new RegExp(`Layout page\\s+${page}\\b`, 'i').test(diagnostic))
+  ))];
+}
+
+function presentationDiagnosticClassNames(diagnostics: string[]) {
+  const classes = new Set<string>();
+  for (const diagnostic of diagnostics) {
+    for (const match of diagnostic.matchAll(/\[[a-z][\w-]*((?:\.[\w-]+)+)(?:\s|“|\])/gi)) {
+      for (const className of (match[1] ?? '').split('.').filter(Boolean)) classes.add(className);
+    }
+  }
+  return classes;
+}
+
 function acceptPresentationHtmlBatch(
   result: AuthoredHtmlBatch | undefined,
   authoredHtml: Map<string, string>,
   authoringFailures: Map<string, string[]>,
-  theme: { readonly themeCss: string | undefined; updateThemeCss: (value: string) => void }
+  theme: { readonly themeCss: string | undefined; updateThemeCss: (value: string) => void },
+  repair?: { originalHtml: Map<string, string>; forbiddenClasses: Set<string> }
 ) {
   if (!result) return;
   const requiredClasses = new Set(
     result.slides.flatMap((slide) => [...getSlideHtmlClassNames(slide.html)])
   );
   const candidateThemeCss = theme.themeCss
-    ? appendPresentationThemeCss(theme.themeCss, result.themeCss ?? '', requiredClasses)
-    : result.themeCss?.trim();
+    ? appendPresentationThemeCss(theme.themeCss, result.themeExtensionCss ?? '', requiredClasses)
+    : result.themeExtensionCss?.trim();
   if (candidateThemeCss && candidateThemeCss !== theme.themeCss) {
     theme.updateThemeCss(candidateThemeCss);
   }
   for (const slide of result.slides) {
+    const pageSpecificClasses = [...getSlideHtmlClassNames(slide.html)]
+      .filter((className) => /^s\d+[-_]/i.test(className));
+    if (pageSpecificClasses.length) {
+      authoringFailures.set(slide.id, [`uses page-specific classes instead of reusable components: ${pageSpecificClasses.join(', ')}`]);
+      continue;
+    }
+    if (repair?.originalHtml.get(slide.id) === slide.html.trim()) {
+      authoringFailures.set(slide.id, ['repair returned unchanged HTML despite active layout diagnostics']);
+      continue;
+    }
+    const reusedClasses = [...getSlideHtmlClassNames(slide.html)].filter((className) =>
+      repair?.forbiddenClasses.has(className)
+    );
+    if (reusedClasses.length) {
+      authoringFailures.set(slide.id, [`repair reused classes responsible for the failed layout: ${reusedClasses.join(', ')}`]);
+      continue;
+    }
     const issues = candidateThemeCss
       ? validatePresentationSlideHtml(slide.html, candidateThemeCss)
       : ['shared themeCss is required before slide HTML can be accepted'];
@@ -288,6 +517,69 @@ function acceptPresentationHtmlBatch(
     authoredHtml.set(slide.id, slide.html);
     authoringFailures.delete(slide.id);
   }
+}
+
+async function requestPresentationThemeLibrary(
+  options: { llm?: ArtifactTextModel; model: string },
+  spec: ArtifactSpec,
+  storyOutline: Array<{ id: string; title: string; kind: string }>,
+  signal: AbortSignal | undefined
+) {
+  if (!options.llm) return undefined;
+  try {
+    const completion = await options.llm.complete({
+      model: options.model,
+      temperature: 0.35,
+      maxTokens: 10_000,
+      reasoning: false,
+      signal,
+      messages: [
+        { role: 'system', content: artifactPresentationThemeSystemPrompt },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            deck: {
+              title: spec.title,
+              audience: spec.audience,
+              theme: spec.theme,
+              executiveSummary: spec.brief.executiveSummary,
+              keyFindings: spec.brief.keyFindings,
+              storyOutline
+            },
+            slideNeeds: spec.presentation.slides.map((slide) => ({
+              id: slide.id,
+              title: slide.title,
+              kind: slide.kind,
+              bulletCount: slide.bullets.length,
+              visualType: slide.visual?.type
+            }))
+          })
+        }
+      ]
+    });
+    throwIfAborted(signal);
+    const content = completion.choices?.[0]?.message?.content?.trim();
+    if (!content) return undefined;
+    const value = parseModelJsonObject(content);
+    if (!isRecord(value) || typeof value.themeCss !== 'string') return undefined;
+    const themeCss = sanitizeSlideCss(value.themeCss).trim();
+    if (!themeCss || themeCss.length > 48_000 || !isValidPresentationThemeLibrary(themeCss)) return undefined;
+    return themeCss;
+  } catch {
+    throwIfAborted(signal);
+    return undefined;
+  }
+}
+
+function isValidPresentationThemeLibrary(themeCss: string) {
+  const classes = getSlideCssClassNames(themeCss);
+  if (!classes.has('slide') || classes.size < 8) return false;
+  for (const match of themeCss.matchAll(/([^{}]+)\{[^{}]*\}/g)) {
+    const selector = match[1]?.trim() ?? '';
+    if (!selector || selector.startsWith('@')) continue;
+    if (selector.split(',').some((part) => !/\.slide\b/.test(part.trim()))) return false;
+  }
+  return true;
 }
 
 async function requestPresentationHtmlBatch(
@@ -323,9 +615,10 @@ async function requestPresentationHtmlBatch(
               keyFindings: spec.brief.keyFindings,
               storyOutline
             },
-            slides,
-            existingThemeCss: themeCss?.slice(0, 20_000),
-            existingThemeClasses: themeCss ? [...getSlideCssClassNames(themeCss)].sort() : [],
+            slides: slides.map(({ html: _html, ...slide }) => slide),
+            componentThemeCss: themeCss?.slice(0, 56_000),
+            componentClasses: themeCss ? [...getSlideCssClassNames(themeCss)].sort() : [],
+            forbiddenRepairClasses: diagnostics.length ? [...presentationDiagnosticClassNames(diagnostics)].sort() : [],
             diagnostics
           })
         }
@@ -355,10 +648,15 @@ function parseAuthoredHtmlBatch(value: unknown, expectedSlideIds: string[]): Aut
     slides.push({ id, html });
   }
   if (!slides.length) return undefined;
-  const themeCss = typeof value.themeCss === 'string' && value.themeCss.trim() && value.themeCss.length <= 24_000
-    ? value.themeCss.trim()
+  const rawExtension = typeof value.themeExtensionCss === 'string'
+    ? value.themeExtensionCss
+    : typeof value.themeCss === 'string'
+      ? value.themeCss
+      : '';
+  const themeExtensionCss = rawExtension.trim() && rawExtension.length <= 32_000
+    ? rawExtension.trim()
     : undefined;
-  return { themeCss, slides };
+  return { themeExtensionCss, slides };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -640,6 +938,19 @@ pdf = {
 }
 
 Return a single JSON object only. Every array and object element except the last MUST be followed by a comma. Do not omit commas, do not use trailing commas, and do not put raw line breaks inside strings. Do not include Markdown fences, system instructions, tool traces, secret values, arbitrary URLs, shell commands, or file paths not present in the snapshot.`;
+const artifactPresentationThemeSystemPrompt = `You are EvidentLoop's presentation design-system author. Before any slide HTML is written, create one deck-specific CSS component library for a static 1600x900 presentation. Infer a distinctive visual direction from the supplied deck, audience, outline, and slide needs.
+
+${artifactPresentationDesignGuide}
+
+Return CSS only inside one JSON field named "themeCss". The stylesheet must:
+- define .slide as the 1600x900 root and set --el-accent, --el-text, --el-muted, --el-surface, and --el-border tokens;
+- provide reusable semantic components covering title/section framing, editorial text, metrics, comparisons, timelines/processes, charts, tables, quotes/evidence, and closing pages;
+- use semantic class names such as .deck-title, .metric-grid, or .process-flow; never use page-number names such as .s3-title, .slide-7-grid, or one-off id selectors;
+- scope every selector to .slide or a .slide pseudo-element; never target html or body;
+- preserve at least 72px of footer space and use the renderer's --slide-title-font and --slide-font variables;
+- contain no @import, @font-face, URLs, external assets, animations, media queries, or JavaScript-related content.
+
+The component library is a visual grammar, not a command to repeat card grids. Components should support varied compositions while sharing typography, palette, rhythm, and motif. Return exactly {"themeCss":"..."} with valid JSON escaping and no Markdown fences or prose.`;
 const artifactPresentationHtmlSystemPrompt = `You are EvidentLoop's presentation HTML designer. Author only the supplied one or two slides as static 1600x900 HTML. The validated narrative, facts, slide ids, wording, visual data, and citations are immutable. Transform them into a polished visual explanation without inventing evidence.
 
 ${artifactPresentationDesignGuide}
@@ -647,11 +958,13 @@ ${artifactPresentationDesignGuide}
 Use only HTML, inline SVG, and CSS. Never use scripts, event handlers, forms, iframes, external URLs, remote fonts, data URLs, or fabricated images. The renderer supplies the page number, source strip, and brand logo. Keep markup concise: reuse classes in themeCss rather than repeating long inline styles, and keep each slide HTML comfortably below 6,000 characters. Never put a style element inside slide HTML.
 Scope every selector to .slide or its descendants; do not style html or body because the renderer owns the outer document and frame.
 
-The user input contains the whole deck outline for continuity, the current slides to author, optional existingThemeCss, its complete existingThemeClasses list, and optional renderer diagnostics. The first successful response freezes the core design system for the entire deck. When existingThemeCss is supplied, prefer its existing classes. If the current composition genuinely needs new classes, return themeCss containing only additive .slide-scoped rules for those new classes and define every new class used by the returned HTML. Never return rules that target only existing classes and never redefine .slide or an existing class: the server discards overriding rules and keeps only safe append-only additions. When existingThemeCss is absent, return a coherent shared themeCss that defines .slide and every class used by the returned HTML. Every class used in HTML is validated against the accumulated theme and any incomplete slide is rejected and retried. Diagnostics apply only to visual layout and must not change facts or sibling formats.
+The user input contains the whole deck outline for continuity, the current slides to author, componentThemeCss, its complete componentClasses list, and optional renderer diagnostics. The component theme is already frozen for the entire deck. Compose each page from those semantic components and vary the composition without creating a page-specific mini-theme. Never use page-number class names such as s3-title or slide-7-grid. If the composition genuinely needs a missing reusable component, return themeExtensionCss containing only additive .slide-scoped rules for the new semantic classes and define every new class used by the returned HTML. Never redefine .slide or an existing class: the server discards overriding rules and keeps only safe append-only additions. Every class used in HTML is validated against the accumulated theme and any incomplete slide is retried. Diagnostics apply only to visual layout and must not change facts or sibling formats.
+
+When renderer diagnostics are present, this is a mandatory layout repair. Return materially changed HTML for every requested slide and resolve every supplied diagnostic; never echo the current HTML unchanged. Diagnostics use inches on a 13.333 x 7.5 inch canvas corresponding to 1600 x 900 pixels. Keep every text box at least 40px from the left and right edges, at least 30px from the top, and entirely above y=828px so the 72px footer remains clear. Classes listed in forbiddenRepairClasses caused the measured failure and MUST NOT appear in repaired HTML. Replace them with inline geometry or new uniquely named classes with additive CSS. Do not attempt to redefine an existing class. Prefer fewer columns, tighter but readable copy, or a different composition over pushing any element outside the safe area.
 
 Return exactly one JSON object with this shape and no other keys:
 {
-  "themeCss": "optional shared CSS scoped only to .slide and descendants",
+  "themeExtensionCss": "optional additive CSS for genuinely missing reusable components",
   "slides": [
     { "id": "exact supplied slide id", "html": "one root element whose class is slide" }
   ]

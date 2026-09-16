@@ -242,6 +242,8 @@ export type RendererResult = {
 
 export type ArtifactLayoutBox = {
   id: string;
+  /** Human-readable DOM identity used only for actionable renderer diagnostics. */
+  debugLabel?: string;
   page: number;
   kind: 'container' | 'text' | 'image' | 'table' | 'chart' | 'other';
   x: number;

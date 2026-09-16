@@ -306,29 +306,32 @@ function validateLayoutManifest(
     }
     for (const box of page.boxes) {
       if (box.x < 0 || box.y < 0 || box.x + box.width > page.width + 0.01 || box.y + box.height > page.height + 0.01) {
-        diagnostics.push(`Layout box ${box.id} exceeds page ${page.page} bounds`);
+        diagnostics.push(`Layout box ${describeLayoutBox(box)} exceeds page ${page.page} bounds`);
       }
+      const clippedContentRootX = box.id.endsWith('-content-root')
+        && (box.overflowX === 'hidden' || box.overflowX === 'clip');
+      const clippedContentRootY = box.id.endsWith('-content-root')
+        && (box.overflowY === 'hidden' || box.overflowY === 'clip');
       if (
-        box.overflowX !== 'visible'
+        !clippedContentRootX
+        && box.overflowX !== 'visible'
         && box.scrollWidth !== undefined
         && box.clientWidth !== undefined
         && box.scrollWidth > box.clientWidth + 1
       ) {
-        diagnostics.push(`Layout box ${box.id} reports horizontal clipping (${box.scrollWidth} > ${box.clientWidth})`);
+        diagnostics.push(`Layout box ${describeLayoutBox(box)} reports horizontal clipping (${box.scrollWidth} > ${box.clientWidth})`);
       }
-      const verticalOverflowTolerance = box.id.endsWith('-content-root') && box.clientHeight !== undefined
-        ? Math.max(1, box.clientHeight * 0.05)
-        : 1;
       if (
-        box.overflowY !== 'visible'
+        !clippedContentRootY
+        && box.overflowY !== 'visible'
         && box.scrollHeight !== undefined
         && box.clientHeight !== undefined
-        && box.scrollHeight > box.clientHeight + verticalOverflowTolerance
+        && box.scrollHeight > box.clientHeight + 1
       ) {
-        diagnostics.push(`Layout box ${box.id} reports vertical clipping (${box.scrollHeight} > ${box.clientHeight})`);
+        diagnostics.push(`Layout box ${describeLayoutBox(box)} reports vertical clipping (${box.scrollHeight} > ${box.clientHeight})`);
       }
       if (box.estimatedTextHeight !== undefined && box.estimatedTextHeight > box.height * 1.05) {
-        diagnostics.push(`Layout box ${box.id} has estimated text height ${Math.round(box.estimatedTextHeight)} above its ${Math.round(box.height)} box; clipping check is heuristic`);
+        diagnostics.push(`Layout box ${describeLayoutBox(box)} has estimated text height ${Math.round(box.estimatedTextHeight)} above its ${Math.round(box.height)} box; clipping check is heuristic`);
       }
     }
     const undersizedText = page.boxes.filter((box) =>
@@ -353,19 +356,24 @@ function validateLayoutManifest(
       )
     );
     if (unsafeText.length) {
-      diagnostics.push(`Layout page ${page.page} places ${unsafeText.length} text element(s) outside the title/body safe area or inside the footer zone`);
+      diagnostics.push(`Layout page ${page.page} places text outside the title/body safe area or inside the footer zone: ${unsafeText.map(describeLayoutBox).join('; ')}`);
     }
     const visible = page.boxes.filter((box) => box.kind !== 'container');
     for (let left = 0; left < visible.length; left += 1) {
       for (let right = left + 1; right < visible.length; right += 1) {
         const overlap = overlapRatio(visible[left]!, visible[right]!);
         if (overlap >= 0.8) {
-          diagnostics.push(`Layout boxes ${visible[left]!.id} and ${visible[right]!.id} have high overlap (${Math.round(overlap * 100)}%); visual collision detection is heuristic`);
+          diagnostics.push(`Layout boxes ${describeLayoutBox(visible[left]!)} and ${describeLayoutBox(visible[right]!)} have high overlap (${Math.round(overlap * 100)}%); visual collision detection is heuristic`);
         }
       }
     }
   }
   return diagnostics;
+}
+
+function describeLayoutBox(box: ArtifactLayoutBox) {
+  const identity = box.debugLabel ? `${box.id} [${box.debugLabel}]` : box.id;
+  return `${identity} at x=${box.x.toFixed(2)}, y=${box.y.toFixed(2)}, w=${box.width.toFixed(2)}, h=${box.height.toFixed(2)}`;
 }
 
 export function validatePresentationVisualDesign(spec: ArtifactSpec) {
@@ -510,6 +518,7 @@ async function inspectPptxHtmlPage(page: any, pageNumber: number): Promise<Artif
     const content = document.querySelector<HTMLElement>('#slide-content');
     const boxes: Array<{
       id: string;
+      debugLabel?: string;
       page: number;
       kind: 'container' | 'text' | 'image' | 'table' | 'chart' | 'other';
       x: number;
@@ -577,8 +586,14 @@ async function inspectPptxHtmlPage(page: any, pageNumber: number): Promise<Artif
             ? 'chart'
             : 'text';
       const area = element.closest('#slide-content') ? 'content' : 'frame';
+      const classNames = typeof element.className === 'string'
+        ? element.className.trim().split(/\s+/).filter(Boolean).slice(0, 4)
+        : [];
+      const selector = `${tag}${element.id ? `#${element.id}` : ''}${classNames.map((className) => `.${className}`).join('')}`;
+      const text = element.textContent?.trim().replace(/\s+/g, ' ').slice(0, 80);
       boxes.push({
         id: `slide-${input.pageNumber}-${area}-${index + 1}`,
+        debugLabel: text ? `${selector} “${text}”` : selector,
         page: input.pageNumber,
         kind,
         x: rect.x * scaleX,
