@@ -24,7 +24,9 @@ export function observeGenerationDraftRevision(state: GenerationDraftRevision, s
   return {
     ...state,
     observedSpecJson: specJson,
-    draftRevision: specJson === state.persistedSpecJson ? state.draftRevision : nextDraftRevision(state.draftRevision)
+    draftRevision: specJson === state.persistedSpecJson
+      ? state.persistedRevision
+      : nextDraftRevision(state.draftRevision)
   };
 }
 

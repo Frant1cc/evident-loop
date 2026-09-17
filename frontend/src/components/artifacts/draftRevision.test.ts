@@ -34,3 +34,11 @@ test('generation revision records stay isolated when an older save resolves afte
   assert.equal(hasUnpersistedDraftChanges(second), true);
   assert.equal(second.generationId, 'generation-b');
 });
+
+test('reverting to the persisted spec clears the dirty revision', () => {
+  const baseline = createGenerationDraftRevision('generation-a', '{"title":"saved"}');
+  const changed = observeGenerationDraftRevision(baseline, '{"title":"changed"}');
+  const reverted = observeGenerationDraftRevision(changed, '{"title":"saved"}');
+  assert.equal(hasUnpersistedDraftChanges(changed), true);
+  assert.equal(hasUnpersistedDraftChanges(reverted), false);
+});

@@ -13,31 +13,38 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div class="longform-preview h-full overflow-y-auto">
-    <p class="m-0 mb-4 text-center text-[10px] text-[var(--agent-text-muted)]">连续阅读视图，分页以实际生成结果为准</p>
+  <div class="longform-preview min-h-full pb-8">
+    <div class="mx-auto mb-3 flex max-w-[760px] items-center justify-between px-1 text-[10px] text-[var(--agent-text-muted)]">
+      <span>连续阅读视图</span>
+      <span>分页以生成文件为准</span>
+    </div>
 
     <div
-      class="mx-auto max-w-[680px] rounded-lg border border-[var(--agent-border)] bg-white px-12 py-10 shadow-sm dark:bg-[#1e1e1e]"
+      class="mx-auto min-h-[780px] max-w-[760px] rounded-xl border border-[var(--agent-border)] bg-white px-10 py-12 shadow-[0_18px_50px_color-mix(in_oklch,var(--agent-text),transparent_90%)] dark:bg-[#1e1e1e] sm:px-14 lg:px-16"
     >
       <div
         v-for="block in blocks"
         :key="block.id"
-        class="block-item cursor-pointer rounded-sm transition-colors"
+        class="block-item -mx-3 cursor-pointer rounded-md px-3 py-1.5 transition-[background-color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--agent-focus-ring)]"
         :class="block.id === selectedBlockId
-          ? 'ring-2 ring-[var(--agent-selected-border)]'
-          : 'hover:bg-[var(--agent-surface-muted)]/30'"
+          ? 'bg-[var(--agent-selected-bg)]/75 shadow-[inset_3px_0_0_var(--agent-text)]'
+          : 'hover:bg-[var(--agent-surface-muted)]/55'"
+        role="button"
+        tabindex="0"
         :aria-current="block.id === selectedBlockId ? 'true' : undefined"
         @click="emit('update:selectedBlockId', block.id)"
+        @keydown.enter.prevent="emit('update:selectedBlockId', block.id)"
+        @keydown.space.prevent="emit('update:selectedBlockId', block.id)"
       >
         <h1
           v-if="block.type === 'heading' && block.level === 1"
-          class="mb-3 mt-6 text-2xl font-bold text-[var(--agent-text)] first:mt-0"
+          class="mb-3 mt-6 text-2xl font-semibold tracking-[-0.02em] text-[var(--agent-text)] first:mt-0"
         >
           {{ block.text || '（空标题）' }}
         </h1>
         <h2
           v-else-if="block.type === 'heading' && block.level === 2"
-          class="mb-2 mt-5 text-xl font-bold text-[var(--agent-text)] first:mt-0"
+          class="mb-2 mt-5 text-xl font-semibold tracking-[-0.015em] text-[var(--agent-text)] first:mt-0"
         >
           {{ block.text || '（空标题）' }}
         </h2>
@@ -50,21 +57,21 @@ const emit = defineEmits<{
 
         <p
           v-else-if="block.type === 'paragraph'"
-          class="mb-3 text-sm leading-relaxed text-[var(--agent-text)]"
+          class="mb-3 text-[15px] leading-7 text-[var(--agent-text)]"
         >
           {{ block.text || '（空段落）' }}
         </p>
 
         <ul
           v-else-if="block.type === 'bulletList'"
-          class="mb-3 list-disc pl-6 text-sm leading-relaxed text-[var(--agent-text)]"
+          class="mb-3 list-disc pl-6 text-[15px] leading-7 text-[var(--agent-text)]"
         >
           <li v-for="(item, i) in block.items" :key="i">{{ item }}</li>
         </ul>
 
         <ol
           v-else-if="block.type === 'numberedList'"
-          class="mb-3 list-decimal pl-6 text-sm leading-relaxed text-[var(--agent-text)]"
+          class="mb-3 list-decimal pl-6 text-[15px] leading-7 text-[var(--agent-text)]"
         >
           <li v-for="(item, i) in block.items" :key="i">{{ item }}</li>
         </ol>

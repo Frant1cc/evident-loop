@@ -101,47 +101,21 @@ const blockTypeLabel = computed(() => {
 
 <template>
   <div class="longform-editor grid h-full grid-rows-[auto_minmax(0,1fr)] gap-3">
-    <div class="flex items-center gap-2 border-b border-[var(--agent-border)] pb-3">
-      <span class="text-sm font-semibold text-[var(--agent-text-muted)]">{{ blockTypeLabel || '选择内容块' }}</span>
-
-      <button
-        v-if="editable && selectedBlock"
-        type="button"
-        class="inline-flex h-7 items-center gap-1 rounded border border-[var(--agent-border)] bg-[var(--agent-surface)] px-2 text-xs font-bold text-[var(--agent-text)] transition-colors hover:bg-[var(--agent-surface-muted)] disabled:opacity-50"
-        :disabled="!canMoveUp"
-        aria-label="上移内容块"
-        @click="emit('move-up', selectedBlock.id)"
-      >
-        <PhCaretUp :size="14" weight="bold" aria-hidden="true" />
-      </button>
-
-      <button
-        v-if="editable && selectedBlock"
-        type="button"
-        class="inline-flex h-7 items-center gap-1 rounded border border-[var(--agent-border)] bg-[var(--agent-surface)] px-2 text-xs font-bold text-[var(--agent-text)] transition-colors hover:bg-[var(--agent-surface-muted)] disabled:opacity-50"
-        :disabled="!canMoveDown"
-        aria-label="下移内容块"
-        @click="emit('move-down', selectedBlock.id)"
-      >
-        <PhCaretDown :size="14" weight="bold" aria-hidden="true" />
-      </button>
-
-      <button
-        v-if="editable && selectedBlock"
-        type="button"
-        class="inline-flex h-7 items-center gap-1 rounded border border-destructive/30 bg-[var(--agent-surface)] px-2 text-xs font-bold text-destructive transition-colors hover:bg-destructive/5"
-        aria-label="删除内容块"
-        @click="emit('delete-block', selectedBlock.id)"
-      >
-        <PhTrash :size="14" weight="bold" aria-hidden="true" />
-      </button>
-
-      <div v-if="editable" class="relative ml-auto">
+    <div class="grid gap-2.5 border-b border-[var(--agent-border)] pb-3">
+      <div class="flex items-center justify-between gap-3">
+        <div>
+          <strong class="block text-xs font-semibold text-[var(--agent-text)]">{{ blockTypeLabel || '选择内容块' }}</strong>
+          <span class="mt-0.5 block text-[10px] text-[var(--agent-text-muted)]">
+            {{ selectedIndex >= 0 ? `第 ${selectedIndex + 1} 项，共 ${blocks.length} 项` : '从左侧文档结构中选择' }}
+          </span>
+        </div>
+        <div v-if="editable" class="relative">
         <select
-          class="h-7 appearance-none rounded bg-[var(--agent-selected-bg)] pl-2 pr-6 text-xs font-bold text-[var(--agent-selected-text)]"
+          aria-label="添加内容块"
+          class="h-8 appearance-none rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface)] pl-2.5 pr-7 text-xs font-semibold text-[var(--agent-text)] transition-colors hover:bg-[var(--agent-surface-muted)]"
           @change="emit('add-block', ($event.target as HTMLSelectElement).value as LongformBlock['type'], selectedBlock?.id); ($event.target as HTMLSelectElement).value = ''"
         >
-          <option value="" disabled selected>添加内容块</option>
+          <option value="" disabled selected>新建内容块</option>
           <option value="heading">标题</option>
           <option value="paragraph">段落</option>
           <option value="bulletList">无序列表</option>
@@ -150,10 +124,38 @@ const blockTypeLabel = computed(() => {
           <option value="pageBreak">分页符</option>
         </select>
         <PhPlus :size="14" weight="bold" class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2" aria-hidden="true" />
+        </div>
+      </div>
+
+      <div v-if="editable && selectedBlock" class="flex items-center gap-1">
+        <button
+          type="button"
+          class="editor-icon-button"
+          :disabled="!canMoveUp"
+          aria-label="上移内容块"
+          title="上移"
+          @click="emit('move-up', selectedBlock.id)"
+        ><PhCaretUp :size="14" weight="bold" aria-hidden="true" /></button>
+        <button
+          type="button"
+          class="editor-icon-button"
+          :disabled="!canMoveDown"
+          aria-label="下移内容块"
+          title="下移"
+          @click="emit('move-down', selectedBlock.id)"
+        ><PhCaretDown :size="14" weight="bold" aria-hidden="true" /></button>
+        <span class="mx-1 h-4 w-px bg-[var(--agent-border)]" aria-hidden="true" />
+        <button
+          type="button"
+          class="editor-icon-button text-destructive hover:bg-destructive/5"
+          aria-label="删除内容块"
+          title="删除"
+          @click="emit('delete-block', selectedBlock.id)"
+        ><PhTrash :size="14" weight="bold" aria-hidden="true" /></button>
       </div>
     </div>
 
-    <div class="min-h-0 space-y-3 overflow-y-auto px-1">
+    <div class="app-scrollbar min-h-0 space-y-4 overflow-y-auto px-0.5 pb-5 pr-1.5">
       <div v-if="!selectedBlock" class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-4 py-8 text-center text-sm text-[var(--agent-text-muted)]">
         从左侧选择或添加内容块
       </div>
@@ -369,3 +371,55 @@ const blockTypeLabel = computed(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.editor-icon-button {
+  display: grid;
+  width: 1.875rem;
+  height: 1.875rem;
+  place-items: center;
+  border-radius: 0.375rem;
+  color: var(--agent-text-muted);
+  transition: background-color 140ms ease, color 140ms ease, transform 140ms ease;
+}
+
+.editor-icon-button:hover:not(:disabled) {
+  background: var(--agent-surface-muted);
+  color: var(--agent-text);
+}
+
+.editor-icon-button:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.editor-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.3;
+}
+
+.editor-icon-button:focus-visible,
+.longform-editor :is(input, select, textarea):focus-visible {
+  outline: 2px solid var(--agent-focus-ring);
+  outline-offset: 1px;
+}
+
+.longform-editor :is(input, select, textarea) {
+  min-height: 2.25rem;
+  background: var(--agent-bg);
+  line-height: 1.5;
+  transition: border-color 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
+}
+
+.longform-editor textarea {
+  resize: vertical;
+}
+
+.longform-editor :is(input, select, textarea):hover {
+  border-color: color-mix(in oklch, var(--agent-text-muted), transparent 40%);
+}
+
+.longform-editor :is(input, select, textarea):focus {
+  border-color: var(--agent-text-muted);
+  box-shadow: 0 0 0 3px var(--agent-focus-ring);
+}
+</style>

@@ -1,5 +1,13 @@
 <script setup lang="ts">
-import { PhX, PhClockCounterClockwise, PhGear, PhFloppyDisk } from '@phosphor-icons/vue';
+import {
+  PhArrowLeft,
+  PhCheckCircle,
+  PhCircleNotch,
+  PhClockCounterClockwise,
+  PhFileText,
+  PhGear,
+  PhWarningCircle
+} from '@phosphor-icons/vue';
 import { computed } from 'vue';
 import type { DraftSaveState } from './documentEditor';
 
@@ -29,66 +37,77 @@ const saveStateLabel = computed(() => {
 });
 
 const saveStateColor = computed(() => {
-  if (props.saveState === 'saved') return 'text-green-700 dark:text-green-400';
-  if (props.saveState === 'error') return 'text-destructive';
+  if (props.saveState === 'saved') return 'text-emerald-700 dark:text-emerald-400';
+  if (props.saveState === 'error') return 'bg-destructive/10 text-destructive';
+  if (props.saveState === 'dirty') return 'bg-amber-500/10 text-amber-800 dark:text-amber-300';
   return 'text-[var(--agent-text-muted)]';
 });
 </script>
 
 <template>
-  <header class="flex h-14 items-center justify-between gap-4 border-b border-[var(--agent-border)] bg-[var(--agent-surface)] px-4">
-    <div class="flex min-w-0 flex-1 items-center gap-3">
+  <header class="flex h-16 shrink-0 items-center justify-between gap-4 border-b border-[var(--agent-border)] bg-[var(--agent-surface)] px-3 sm:px-4">
+    <div class="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
       <button
         type="button"
-        class="grid size-8 shrink-0 place-items-center rounded text-[var(--agent-text-muted)] transition-colors hover:bg-[var(--agent-surface-muted)] hover:text-[var(--agent-text)]"
-        aria-label="关闭工作台"
+        class="grid size-9 shrink-0 place-items-center rounded-md text-[var(--agent-text-muted)] transition-[background-color,color,transform] hover:bg-[var(--agent-surface-muted)] hover:text-[var(--agent-text)] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--agent-focus-ring)]"
+        aria-label="返回研究工作台"
+        title="返回研究工作台"
         @click="emit('close')"
       >
-        <PhX :size="20" weight="bold" aria-hidden="true" />
+        <PhArrowLeft :size="19" weight="bold" aria-hidden="true" />
       </button>
 
-      <div class="min-w-0 flex-1">
-        <h1 class="m-0 truncate text-sm font-bold text-[var(--agent-text)]" :title="title">{{ title }}</h1>
-        <div class="flex items-center gap-2 text-xs">
-          <span class="text-[var(--agent-text-muted)]">v{{ version }}</span>
-          <span class="text-[var(--agent-text-muted)]">·</span>
-          <span :class="saveStateColor" role="status">
-            <PhFloppyDisk v-if="saveState === 'saving'" :size="12" class="inline animate-pulse" aria-hidden="true" />
-            {{ saveStateLabel }}
-          </span>
+      <div class="grid size-9 shrink-0 place-items-center rounded-lg bg-[var(--agent-primary)] text-[var(--agent-primary-text)] max-sm:hidden">
+        <PhFileText :size="18" weight="fill" aria-hidden="true" />
+      </div>
+
+      <div class="flex min-w-0 flex-1 items-center gap-2.5">
+        <div class="min-w-0">
+          <h1 class="m-0 truncate text-sm font-semibold tracking-[-0.01em] text-[var(--agent-text)]" :title="title">{{ title }}</h1>
+          <p class="m-0 mt-0.5 text-[10px] text-[var(--agent-text-muted)]">草稿版本 {{ version }}</p>
         </div>
+        <span class="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[10px] font-medium" :class="saveStateColor" role="status">
+          <PhCircleNotch v-if="saveState === 'saving'" :size="11" class="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+          <PhWarningCircle v-else-if="saveState === 'error' || saveState === 'dirty'" :size="11" weight="fill" aria-hidden="true" />
+          <PhCheckCircle v-else :size="11" weight="fill" aria-hidden="true" />
+          <span class="max-sm:hidden">{{ saveStateLabel }}</span>
+        </span>
       </div>
     </div>
 
-    <div class="flex items-center gap-2">
+    <div class="flex shrink-0 items-center gap-1.5 sm:gap-2">
       <button
         type="button"
-        class="inline-flex h-8 items-center gap-1.5 rounded border border-[var(--agent-border)] bg-[var(--agent-surface)] px-3 text-xs font-bold text-[var(--agent-text)] transition-colors hover:bg-[var(--agent-surface-muted)]"
+        class="inline-flex h-9 items-center gap-1.5 rounded-md px-2.5 text-xs font-semibold text-[var(--agent-text-muted)] transition-[background-color,color,transform] hover:bg-[var(--agent-surface-muted)] hover:text-[var(--agent-text)] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--agent-focus-ring)] sm:px-3"
         aria-label="版本历史"
+        title="版本历史"
         @click="emit('open-versions')"
       >
-        <PhClockCounterClockwise :size="14" weight="bold" aria-hidden="true" />
-        <span class="max-sm:hidden">版本</span>
+        <PhClockCounterClockwise :size="16" weight="bold" aria-hidden="true" />
+        <span class="max-md:hidden">版本</span>
       </button>
 
       <button
         type="button"
-        class="inline-flex h-8 items-center gap-1.5 rounded border border-[var(--agent-border)] bg-[var(--agent-surface)] px-3 text-xs font-bold text-[var(--agent-text)] transition-colors hover:bg-[var(--agent-surface-muted)]"
+        class="inline-flex h-9 items-center gap-1.5 rounded-md px-2.5 text-xs font-semibold text-[var(--agent-text-muted)] transition-[background-color,color,transform] hover:bg-[var(--agent-surface-muted)] hover:text-[var(--agent-text)] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--agent-focus-ring)] sm:px-3"
         aria-label="设置"
+        title="设置"
         @click="emit('open-settings')"
       >
-        <PhGear :size="14" weight="bold" aria-hidden="true" />
-        <span class="max-sm:hidden">设置</span>
+        <PhGear :size="16" weight="bold" aria-hidden="true" />
+        <span class="max-md:hidden">设置</span>
       </button>
 
       <button
         v-if="editable"
         type="button"
-        class="inline-flex h-8 items-center gap-1.5 rounded bg-[var(--agent-selected-bg)] px-3 text-xs font-bold text-[var(--agent-selected-text)] transition-opacity hover:opacity-80 disabled:opacity-50"
+        class="inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-md bg-[var(--agent-primary)] px-3 text-xs font-semibold text-[var(--agent-primary-text)] shadow-sm transition-[opacity,transform] hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--agent-focus-ring)] sm:px-4"
         :disabled="busy || saveState === 'saving'"
+        aria-keyshortcuts="Control+Enter Meta+Enter"
+        title="生成文件（⌘ Enter）"
         @click="emit('generate')"
       >
-        生成
+        生成文件
       </button>
     </div>
   </header>

@@ -125,6 +125,31 @@ export type PdfReportPlan = {
   targetPageCount: number;
 };
 
+export type ArtifactLongformBlock =
+  | { id: string; type: 'heading'; level: 1 | 2 | 3; text: string; citations: string[] }
+  | { id: string; type: 'paragraph'; text: string; citations: string[] }
+  | { id: string; type: 'bulletList'; items: string[]; citations: string[] }
+  | { id: string; type: 'numberedList'; items: string[]; citations: string[] }
+  | { id: string; type: 'table'; headers: string[]; rows: string[][]; citations: string[] }
+  | { id: string; type: 'pageBreak' };
+
+export type ArtifactLongformPageSettings = {
+  size: 'A4' | 'Letter';
+  orientation: 'portrait' | 'landscape';
+  marginTop: number;
+  marginBottom: number;
+  marginLeft: number;
+  marginRight: number;
+  header?: string;
+  footer?: string;
+  pageNumbers: boolean;
+};
+
+export type ArtifactLongformState = {
+  blocks: ArtifactLongformBlock[];
+  pageSettings: ArtifactLongformPageSettings;
+};
+
 export type ArtifactBranding = {
   primaryColor?: string;
   logoUrl?: string;
@@ -140,6 +165,8 @@ export type ArtifactSpec = {
   brief: ResearchBrief;
   presentation: PresentationPlan;
   pdf: PdfReportPlan;
+  /** Exact editable long-form state. Older generations are hydrated from pdf. */
+  longform?: ArtifactLongformState;
   /** Files the user asked to render. Outline planning may still keep both plans. */
   formats: ArtifactFormat[];
 };

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { PhCaretLeft, PhCaretRight } from '@phosphor-icons/vue';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import type { ArtifactSlide } from '../../types/artifacts';
 
@@ -13,9 +14,20 @@ const props = defineProps<{
   executiveSummary?: string;
 }>();
 
+const emit = defineEmits<{
+  'update:currentSlideId': [id: string];
+}>();
+
 const currentSlide = computed(() => {
   return props.slides.find(s => s.id === props.currentSlideId) ?? props.slides[0];
 });
+
+const currentIndex = computed(() => props.slides.findIndex(slide => slide.id === currentSlide.value?.id));
+
+function selectOffset(offset: number) {
+  const nextSlide = props.slides[currentIndex.value + offset];
+  if (nextSlide) emit('update:currentSlideId', nextSlide.id);
+}
 
 const previewCanvas = ref<HTMLElement>();
 const previewScale = ref(0.4);
@@ -94,16 +106,17 @@ function escapeHtml(value: string) {
 </script>
 
 <template>
-  <div class="presentation-preview flex h-full flex-col gap-3">
-    <p class="m-0 text-center text-[10px] text-[var(--agent-text-muted)]">
-      {{ currentSlide?.html ? '16:9 同源样式预览' : '统一兼容布局预览' }}
-    </p>
+  <div class="presentation-preview flex min-h-full flex-col items-center justify-center gap-4 py-2">
+    <div class="flex w-full max-w-[920px] items-center justify-between px-1 text-[10px] text-[var(--agent-text-muted)]">
+      <span>{{ currentSlide?.html ? '16:9 同源样式' : '16:9 兼容布局' }}</span>
+      <span>{{ currentSlide?.title || '未命名页面' }}</span>
+    </div>
 
-    <div class="mx-auto w-full" style="max-width: 640px;">
+    <div class="mx-auto w-full max-w-[920px]">
       <!-- 16:9 canvas -->
       <div
         ref="previewCanvas"
-        class="relative w-full overflow-hidden rounded-lg border border-[var(--agent-border)] bg-[#f7f5f0] shadow-lg"
+        class="relative w-full overflow-hidden rounded-xl border border-[var(--agent-border)] bg-[#f7f5f0] shadow-[0_18px_50px_color-mix(in_oklch,var(--agent-text),transparent_88%)]"
         style="aspect-ratio: 16/9;"
         role="img"
         :aria-label="`幻灯片预览：${currentSlide?.title ?? '无内容'}`"
@@ -126,19 +139,25 @@ function escapeHtml(value: string) {
       </div>
     </div>
 
-    <div class="flex flex-wrap justify-center gap-1.5 overflow-y-auto">
+    <div class="flex items-center gap-2 rounded-lg border border-[var(--agent-border)] bg-[var(--agent-surface)] p-1 shadow-sm">
       <button
-        v-for="(slide, index) in slides"
-        :key="slide.id"
         type="button"
-        class="flex h-12 w-20 items-center justify-center rounded border text-center text-[9px] transition-all"
-        :class="slide.id === currentSlideId
-          ? 'border-[var(--agent-selected-border)] bg-[var(--agent-selected-bg)] text-[var(--agent-selected-text)] font-bold'
-          : 'border-[var(--agent-border)] bg-[var(--agent-surface)] text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface-muted)]'"
-        :aria-current="slide.id === currentSlideId ? 'true' : undefined"
-        @click="$emit('update:currentSlideId', slide.id)"
+        class="grid size-8 place-items-center rounded-md text-[var(--agent-text-muted)] transition-[background-color,color,transform] hover:bg-[var(--agent-surface-muted)] hover:text-[var(--agent-text)] active:scale-95 disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--agent-focus-ring)]"
+        :disabled="currentIndex <= 0"
+        aria-label="上一页"
+        @click="selectOffset(-1)"
       >
-        <div class="truncate px-1">{{ index + 1 }}. {{ slide.title || '…' }}</div>
+        <PhCaretLeft :size="15" weight="bold" aria-hidden="true" />
+      </button>
+      <span class="min-w-16 text-center font-mono text-[11px] font-semibold text-[var(--agent-text)]">{{ currentIndex + 1 }} / {{ slides.length }}</span>
+      <button
+        type="button"
+        class="grid size-8 place-items-center rounded-md text-[var(--agent-text-muted)] transition-[background-color,color,transform] hover:bg-[var(--agent-surface-muted)] hover:text-[var(--agent-text)] active:scale-95 disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--agent-focus-ring)]"
+        :disabled="currentIndex < 0 || currentIndex >= slides.length - 1"
+        aria-label="下一页"
+        @click="selectOffset(1)"
+      >
+        <PhCaretRight :size="15" weight="bold" aria-hidden="true" />
       </button>
     </div>
   </div>

@@ -21,9 +21,7 @@ import {
 } from '../api/research';
 import {
   cancelResearchArtifact,
-  confirmResearchArtifactImageUse,
   deleteResearchArtifactGeneration,
-  fetchResearchArtifactSourceImage,
   getResearchArtifactGeneration,
   listResearchArtifactDraftRequests,
   listResearchArtifactGenerations,
@@ -905,42 +903,6 @@ async function workbenchDeleteGeneration(id: string) {
   }
 }
 
-async function workbenchConfirmConsent(imageUrl: string, sourceId?: string) {
-  const generation = activeWorkbenchGeneration.value;
-  if (!generation) return;
-
-  try {
-    await confirmResearchArtifactImageUse(generation.id, imageUrl, sourceId);
-    const updated = await getResearchArtifactGeneration(generation.id);
-    const generationResult = normalizeGeneration(updated.generation);
-    upsert({ value: generations.value }, generationResult);
-    activeWorkbenchGeneration.value = generationResult;
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : '确认失败';
-  }
-}
-
-async function workbenchFetchSourceImage() {
-  const generation = activeWorkbenchGeneration.value;
-  const consent = generation?.imageConsents?.[0];
-  if (!generation || !consent) {
-    error.value = '请先确认图片来源和使用权限';
-    return;
-  }
-
-  try {
-    await fetchResearchArtifactSourceImage({
-      generationId: generation.id,
-      imageUrl: consent.imageUrl,
-      consentId: consent.id,
-      ...(consent.sourceId ? { sourceId: consent.sourceId } : {})
-    });
-    error.value = '';
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '获取来源图片失败';
-  }
-}
-
 function syncArtifactPolling() {
   const shouldPoll = generations.value.some((generation) =>
     generation.status === 'rendering'
@@ -1155,8 +1117,6 @@ const allGenerations = computed(() => generations.value);
       @preview-output="previewOutput = $event"
       @select-generation="workbenchSelectGeneration"
       @delete-generation="workbenchDeleteGeneration"
-      @confirm-consent="workbenchConfirmConsent"
-      @fetch-source-image="workbenchFetchSourceImage"
     />
 
     <DocumentPreviewDialog :output="previewOutput" @close="previewOutput = undefined" />

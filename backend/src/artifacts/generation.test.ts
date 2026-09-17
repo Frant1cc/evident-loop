@@ -968,6 +968,34 @@ test('soft target preferences normalize to substantive fallback counts without f
   assert.equal(edited?.spec.pdf.targetPageCount, draft.spec.pdf.sections.length + 2);
 });
 
+test('editable longform state and page settings survive a draft round trip', async () => {
+  const conversation = createResearchConversation();
+  createResearchMessage({ conversationId: conversation.id, role: 'user', content: '保存文稿设置', status: 'complete' });
+  const service = createArtifactGenerationService({ model: 'test', agent: createArtifactAgent({ model: 'test' }) });
+  const draft = await service.createDraft(conversation.id);
+  const longform = {
+    blocks: [
+      { id: 'heading-1', type: 'heading' as const, level: 1 as const, text: '自定义标题', citations: [] },
+      { id: 'break-1', type: 'pageBreak' as const }
+    ],
+    pageSettings: {
+      size: 'Letter' as const,
+      orientation: 'landscape' as const,
+      marginTop: 18,
+      marginBottom: 19,
+      marginLeft: 20,
+      marginRight: 21,
+      header: '内部资料',
+      footer: 'EvidentLoop',
+      pageNumbers: false
+    }
+  };
+
+  const updated = service.updateDraft(draft.id, { ...draft.spec, longform });
+  assert.deepEqual(updated?.spec.longform, longform);
+  assert.deepEqual(service.get(draft.id)?.spec.longform, longform);
+});
+
 test('successful outputs persist an immutable, replayable effective rendered spec per format', async () => {
   const conversation = createResearchConversation();
   createResearchMessage({ conversationId: conversation.id, role: 'user', content: '可重放 rendered spec', status: 'complete' });

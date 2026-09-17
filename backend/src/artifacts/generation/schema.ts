@@ -89,6 +89,61 @@ export const pdfReportPlanSchema = z.object({
   targetPageCount: z.number().int().min(6).max(20)
 }).strict();
 
+const editableText = (max: number) => z.string().max(max);
+const artifactLongformBlockSchema = z.discriminatedUnion('type', [
+  z.object({
+    id: text(80),
+    type: z.literal('heading'),
+    level: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    text: editableText(500),
+    citations: citationKeys
+  }).strict(),
+  z.object({
+    id: text(80),
+    type: z.literal('paragraph'),
+    text: editableText(8_000),
+    citations: citationKeys
+  }).strict(),
+  z.object({
+    id: text(80),
+    type: z.literal('bulletList'),
+    items: z.array(editableText(1_000)).min(1).max(20),
+    citations: citationKeys
+  }).strict(),
+  z.object({
+    id: text(80),
+    type: z.literal('numberedList'),
+    items: z.array(editableText(1_000)).min(1).max(20),
+    citations: citationKeys
+  }).strict(),
+  z.object({
+    id: text(80),
+    type: z.literal('table'),
+    headers: z.array(editableText(200)).max(12),
+    rows: z.array(z.array(editableText(500)).max(12)).max(50),
+    citations: citationKeys
+  }).strict(),
+  z.object({
+    id: text(80),
+    type: z.literal('pageBreak')
+  }).strict()
+]);
+
+const artifactLongformStateSchema = z.object({
+  blocks: z.array(artifactLongformBlockSchema).max(120),
+  pageSettings: z.object({
+    size: z.enum(['A4', 'Letter']),
+    orientation: z.enum(['portrait', 'landscape']),
+    marginTop: z.number().finite().min(5).max(50),
+    marginBottom: z.number().finite().min(5).max(50),
+    marginLeft: z.number().finite().min(5).max(50),
+    marginRight: z.number().finite().min(5).max(50),
+    header: editableText(200).optional(),
+    footer: editableText(200).optional(),
+    pageNumbers: z.boolean()
+  }).strict()
+}).strict();
+
 const modelPdfReportPlanSchema = z.object({
   sections: z.array(reportSectionSchema).min(3).max(30),
   targetPageCount: z.number().int().min(6).max(20)
@@ -114,6 +169,7 @@ export const artifactSpecSchema = z.object({
   brief: researchBriefSchema,
   presentation: presentationPlanSchema,
   pdf: pdfReportPlanSchema,
+  longform: artifactLongformStateSchema.optional(),
   formats: artifactFormatsSchema
 }).strict();
 

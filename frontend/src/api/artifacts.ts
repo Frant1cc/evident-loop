@@ -154,12 +154,28 @@ function serializeArtifactSpec(spec: ArtifactSpec) {
   );
   return {
     ...persisted,
+    longform: {
+      blocks: longform.blocks,
+      pageSettings: {
+        ...longform.pageSettings,
+        marginTop: clampMargin(longform.pageSettings.marginTop),
+        marginBottom: clampMargin(longform.pageSettings.marginBottom),
+        marginLeft: clampMargin(longform.pageSettings.marginLeft),
+        marginRight: clampMargin(longform.pageSettings.marginRight),
+        ...(longform.pageSettings.header?.trim() ? { header: longform.pageSettings.header.trim() } : { header: undefined }),
+        ...(longform.pageSettings.footer?.trim() ? { footer: longform.pageSettings.footer.trim() } : { footer: undefined })
+      }
+    },
     pdf: {
       ...persisted.pdf,
       sections: normalizedSections.length ? normalizedSections : persisted.pdf.sections,
       targetPageCount: Math.min(20, Math.max(6, normalizedSections.length + 2))
     }
   };
+}
+
+function clampMargin(value: number) {
+  return Math.min(50, Math.max(5, Number.isFinite(value) ? value : 25.4));
 }
 
 async function request<T>(path: string, init: { method?: string; body?: unknown } = {}) {

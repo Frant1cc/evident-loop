@@ -382,7 +382,7 @@ function createSafePresentationSlideHtml(
     : layout === 'table'
       ? renderSafeTableLayout(slide)
       : renderSafeListLayout(slide, layout === 'grid-2x2');
-  return `<div class="slide"><div class="el-safe-frame" data-layout="${layout}"><div class="el-safe-eyebrow">${String(index + 1).padStart(2, '0')} · ${escapeSlideHtml(safeSlideKindLabel(slide))}</div><h1 class="el-safe-title">${escapeSlideHtml(slide.title)}</h1><div class="el-safe-rule"></div>${body}</div></div>`;
+  return `<div class="slide"><div class="el-safe-frame" data-layout="${layout}"><div class="el-safe-eyebrow">${String(index + 1).padStart(2, '0')} · ${escapeSlideHtml(safeSlideKindLabel(slide))}</div><h1 class="el-safe-title" data-el-field="title">${escapeSlideHtml(slide.title)}</h1><div class="el-safe-rule"></div>${body}</div></div>`;
 }
 
 function safeSlideKindLabel(slide: ArtifactSpec['presentation']['slides'][number]) {
@@ -412,7 +412,7 @@ function renderSafeListLayout(
   grid: boolean
 ) {
   const items = slide.bullets.length ? slide.bullets : [slide.speakerNotes ?? slide.title];
-  return `<div class="el-safe-body ${grid ? 'el-safe-grid' : 'el-safe-list'}">${items.map((item, index) => `<div class="el-safe-item"><span class="el-safe-index">${String(index + 1).padStart(2, '0')}</span><span class="el-safe-copy">${escapeSlideHtml(item)}</span></div>`).join('')}</div>`;
+  return `<div class="el-safe-body ${grid ? 'el-safe-grid' : 'el-safe-list'}">${items.map((item, index) => `<div class="el-safe-item"><span class="el-safe-index">${String(index + 1).padStart(2, '0')}</span><span class="el-safe-copy" data-el-bullet-index="${index}">${escapeSlideHtml(item)}</span></div>`).join('')}</div>`;
 }
 
 function renderSafeBarLayout(slide: ArtifactSpec['presentation']['slides'][number]) {
@@ -957,6 +957,7 @@ ${artifactPresentationDesignGuide}
 
 Use only HTML, inline SVG, and CSS. Never use scripts, event handlers, forms, iframes, external URLs, remote fonts, data URLs, or fabricated images. The renderer supplies the page number, source strip, and brand logo. Keep markup concise: reuse classes in themeCss rather than repeating long inline styles, and keep each slide HTML comfortably below 6,000 characters. Never put a style element inside slide HTML.
 Scope every selector to .slide or its descendants; do not style html or body because the renderer owns the outer document and frame.
+Put data-el-field="title" on the innermost element containing the exact slide title, and data-el-bullet-index="0", "1", and so on on the innermost text element for each exact slide bullet. These attributes are editing bindings; do not place them on decorative or enclosing layout elements.
 
 The user input contains the whole deck outline for continuity, the current slides to author, componentThemeCss, its complete componentClasses list, and optional renderer diagnostics. The component theme is already frozen for the entire deck. Compose each page from those semantic components and vary the composition without creating a page-specific mini-theme. Never use page-number class names such as s3-title or slide-7-grid. If the composition genuinely needs a missing reusable component, return themeExtensionCss containing only additive .slide-scoped rules for the new semantic classes and define every new class used by the returned HTML. Never redefine .slide or an existing class: the server discards overriding rules and keeps only safe append-only additions. Every class used in HTML is validated against the accumulated theme and any incomplete slide is retried. Diagnostics apply only to visual layout and must not change facts or sibling formats.
 

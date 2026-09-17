@@ -198,13 +198,28 @@ export class DefaultPdfRenderer implements ArtifactRenderer {
         // The external QA adapter will report this limitation rather than
         // claiming that layout inspection was complete.
       }
+      const pageSettings = spec.longform?.pageSettings;
+      const showHeaderFooter = Boolean(
+        pageSettings?.header || pageSettings?.footer || pageSettings?.pageNumbers
+      );
+      const headerText = pageSettings?.header ? escapeHtml(pageSettings.header) : '';
+      const footerText = pageSettings?.footer ? escapeHtml(pageSettings.footer) : '';
+      const footerSeparator = footerText && pageSettings?.pageNumbers ? ' · ' : '';
       const buffer = await page.pdf({
-        format: 'A4',
+        format: pageSettings?.size ?? 'A4',
+        landscape: pageSettings?.orientation === 'landscape',
         printBackground: true,
-        displayHeaderFooter: true,
-        headerTemplate: '<span></span>',
-        footerTemplate: '<div style="font-size:8px;color:#64748b;width:100%;text-align:center"><span class="pageNumber"></span></div>',
-        margin: { top: '16mm', right: '16mm', bottom: '18mm', left: '16mm' }
+        displayHeaderFooter: showHeaderFooter,
+        headerTemplate: `<div style="font-size:8px;color:#64748b;width:100%;padding:0 10mm;text-align:right">${headerText}</div>`,
+        footerTemplate: `<div style="font-size:8px;color:#64748b;width:100%;padding:0 10mm;text-align:center">${footerText}${footerSeparator}${pageSettings?.pageNumbers ? '<span class="pageNumber"></span>' : ''}</div>`,
+        margin: pageSettings
+          ? {
+              top: `${pageSettings.marginTop}mm`,
+              right: `${pageSettings.marginRight}mm`,
+              bottom: `${pageSettings.marginBottom}mm`,
+              left: `${pageSettings.marginLeft}mm`
+            }
+          : { top: '16mm', right: '16mm', bottom: '18mm', left: '16mm' }
       });
       context?.onProgress?.('PDF report rendered by Chromium');
       return {
@@ -412,34 +427,13 @@ function overlapRatio(left: ArtifactLayoutBox, right: ArtifactLayoutBox) {
 export class DefaultDocxRenderer implements ArtifactRenderer {
   async render(spec: ArtifactSpec, _snapshot: ResearchSnapshot, context?: RendererContext): Promise<RendererResult> {
     throwIfAborted(context?.signal);
-    const blocks: DocumentBlock[] = [
-      { type: 'heading', level: 1, text: '执行摘要' },
-      { type: 'paragraph', text: spec.brief.executiveSummary },
-      ...spec.pdf.sections.flatMap<DocumentBlock>((section) => [
-        { type: 'heading', level: 1, text: section.title },
-        ...section.paragraphs.map((text): DocumentBlock => ({ type: 'paragraph', text })),
-        ...(section.bullets.length
-          ? [{ type: 'bulletList', items: section.bullets } satisfies DocumentBlock]
-          : [])
-      ]),
-      ...(spec.brief.keyFindings.length
-        ? [
-            { type: 'heading', level: 1, text: '主要结论' } satisfies DocumentBlock,
-            { type: 'bulletList', items: spec.brief.keyFindings } satisfies DocumentBlock
-          ]
-        : []),
-      ...(spec.brief.recommendations.length
-        ? [
-            { type: 'heading', level: 1, text: '建议' } satisfies DocumentBlock,
-            { type: 'numberedList', items: spec.brief.recommendations } satisfies DocumentBlock
-          ]
-        : [])
-    ];
+    const blocks = createArtifactDocumentBlocks(spec);
     const presetByTheme: Record<ArtifactSpec['theme'], DocumentPresetName> = {
       research: 'research-report',
       technical: 'technical-report',
       business: 'business-report'
     };
+    const pageSettings = spec.longform?.pageSettings;
     const resolved = resolveDocumentSpec({
       fileName: `${safeFileStem(spec.title)}.docx`,
       title: spec.title,
@@ -448,6 +442,20 @@ export class DefaultDocxRenderer implements ArtifactRenderer {
       blocks,
       format: {
         preset: presetByTheme[spec.theme],
+        ...(pageSettings ? {
+          pageSize: pageSettings.size === 'Letter' ? 'LETTER' as const : 'A4' as const,
+          orientation: pageSettings.orientation,
+          margins: {
+            top: pageSettings.marginTop,
+            right: pageSettings.marginRight,
+            bottom: pageSettings.marginBottom,
+            left: pageSettings.marginLeft
+          },
+          showHeader: Boolean(pageSettings.header),
+          ...(pageSettings.header ? { headerText: pageSettings.header } : {}),
+          ...(pageSettings.footer ? { footerText: pageSettings.footer } : {}),
+          showPageNumber: pageSettings.pageNumbers
+        } : {}),
         ...(spec.branding.primaryColor ? { primaryColor: spec.branding.primaryColor } : {}),
         ...(spec.branding.titleFont ? { titleFont: spec.branding.titleFont } : {}),
         ...(spec.branding.bodyFont ? { bodyFont: spec.branding.bodyFont } : {})
@@ -462,6 +470,51 @@ export class DefaultDocxRenderer implements ArtifactRenderer {
       renderedSpec: spec
     };
   }
+}
+
+function createArtifactDocumentBlocks(spec: ArtifactSpec): DocumentBlock[] {
+  if (spec.longform?.blocks.length) {
+    return spec.longform.blocks.map((block): DocumentBlock => {
+      switch (block.type) {
+        case 'heading':
+          return { type: 'heading', level: block.level, text: block.text };
+        case 'paragraph':
+          return { type: 'paragraph', text: block.text };
+        case 'bulletList':
+          return { type: 'bulletList', items: block.items };
+        case 'numberedList':
+          return { type: 'numberedList', items: block.items };
+        case 'table':
+          return { type: 'table', headers: block.headers, rows: block.rows };
+        case 'pageBreak':
+          return { type: 'pageBreak' };
+      }
+    });
+  }
+
+  return [
+    { type: 'heading', level: 1, text: '执行摘要' },
+    { type: 'paragraph', text: spec.brief.executiveSummary },
+    ...spec.pdf.sections.flatMap<DocumentBlock>((section) => [
+      { type: 'heading', level: 1, text: section.title },
+      ...section.paragraphs.map((text): DocumentBlock => ({ type: 'paragraph', text })),
+      ...(section.bullets.length
+        ? [{ type: 'bulletList', items: section.bullets } satisfies DocumentBlock]
+        : [])
+    ]),
+    ...(spec.brief.keyFindings.length
+      ? [
+          { type: 'heading', level: 1, text: '主要结论' } satisfies DocumentBlock,
+          { type: 'bulletList', items: spec.brief.keyFindings } satisfies DocumentBlock
+        ]
+      : []),
+    ...(spec.brief.recommendations.length
+      ? [
+          { type: 'heading', level: 1, text: '建议' } satisfies DocumentBlock,
+          { type: 'numberedList', items: spec.brief.recommendations } satisfies DocumentBlock
+        ]
+      : [])
+  ];
 }
 
 export function createDefaultRenderers() {
@@ -724,6 +777,18 @@ function createPdfLayoutManifest(spec: ArtifactSpec, metrics: PdfDomMetrics | un
 
 function createReportHtml(spec: ArtifactSpec, snapshot: ResearchSnapshot, assets: ArtifactRenderAsset[] = []) {
   const colors = themeColors(spec);
+  const pageSettings = spec.longform?.pageSettings;
+  const portraitHeight = pageSettings?.size === 'Letter' ? 279.4 : 297;
+  const physicalHeight = pageSettings?.orientation === 'landscape'
+    ? (pageSettings?.size === 'Letter' ? 215.9 : 210)
+    : portraitHeight;
+  const contentMinHeight = Math.max(
+    80,
+    physicalHeight - (pageSettings?.marginTop ?? 16) - (pageSettings?.marginBottom ?? 18) - 8
+  );
+  const pageSize = pageSettings
+    ? `${pageSettings.size} ${pageSettings.orientation}`
+    : 'A4 portrait';
   const sourceByKey = new Map(snapshot.sources.map((source) => [source.citationKey, source]));
   const logo = findBrandAsset(spec, assets);
   const gallery = assets.filter((asset) => asset.id !== logo?.id).slice(0, 3);
@@ -735,7 +800,7 @@ function createReportHtml(spec: ArtifactSpec, snapshot: ResearchSnapshot, assets
       ${renderCitations(section.citations, sourceByKey)}
     </section>`).join('');
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><style>
-    @page { size: A4; }
+    @page { size: ${pageSize}; }
     * { box-sizing: border-box; }
     body { margin: 0; color: ${colors.text}; font-family: ${cssFont(spec.branding.bodyFont ?? 'Arial')}; font-size: 11pt; line-height: 1.65; }
     header { border-top: 8px solid ${colors.primary}; padding: 42px 0 24px; margin-bottom: 24px; }
@@ -745,10 +810,10 @@ function createReportHtml(spec: ArtifactSpec, snapshot: ResearchSnapshot, assets
     h2 { color: ${colors.primary}; font-size: 17pt; border-bottom: 1px solid ${colors.rule}; padding-bottom: 5px; margin: 28px 0 10px; page-break-after: avoid; }
     p { margin: 8px 0; orphans: 3; widows: 3; }
     li { margin: 4px 0; }
-    .report-section { page-break-before: always; page-break-inside: avoid; page-break-after: always; min-height: 235mm; }
+    .report-section { page-break-before: always; page-break-inside: avoid; page-break-after: always; min-height: ${contentMinHeight}mm; }
     .citation { color: ${colors.muted}; font-size: 8.5pt; margin-top: 8px; }
-    .references { page-break-before: always; page-break-after: always; min-height: 235mm; }
-    .forced-page { page-break-before: always; page-break-after: always; min-height: 235mm; }
+    .references { page-break-before: always; page-break-after: always; min-height: ${contentMinHeight}mm; }
+    .forced-page { page-break-before: always; page-break-after: always; min-height: ${contentMinHeight}mm; }
     .references li { font-size: 9pt; }
     .brand-logo { max-width: 120px; max-height: 56px; object-fit: contain; float: right; }
     .asset-gallery { display: flex; gap: 12px; margin: 12px 0; }

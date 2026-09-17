@@ -1,37 +1,45 @@
 <script setup lang="ts">
-import { PhX } from '@phosphor-icons/vue';
-import { ref, watch } from 'vue';
-import type { ArtifactSpec, ArtifactImageConsent } from '../../types/artifacts';
-import { Dialog, DialogContent } from '../ui/dialog';
+import { PhFileText, PhPalette, PhSlidersHorizontal, PhX } from '@phosphor-icons/vue';
+import { computed, ref, watch } from 'vue';
+import type { ArtifactSpec } from '../../types/artifacts';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog';
+import type { DraftSaveState } from './documentEditor';
 
 const props = defineProps<{
   open: boolean;
   spec?: ArtifactSpec;
   editable?: boolean;
-  imageConsents?: ArtifactImageConsent[];
-  consentBusy?: boolean;
-  sourceImageBusy?: boolean;
+  saveState?: DraftSaveState;
 }>();
 
 const emit = defineEmits<{
   'update:open': [open: boolean];
   'update-spec': [spec: ArtifactSpec];
-  'confirm-consent': [imageUrl: string, sourceId?: string];
-  'fetch-source-image': [];
 }>();
 
-const activeTab = ref<'general' | 'branding' | 'page' | 'assets'>('general');
-const consentUrl = ref('');
-const consentSourceId = ref('');
+const activeTab = ref<'general' | 'branding' | 'page'>('general');
+const colorDraft = ref('');
+const colorError = ref(false);
+const settingsTabs = [
+  { id: 'general', label: '基本信息', icon: PhSlidersHorizontal },
+  { id: 'branding', label: '品牌与字体', icon: PhPalette },
+  { id: 'page', label: '页面设置', icon: PhFileText }
+] as const;
 
 watch(() => props.open, (open) => {
   if (open) {
     activeTab.value = 'general';
-    const consent = props.imageConsents?.[0];
-    consentUrl.value = '';
-    consentSourceId.value = consent?.sourceId ?? '';
+    colorDraft.value = props.spec?.branding.primaryColor ?? '';
+    colorError.value = false;
   }
 });
+
+const saveStateLabel = computed(() => ({
+  saved: '所有更改已保存',
+  dirty: '等待保存…',
+  saving: '正在保存…',
+  error: '保存失败，请修改后重试'
+}[props.saveState ?? 'saved']));
 
 function updateSpec(updates: Partial<ArtifactSpec>) {
   if (!props.spec) return;
@@ -41,6 +49,52 @@ function updateSpec(updates: Partial<ArtifactSpec>) {
 function updateBranding(updates: Partial<ArtifactSpec['branding']>) {
   if (!props.spec) return;
   emit('update-spec', { ...props.spec, branding: { ...props.spec.branding, ...updates } });
+}
+
+function commitPrimaryColor() {
+  const value = colorDraft.value.trim();
+  if (!value) {
+    colorError.value = false;
+    updateBranding({ primaryColor: undefined });
+    return;
+  }
+  if (!/^#?[0-9a-fA-F]{6}$/.test(value)) {
+    colorError.value = true;
+    return;
+  }
+  const normalized = value.startsWith('#') ? value : `#${value}`;
+  colorDraft.value = normalized;
+  colorError.value = false;
+  updateBranding({ primaryColor: normalized });
+}
+
+function updateOptionalBranding(key: 'titleFont' | 'bodyFont', value: string) {
+  updateBranding({ [key]: value.trim() || undefined });
+}
+
+function updateRequiredText(key: 'title' | 'audience', input: HTMLInputElement) {
+  if (!props.spec) return;
+  const value = input.value.trim();
+  if (!value) {
+    input.value = props.spec[key];
+    return;
+  }
+  input.value = value;
+  updateSpec({ [key]: value });
+}
+
+function updateOptionalPageText(key: 'header' | 'footer', value: string) {
+  updatePageSettings({ [key]: value.trim() || undefined });
+}
+
+function updateMargin(
+  key: 'marginTop' | 'marginBottom' | 'marginLeft' | 'marginRight',
+  input: HTMLInputElement
+) {
+  const value = Number(input.value);
+  const normalized = Math.min(50, Math.max(5, Number.isFinite(value) ? value : 25.4));
+  input.value = String(normalized);
+  updatePageSettings({ [key]: normalized });
 }
 
 function updatePageSettings(updates: Partial<ArtifactSpec['longform']['pageSettings']>) {
@@ -60,81 +114,61 @@ function toggleFormat(format: 'pptx' | 'pdf' | 'docx') {
     ? props.spec.formats.filter(f => f !== format)
     : [...props.spec.formats, format];
 
-  // Presentation must have pptx
-  if (format === 'pptx' && !formats.includes('pptx')) {
-    return;
-  }
-
-  // Longform must have at least one of docx/pdf
-  const hasLongform = formats.includes('docx') || formats.includes('pdf');
-  if ((format === 'docx' || format === 'pdf') && !hasLongform) {
-    return;
-  }
+  if (!formats.length) return;
 
   emit('update-spec', { ...props.spec, formats });
 }
 
-function confirmConsent() {
-  if (!consentUrl.value.trim()) return;
-  emit('confirm-consent', consentUrl.value.trim(), consentSourceId.value.trim() || undefined);
-}
 </script>
 
 <template>
   <Dialog :open="open" @update:open="emit('update:open', $event)">
-    <DialogContent class="max-h-[85vh] max-w-3xl overflow-hidden">
-      <div class="grid h-full max-h-[75vh] grid-rows-[auto_minmax(0,1fr)] gap-4">
-        <div class="flex items-center justify-between border-b border-[var(--agent-border)] pb-3">
-          <h2 class="m-0 text-lg font-bold text-[var(--agent-text)]">文稿设置</h2>
+    <DialogContent
+      :show-close-button="false"
+      class="h-[min(88dvh,760px)] max-w-[calc(100%-1rem)] gap-0 overflow-hidden p-0 sm:max-w-3xl"
+    >
+      <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto]">
+        <header class="flex items-center justify-between gap-4 border-b border-[var(--agent-border)] px-4 py-3.5 sm:px-5">
+          <div class="min-w-0">
+            <div class="flex items-center gap-2">
+              <DialogTitle class="text-base font-semibold text-[var(--agent-text)]">文稿设置</DialogTitle>
+              <span v-if="!editable" class="rounded-md bg-[var(--agent-surface-muted)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--agent-text-muted)]">只读</span>
+            </div>
+            <DialogDescription class="mt-1 text-xs text-[var(--agent-text-muted)]">
+              管理文稿信息、品牌样式和页面规格。
+            </DialogDescription>
+          </div>
           <button
             type="button"
-            class="grid size-8 place-items-center rounded text-[var(--agent-text-muted)] transition-colors hover:bg-[var(--agent-surface-muted)] hover:text-[var(--agent-text)]"
+            class="grid size-8 shrink-0 place-items-center rounded-md text-[var(--agent-text-muted)] transition-[background-color,color,transform] hover:bg-[var(--agent-surface-muted)] hover:text-[var(--agent-text)] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--agent-focus-ring)]"
             aria-label="关闭"
             @click="emit('update:open', false)"
           >
             <PhX :size="18" weight="bold" aria-hidden="true" />
           </button>
-        </div>
+        </header>
 
-        <div class="grid min-h-0 grid-cols-[180px_minmax(0,1fr)] gap-4">
-          <nav class="flex flex-col gap-1 border-r border-[var(--agent-border)] pr-4">
+        <div class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] sm:grid-cols-[190px_minmax(0,1fr)] sm:grid-rows-1">
+          <nav class="app-scrollbar flex gap-1 overflow-x-auto border-b border-[var(--agent-border)] bg-[var(--agent-surface-muted)]/35 p-2 sm:flex-col sm:overflow-x-visible sm:border-b-0 sm:border-r" aria-label="设置分类">
             <button
+              v-for="tab in settingsTabs"
+              :key="tab.id"
               type="button"
-              class="rounded px-3 py-2 text-left text-sm font-semibold transition-colors"
-              :class="activeTab === 'general' ? 'bg-[var(--agent-selected-bg)] text-[var(--agent-selected-text)]' : 'text-[var(--agent-text)] hover:bg-[var(--agent-surface-muted)]'"
-              @click="activeTab = 'general'"
+              class="inline-flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-left text-xs font-semibold transition-[background-color,color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--agent-focus-ring)] sm:w-full"
+              :class="activeTab === tab.id
+                ? 'bg-[var(--agent-surface)] text-[var(--agent-text)] shadow-sm'
+                : 'text-[var(--agent-text-muted)] hover:bg-[var(--agent-surface-muted)] hover:text-[var(--agent-text)]'"
+              :aria-current="activeTab === tab.id ? 'page' : undefined"
+              @click="activeTab = tab.id"
             >
-              基本信息
-            </button>
-            <button
-              type="button"
-              class="rounded px-3 py-2 text-left text-sm font-semibold transition-colors"
-              :class="activeTab === 'branding' ? 'bg-[var(--agent-selected-bg)] text-[var(--agent-selected-text)]' : 'text-[var(--agent-text)] hover:bg-[var(--agent-surface-muted)]'"
-              @click="activeTab = 'branding'"
-            >
-              品牌与字体
-            </button>
-            <button
-              type="button"
-              class="rounded px-3 py-2 text-left text-sm font-semibold transition-colors"
-              :class="activeTab === 'page' ? 'bg-[var(--agent-selected-bg)] text-[var(--agent-selected-text)]' : 'text-[var(--agent-text)] hover:bg-[var(--agent-surface-muted)]'"
-              @click="activeTab = 'page'"
-            >
-              页面设置
-            </button>
-            <button
-              type="button"
-              class="rounded px-3 py-2 text-left text-sm font-semibold transition-colors"
-              :class="activeTab === 'assets' ? 'bg-[var(--agent-selected-bg)] text-[var(--agent-selected-text)]' : 'text-[var(--agent-text)] hover:bg-[var(--agent-surface-muted)]'"
-              @click="activeTab = 'assets'"
-            >
-              素材授权
+              <component :is="tab.icon" :size="15" weight="bold" aria-hidden="true" />
+              {{ tab.label }}
             </button>
           </nav>
 
-          <div class="min-h-0 overflow-y-auto pr-2">
+          <div class="app-scrollbar min-h-0 overflow-y-auto p-4 sm:p-5">
             <!-- General -->
-            <div v-if="activeTab === 'general' && spec" class="space-y-3">
+            <div v-if="activeTab === 'general' && spec" class="max-w-xl space-y-4">
               <label class="grid gap-1 text-xs font-semibold text-[var(--agent-text-muted)]">
                 标题
                 <input
@@ -142,7 +176,7 @@ function confirmConsent() {
                   :value="spec.title"
                   type="text"
                   class="rounded-md border border-[var(--agent-border)] bg-transparent px-2 py-1.5 text-sm text-[var(--agent-text)]"
-                  @input="updateSpec({ title: ($event.target as HTMLInputElement).value })"
+                  @change="updateRequiredText('title', $event.target as HTMLInputElement)"
                 />
                 <div v-else class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-2 py-1.5 text-sm text-[var(--agent-text)]">
                   {{ spec.title }}
@@ -156,7 +190,7 @@ function confirmConsent() {
                   :value="spec.audience"
                   type="text"
                   class="rounded-md border border-[var(--agent-border)] bg-transparent px-2 py-1.5 text-sm text-[var(--agent-text)]"
-                  @input="updateSpec({ audience: ($event.target as HTMLInputElement).value })"
+                  @change="updateRequiredText('audience', $event.target as HTMLInputElement)"
                 />
                 <div v-else class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-2 py-1.5 text-sm text-[var(--agent-text)]">
                   {{ spec.audience }}
@@ -187,16 +221,16 @@ function confirmConsent() {
                     <input
                       type="checkbox"
                       :checked="spec.formats.includes('pptx')"
-                      :disabled="!editable || spec.formats.includes('pptx')"
+                      :disabled="!editable || (spec.formats.includes('pptx') && spec.formats.length === 1)"
                       @change="toggleFormat('pptx')"
                     />
-                    PPTX（演示文稿必选）
+                    PPTX
                   </label>
                   <label class="flex items-center gap-2 text-sm text-[var(--agent-text)]">
                     <input
                       type="checkbox"
                       :checked="spec.formats.includes('docx')"
-                      :disabled="!editable"
+                      :disabled="!editable || (spec.formats.includes('docx') && spec.formats.length === 1)"
                       @change="toggleFormat('docx')"
                     />
                     DOCX
@@ -205,7 +239,7 @@ function confirmConsent() {
                     <input
                       type="checkbox"
                       :checked="spec.formats.includes('pdf')"
-                      :disabled="!editable"
+                      :disabled="!editable || (spec.formats.includes('pdf') && spec.formats.length === 1)"
                       @change="toggleFormat('pdf')"
                     />
                     PDF
@@ -215,35 +249,22 @@ function confirmConsent() {
             </div>
 
             <!-- Branding -->
-            <div v-if="activeTab === 'branding' && spec" class="space-y-3">
+            <div v-if="activeTab === 'branding' && spec" class="max-w-xl space-y-4">
               <label class="grid gap-1 text-xs font-semibold text-[var(--agent-text-muted)]">
                 品牌色
                 <input
                   v-if="editable"
-                  :value="spec.branding.primaryColor || ''"
+                  v-model="colorDraft"
                   type="text"
                   placeholder="#2563eb"
                   class="rounded-md border border-[var(--agent-border)] bg-transparent px-2 py-1.5 text-sm text-[var(--agent-text)]"
-                  @input="updateBranding({ primaryColor: ($event.target as HTMLInputElement).value })"
+                  :aria-invalid="colorError"
+                  @change="commitPrimaryColor"
                 />
                 <div v-else class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-2 py-1.5 text-sm text-[var(--agent-text)]">
                   {{ spec.branding.primaryColor || '默认' }}
                 </div>
-              </label>
-
-              <label class="grid gap-1 text-xs font-semibold text-[var(--agent-text-muted)]">
-                Logo URL
-                <input
-                  v-if="editable"
-                  :value="spec.branding.logoUrl || ''"
-                  type="url"
-                  placeholder="https://…"
-                  class="rounded-md border border-[var(--agent-border)] bg-transparent px-2 py-1.5 text-sm text-[var(--agent-text)]"
-                  @input="updateBranding({ logoUrl: ($event.target as HTMLInputElement).value })"
-                />
-                <div v-else class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-2 py-1.5 text-sm text-[var(--agent-text)]">
-                  {{ spec.branding.logoUrl || '无' }}
-                </div>
+                <span v-if="colorError" class="text-[11px] font-medium text-destructive">请输入 6 位十六进制颜色，例如 #2563eb</span>
               </label>
 
               <label class="grid gap-1 text-xs font-semibold text-[var(--agent-text-muted)]">
@@ -253,7 +274,7 @@ function confirmConsent() {
                   :value="spec.branding.titleFont || ''"
                   placeholder="Arial"
                   class="rounded-md border border-[var(--agent-border)] bg-transparent px-2 py-1.5 text-sm text-[var(--agent-text)]"
-                  @input="updateBranding({ titleFont: ($event.target as HTMLInputElement).value })"
+                  @change="updateOptionalBranding('titleFont', ($event.target as HTMLInputElement).value)"
                 />
                 <div v-else class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-2 py-1.5 text-sm text-[var(--agent-text)]">
                   {{ spec.branding.titleFont || '默认' }}
@@ -267,7 +288,7 @@ function confirmConsent() {
                   :value="spec.branding.bodyFont || ''"
                   placeholder="Arial"
                   class="rounded-md border border-[var(--agent-border)] bg-transparent px-2 py-1.5 text-sm text-[var(--agent-text)]"
-                  @input="updateBranding({ bodyFont: ($event.target as HTMLInputElement).value })"
+                  @change="updateOptionalBranding('bodyFont', ($event.target as HTMLInputElement).value)"
                 />
                 <div v-else class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-2 py-1.5 text-sm text-[var(--agent-text)]">
                   {{ spec.branding.bodyFont || '默认' }}
@@ -276,7 +297,7 @@ function confirmConsent() {
             </div>
 
             <!-- Page Settings -->
-            <div v-if="activeTab === 'page' && spec" class="space-y-3">
+            <div v-if="activeTab === 'page' && spec" class="max-w-xl space-y-4">
               <label class="grid gap-1 text-xs font-semibold text-[var(--agent-text-muted)]">
                 页面大小
                 <select
@@ -316,9 +337,10 @@ function confirmConsent() {
                     v-if="editable"
                     :value="spec.longform.pageSettings.marginTop"
                     type="number"
-                    min="0"
+                    min="5"
+                    max="50"
                     class="rounded-md border border-[var(--agent-border)] bg-transparent px-2 py-1.5 text-sm text-[var(--agent-text)]"
-                    @input="updatePageSettings({ marginTop: Number(($event.target as HTMLInputElement).value) })"
+                    @change="updateMargin('marginTop', $event.target as HTMLInputElement)"
                   />
                   <div v-else class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-2 py-1.5 text-sm text-[var(--agent-text)]">
                     {{ spec.longform.pageSettings.marginTop }}
@@ -330,9 +352,10 @@ function confirmConsent() {
                     v-if="editable"
                     :value="spec.longform.pageSettings.marginBottom"
                     type="number"
-                    min="0"
+                    min="5"
+                    max="50"
                     class="rounded-md border border-[var(--agent-border)] bg-transparent px-2 py-1.5 text-sm text-[var(--agent-text)]"
-                    @input="updatePageSettings({ marginBottom: Number(($event.target as HTMLInputElement).value) })"
+                    @change="updateMargin('marginBottom', $event.target as HTMLInputElement)"
                   />
                   <div v-else class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-2 py-1.5 text-sm text-[var(--agent-text)]">
                     {{ spec.longform.pageSettings.marginBottom }}
@@ -344,9 +367,10 @@ function confirmConsent() {
                     v-if="editable"
                     :value="spec.longform.pageSettings.marginLeft"
                     type="number"
-                    min="0"
+                    min="5"
+                    max="50"
                     class="rounded-md border border-[var(--agent-border)] bg-transparent px-2 py-1.5 text-sm text-[var(--agent-text)]"
-                    @input="updatePageSettings({ marginLeft: Number(($event.target as HTMLInputElement).value) })"
+                    @change="updateMargin('marginLeft', $event.target as HTMLInputElement)"
                   />
                   <div v-else class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-2 py-1.5 text-sm text-[var(--agent-text)]">
                     {{ spec.longform.pageSettings.marginLeft }}
@@ -358,9 +382,10 @@ function confirmConsent() {
                     v-if="editable"
                     :value="spec.longform.pageSettings.marginRight"
                     type="number"
-                    min="0"
+                    min="5"
+                    max="50"
                     class="rounded-md border border-[var(--agent-border)] bg-transparent px-2 py-1.5 text-sm text-[var(--agent-text)]"
-                    @input="updatePageSettings({ marginRight: Number(($event.target as HTMLInputElement).value) })"
+                    @change="updateMargin('marginRight', $event.target as HTMLInputElement)"
                   />
                   <div v-else class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-2 py-1.5 text-sm text-[var(--agent-text)]">
                     {{ spec.longform.pageSettings.marginRight }}
@@ -375,7 +400,7 @@ function confirmConsent() {
                   :value="spec.longform.pageSettings.header || ''"
                   type="text"
                   class="rounded-md border border-[var(--agent-border)] bg-transparent px-2 py-1.5 text-sm text-[var(--agent-text)]"
-                  @input="updatePageSettings({ header: ($event.target as HTMLInputElement).value })"
+                  @change="updateOptionalPageText('header', ($event.target as HTMLInputElement).value)"
                 />
                 <div v-else class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-2 py-1.5 text-sm text-[var(--agent-text)]">
                   {{ spec.longform.pageSettings.header || '无' }}
@@ -389,7 +414,7 @@ function confirmConsent() {
                   :value="spec.longform.pageSettings.footer || ''"
                   type="text"
                   class="rounded-md border border-[var(--agent-border)] bg-transparent px-2 py-1.5 text-sm text-[var(--agent-text)]"
-                  @input="updatePageSettings({ footer: ($event.target as HTMLInputElement).value })"
+                  @change="updateOptionalPageText('footer', ($event.target as HTMLInputElement).value)"
                 />
                 <div v-else class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] px-2 py-1.5 text-sm text-[var(--agent-text)]">
                   {{ spec.longform.pageSettings.footer || '无' }}
@@ -407,60 +432,48 @@ function confirmConsent() {
               </label>
             </div>
 
-            <!-- Assets -->
-            <div v-if="activeTab === 'assets'" class="space-y-3">
-              <p class="text-xs text-[var(--agent-text-muted)]">确认使用外部图片素材，需两步：先确认授权，再下载使用。</p>
-
-              <label class="grid gap-1 text-xs font-semibold text-[var(--agent-text-muted)]">
-                图片 URL
-                <input
-                  v-model="consentUrl"
-                  type="url"
-                  placeholder="仅允许 HTTPS 图片地址"
-                  class="rounded-md border border-[var(--agent-border)] bg-transparent px-2 py-1.5 text-sm text-[var(--agent-text)]"
-                  :disabled="!editable"
-                />
-              </label>
-
-              <label class="grid gap-1 text-xs font-semibold text-[var(--agent-text-muted)]">
-                来源 ID（可选）
-                <input
-                  v-model="consentSourceId"
-                  type="text"
-                  placeholder="例如：source_1"
-                  class="rounded-md border border-[var(--agent-border)] bg-transparent px-2 py-1.5 text-sm text-[var(--agent-text)]"
-                  :disabled="!editable"
-                />
-              </label>
-
-              <button
-                type="button"
-                class="rounded-md bg-[var(--agent-selected-bg)] px-3 py-1.5 text-xs font-bold text-[var(--agent-selected-text)] transition-opacity hover:opacity-80 disabled:opacity-50"
-                :disabled="!editable || consentBusy || !consentUrl.trim()"
-                @click="confirmConsent"
-              >
-                {{ consentBusy ? '保存中…' : '确认使用授权' }}
-              </button>
-
-              <div v-if="imageConsents?.length" class="space-y-2 border-t border-[var(--agent-border)] pt-3">
-                <p class="text-xs font-semibold text-[var(--agent-text-muted)]">已授权素材</p>
-                <div v-for="consent in imageConsents" :key="consent.id" class="rounded-md border border-[var(--agent-border)] bg-[var(--agent-surface-muted)] p-2">
-                  <p class="m-0 truncate text-xs text-[var(--agent-text)]">{{ consent.imageUrl }}</p>
-                  <p v-if="consent.sourceId" class="m-0 mt-1 text-[10px] text-[var(--agent-text-muted)]">来源：{{ consent.sourceId }}</p>
-                  <button
-                    type="button"
-                    class="mt-2 rounded border border-[var(--agent-border)] px-2 py-1 text-[10px] font-bold text-[var(--agent-text)] transition-colors hover:bg-[var(--agent-surface)] disabled:opacity-50"
-                    :disabled="!editable || sourceImageBusy"
-                    @click="emit('fetch-source-image')"
-                  >
-                    {{ sourceImageBusy ? '下载中…' : '下载并使用' }}
-                  </button>
-                </div>
-              </div>
-            </div>
           </div>
         </div>
+
+        <footer class="flex items-center justify-between gap-3 border-t border-[var(--agent-border)] bg-[var(--agent-surface)] px-4 py-3 sm:px-5">
+          <span
+            class="text-[11px] font-medium"
+            :class="saveState === 'error' ? 'text-destructive' : 'text-[var(--agent-text-muted)]'"
+            role="status"
+          >
+            {{ saveStateLabel }}
+          </span>
+          <button
+            type="button"
+            class="h-8 rounded-md bg-[var(--agent-primary)] px-3 text-xs font-semibold text-[var(--agent-primary-text)] transition-[opacity,transform] hover:opacity-90 active:scale-[0.98]"
+            @click="emit('update:open', false)"
+          >
+            完成
+          </button>
+        </footer>
       </div>
     </DialogContent>
   </Dialog>
 </template>
+
+<style scoped>
+:deep(input:not([type='checkbox'])),
+:deep(select) {
+  min-height: 2.5rem;
+  background: var(--agent-bg);
+  line-height: 1.5;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+:deep(input:not([type='checkbox']):hover),
+:deep(select:hover) {
+  border-color: color-mix(in oklch, var(--agent-text-muted), transparent 40%);
+}
+
+:deep(input:not([type='checkbox']):focus),
+:deep(select:focus) {
+  border-color: var(--agent-text-muted);
+  box-shadow: 0 0 0 3px var(--agent-focus-ring);
+  outline: none;
+}
+</style>

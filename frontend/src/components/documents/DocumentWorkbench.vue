@@ -42,8 +42,6 @@ const emit = defineEmits<{
   'preview-output': [output: ArtifactOutput];
   'select-generation': [id: string];
   'delete-generation': [id: string];
-  'confirm-consent': [imageUrl: string, sourceId?: string];
-  'fetch-source-image': [];
 }>();
 
 const activeDeliverableTab = ref<DeliverableTab>('presentation');
@@ -60,6 +58,15 @@ const isReadOnly = computed(() => !editable.value);
 
 const hasPresentation = computed(() => spec.value.formats.includes('pptx'));
 const hasLongform = computed(() => spec.value.formats.includes('docx') || spec.value.formats.includes('pdf'));
+const currentSelectionLabel = computed(() => {
+  if (activeDeliverableTab.value === 'presentation') {
+    const index = spec.value.presentation.slides.findIndex(slide => slide.id === currentSlideId.value);
+    return index >= 0 ? `第 ${index + 1} 页` : '幻灯片预览';
+  }
+  const blocks = spec.value.longform?.blocks ?? [];
+  const index = blocks.findIndex(block => block.id === selectedBlockId.value);
+  return index >= 0 ? `内容块 ${index + 1}` : '文档预览';
+});
 
 watch(() => spec.value.presentation.slides, (slides) => {
   if (slides.length && !slides.find(s => s.id === currentSlideId.value)) {
@@ -95,8 +102,16 @@ onBeforeUnmount(() => {
 });
 
 function handleKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape' && !showSettings.value && !showVersions.value) {
+  const target = event.target as HTMLElement | null;
+  const editingText = target?.matches('input, textarea, select, [contenteditable="true"]');
+
+  if (event.key === 'Escape' && !editingText && !showSettings.value && !showVersions.value) {
     handleClose();
+  }
+
+  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && editable.value && !props.busy && !showSettings.value && !showVersions.value) {
+    event.preventDefault();
+    handleGenerate();
   }
 }
 
@@ -249,34 +264,52 @@ function handleGenerate() {
         @generate="handleGenerate"
       />
 
-      <!-- Desktop 3-column layout (>=768px) -->
-      <div class="hidden flex-1 overflow-hidden md:grid" style="grid-template-columns: minmax(220px, 260px) minmax(360px, 1fr) minmax(300px, 380px);">
+      <!-- Desktop editor layout (>=1024px) -->
+      <div class="hidden flex-1 overflow-hidden lg:grid" style="grid-template-columns: minmax(232px, 272px) minmax(360px, 1fr) minmax(340px, 400px);">
         <!-- Left: Navigation -->
-        <aside class="flex flex-col overflow-hidden border-r border-[var(--agent-border)]">
+        <aside class="flex min-h-0 flex-col overflow-hidden border-r border-[var(--agent-border)] bg-[var(--agent-surface)]">
           <DocumentDeliverableNavigation
+            class="min-h-0 flex-1"
             :spec="spec"
             :active-tab="activeDeliverableTab"
             :generation="generation"
+            :current-slide-id="currentSlideId"
+            :selected-block-id="selectedBlockId"
             @update:active-tab="activeDeliverableTab = $event"
+            @update:current-slide-id="currentSlideId = $event"
+            @update:selected-block-id="selectedBlockId = $event"
           />
 
           <!-- Output cards in sidebar for completed outputs -->
-          <div v-if="generation.outputs.length" class="border-t border-[var(--agent-border)] p-2 space-y-2">
-            <p class="px-1 text-[10px] font-bold uppercase tracking-wide text-[var(--agent-text-muted)]">输出文件</p>
-            <DocumentOutputCard
-              v-for="output in generation.outputs"
-              :key="output.id"
-              :output="output"
-              :busy="busy"
-              @retry="emit('retry-output', $event)"
-              @preview="emit('preview-output', $event)"
-            />
+          <div v-if="generation.outputs.length" class="border-t border-[var(--agent-border)] p-3">
+            <details>
+              <summary class="cursor-pointer list-none text-xs font-semibold text-[var(--agent-text)]">
+                已生成文件 <span class="ml-1 font-normal text-[var(--agent-text-muted)]">{{ generation.outputs.length }}</span>
+              </summary>
+              <div class="mt-2 space-y-2">
+                <DocumentOutputCard
+                  v-for="output in generation.outputs"
+                  :key="output.id"
+                  :output="output"
+                  :busy="busy"
+                  @retry="emit('retry-output', $event)"
+                  @preview="emit('preview-output', $event)"
+                />
+              </div>
+            </details>
           </div>
         </aside>
 
         <!-- Center: Preview -->
-        <div class="flex flex-col overflow-hidden border-r border-[var(--agent-border)] bg-[var(--agent-surface-muted)]">
-          <div class="flex-1 overflow-auto p-4">
+        <main class="flex min-w-0 flex-col overflow-hidden border-r border-[var(--agent-border)] bg-[color-mix(in_oklch,var(--agent-surface-muted),var(--agent-bg)_42%)]">
+          <div class="flex h-11 shrink-0 items-center justify-between border-b border-[var(--agent-border)] bg-[var(--agent-surface)] px-4">
+            <div class="flex items-baseline gap-2">
+              <h2 class="m-0 text-xs font-semibold text-[var(--agent-text)]">预览</h2>
+              <span class="text-[10px] text-[var(--agent-text-muted)]">{{ currentSelectionLabel }}</span>
+            </div>
+            <span class="text-[10px] text-[var(--agent-text-muted)]">{{ activeDeliverableTab === 'presentation' ? '从左侧选择页面' : '点击正文定位内容' }}</span>
+          </div>
+          <div class="app-scrollbar flex-1 overflow-auto p-5 lg:p-7">
             <PresentationPreview
               v-if="activeDeliverableTab === 'presentation'"
               :slides="spec.presentation.slides"
@@ -296,10 +329,16 @@ function handleGenerate() {
               @update:selected-block-id="selectedBlockId = $event"
             />
           </div>
-        </div>
+        </main>
 
         <!-- Right: Editor -->
-        <div class="flex flex-col overflow-hidden">
+        <aside class="flex min-w-0 flex-col overflow-hidden bg-[var(--agent-surface)]">
+          <div class="flex h-11 shrink-0 items-center justify-between border-b border-[var(--agent-border)] px-4">
+            <div>
+              <h2 class="m-0 text-xs font-semibold text-[var(--agent-text)]">内容编辑</h2>
+            </div>
+            <span v-if="!editable" class="rounded bg-[var(--agent-surface-muted)] px-2 py-1 text-[10px] font-semibold text-[var(--agent-text-muted)]">只读</span>
+          </div>
           <div class="flex-1 overflow-hidden p-4">
             <PresentationEditor
               v-if="activeDeliverableTab === 'presentation'"
@@ -327,11 +366,11 @@ function handleGenerate() {
               @move-down="moveBlockDown"
             />
           </div>
-        </div>
+        </aside>
       </div>
 
-      <!-- Mobile tab layout (<768px) -->
-      <div class="flex flex-1 flex-col overflow-hidden md:hidden">
+      <!-- Compact tab layout (<1024px) -->
+      <div class="flex flex-1 flex-col overflow-hidden lg:hidden">
         <!-- Deliverable tabs -->
         <div class="flex border-b border-[var(--agent-border)]">
           <button
@@ -373,10 +412,16 @@ function handleGenerate() {
           <!-- Structure tab -->
           <div v-if="mobileTab === 'structure'">
             <DocumentDeliverableNavigation
+              compact
+              class="h-full min-h-0"
               :spec="spec"
               :active-tab="activeDeliverableTab"
               :generation="generation"
+              :current-slide-id="currentSlideId"
+              :selected-block-id="selectedBlockId"
               @update:active-tab="activeDeliverableTab = $event"
+              @update:current-slide-id="currentSlideId = $event; mobileTab = 'edit'"
+              @update:selected-block-id="selectedBlockId = $event; mobileTab = 'edit'"
             />
           </div>
 
@@ -443,11 +488,9 @@ function handleGenerate() {
       :open="showSettings"
       :spec="spec"
       :editable="editable"
-      :image-consents="generation.imageConsents"
+      :save-state="saveState"
       @update:open="showSettings = $event"
       @update-spec="updateSpec"
-      @confirm-consent="(imageUrl: string, sourceId?: string) => emit('confirm-consent', imageUrl, sourceId)"
-      @fetch-source-image="emit('fetch-source-image')"
     />
 
     <DocumentVersionDialog

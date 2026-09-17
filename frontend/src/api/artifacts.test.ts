@@ -144,8 +144,14 @@ test('artifact draft update converts the shared long-form editor content to the 
   } as ArtifactSpec;
 
   await updateResearchArtifactDraft('generation-1', spec);
-  const payload = JSON.parse(requestBody) as { spec: Record<string, unknown> & { pdf: { sections: Array<{ title: string; paragraphs: string[] }> } } };
-  assert.equal('longform' in payload.spec, false);
+  const payload = JSON.parse(requestBody) as {
+    spec: Record<string, unknown> & {
+      longform: ArtifactSpec['longform'];
+      pdf: { sections: Array<{ title: string; paragraphs: string[] }> };
+    };
+  };
+  assert.equal(payload.spec.longform.pageSettings.marginTop, 25);
+  assert.equal(payload.spec.longform.blocks[0]?.type, 'heading');
   assert.equal(payload.spec.pdf.sections[0]?.title, '第一章');
   assert.deepEqual(payload.spec.pdf.sections[0]?.paragraphs, ['正文内容']);
 });
