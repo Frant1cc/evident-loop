@@ -27,7 +27,6 @@ McpManager
           ↓
 Preset Catalog
   ├─ context7Preset
-  ├─ memoryPreset
   └─ resolveDraft(platform) (跨平台命令)
           ↓
 McpStore
@@ -42,7 +41,7 @@ McpStore
 
 ```typescript
 type McpManagedMetadata = {
-  presetId: string;           // 'context7' | 'memory'
+  presetId: string;           // 'context7'
   presetVersion: number;      // 预置配置版本
   consentVersion: number;     // 用户确认版本
   consentedAt: string;        // ISO 8601 时间戳
@@ -141,24 +140,6 @@ args: ['--yes', '@upstash/context7-mcp@4.0.3'] // npm 7+；npm 6 省略 --yes
   tools: {
     'query-docs': 'allow',
     'resolve-library-id': 'allow'
-  }
-}
-```
-
-**Memory:**
-```typescript
-{
-  default: 'require_approval',
-  tools: {
-    read_graph: 'allow',
-    search_nodes: 'allow',
-    open_nodes: 'allow',
-    create_entities: 'require_approval',
-    create_relations: 'require_approval',
-    add_observations: 'require_approval',
-    delete_entities: 'require_approval',
-    delete_observations: 'require_approval',
-    delete_relations: 'require_approval'
   }
 }
 ```

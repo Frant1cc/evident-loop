@@ -2,7 +2,6 @@ import type { ManagedMcpPreset } from './contracts.js';
 import { resolveNpxCommand, validateCommandSafety } from './platform.js';
 
 const CONTEXT7_VERSION = '4.0.3';
-const MEMORY_VERSION = '2026.7.4';
 
 export const context7Preset: ManagedMcpPreset = {
   id: 'context7',
@@ -41,51 +40,7 @@ export const context7Preset: ManagedMcpPreset = {
   }
 };
 
-export const memoryPreset: ManagedMcpPreset = {
-  id: 'memory',
-  version: 2,
-  consentVersion: 1,
-  name: 'Memory 本地记忆',
-  description: '为 MCP 客户端提供可持久化的本地知识图谱记忆工具。',
-  publisher: 'Model Context Protocol',
-  package: {
-    name: '@modelcontextprotocol/server-memory',
-    version: MEMORY_VERSION
-  },
-  resolveDraft: (platform, runtime) => {
-    const { command, args } = resolveNpxCommand(
-      platform,
-      '@modelcontextprotocol/server-memory',
-      MEMORY_VERSION,
-      runtime.npxMajorVersion
-    );
-    validateCommandSafety(command, args);
-    return {
-      name: 'Memory 本地记忆',
-      transport: 'stdio',
-      enabled: false,
-      command,
-      args,
-      authMode: 'none'
-    };
-  },
-  approvalPolicy: {
-    default: 'require_approval',
-    tools: {
-      read_graph: 'allow',
-      search_nodes: 'allow',
-      open_nodes: 'allow',
-      create_entities: 'require_approval',
-      create_relations: 'require_approval',
-      add_observations: 'require_approval',
-      delete_entities: 'require_approval',
-      delete_observations: 'require_approval',
-      delete_relations: 'require_approval'
-    }
-  }
-};
-
-export const MANAGED_PRESETS: ManagedMcpPreset[] = [context7Preset, memoryPreset];
+export const MANAGED_PRESETS: ManagedMcpPreset[] = [context7Preset];
 
 export function getPresetById(id: string): ManagedMcpPreset | undefined {
   return MANAGED_PRESETS.find((preset) => preset.id === id);

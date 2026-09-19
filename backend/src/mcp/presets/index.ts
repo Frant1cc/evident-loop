@@ -13,7 +13,6 @@ export {
 
 export {
   context7Preset,
-  memoryPreset,
   MANAGED_PRESETS,
   getPresetById,
   describeApprovalPolicy

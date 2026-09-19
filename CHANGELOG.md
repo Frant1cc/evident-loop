@@ -11,9 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Research event timeline now shows context micro-compression and summary-compression lifecycle events, including trigger threshold and before/after Token estimates
 
-- **MCP Managed Presets**: One-click enablement for built-in MCP presets (Context7 and Memory)
+- **MCP Managed Presets**: One-click enablement for the built-in Context7 MCP preset
   - Backend-managed presets with cross-platform command resolution (Windows/macOS/Linux)
-  - Fixed package versions: Context7 4.0.3, Memory 2026.7.4
+  - Fixed package version: Context7 4.0.3
   - Version-aware npx arguments support both npm 6 and npm 7+ without prompts
   - Existing managed connections automatically migrate stale package commands before retesting
   - Idempotent operations: repeated enable returns existing server without duplicates
@@ -35,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Deprecated frontend preset definitions in `frontend/src/mcp/presets.ts` (now backend-managed)
 - Connected MCP tools are automatically authorized for new research turns and hidden from the per-turn tool picker; MCP availability is controlled only from MCP Management
 - `read_evidence`（回查证据）由后端为每个研究任务自动授权，并从逐轮工具选择菜单中隐藏
+
+### Removed
+
+- Removed the built-in Memory MCP preset; the application keeps its native session-memory flow and general custom MCP support
 
 ### Security
 

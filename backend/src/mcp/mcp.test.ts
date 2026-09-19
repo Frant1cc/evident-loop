@@ -198,6 +198,41 @@ test('managed preset enables a pinned package and remains idempotent', async () 
   fixture.database.close();
 });
 
+test('retired managed presets are removed during hydration', () => {
+  const fixture = createFixture();
+  const retired = saveDraft(fixture.manager, { name: 'Retired preset' });
+  fixture.store.saveManagedMetadata(retired.id, {
+    presetId: 'memory',
+    presetVersion: 2,
+    consentVersion: 1,
+    consentedAt: '2026-08-25T00:00:00.000Z'
+  });
+  fixture.store.upsertTool({
+    serverId: retired.id,
+    remoteName: 'read_graph',
+    modelName: stableToolName(retired.id, 'read_graph'),
+    ordinal: 1,
+    description: 'Read a retired graph',
+    inputSchema: objectSchema([]),
+    tombstone: false
+  });
+
+  const runtime = createToolRuntime(new Map() as ToolCatalog);
+  const restored = createMcpManager({
+    runtime,
+    store: fixture.store,
+    adapterFactory: createFakeAdapter(fixture.state),
+    host: '127.0.0.1',
+    npxMajorVersion: 10
+  });
+
+  assert.equal(restored.getServer(retired.id), undefined);
+  assert.equal(fixture.store.getServer(retired.id), undefined);
+  assert.equal(fixture.store.listTools(retired.id).length, 0);
+  assert.equal(runtime.listModules().length, 0);
+  fixture.database.close();
+});
+
 test('concurrent connection requests share one in-flight MCP process', async () => {
   const fixture = createFixture({ state: { connectDelayMs: 30 } });
   const server = saveDraft(fixture.manager);

@@ -22,6 +22,8 @@ import { createMcpStore } from './store.js';
 import { McpSchemaValidator } from './validation.js';
 import { MANAGED_PRESETS, detectNpxMajorVersion, getPresetById, describeApprovalPolicy, type McpManagedMetadata, type McpPresetPublic } from './presets/index.js';
 
+const RETIRED_MANAGED_PRESET_IDS = new Set(['memory']);
+
 type Entry = {
   config: McpServerConfig;
   state: McpServerState;
@@ -401,7 +403,14 @@ export class McpManagerImpl implements McpManager {
   }
 
   private hydratePersistedState() {
-    for (const config of this.store.listServers()) this.ensureEntry(config);
+    for (const config of this.store.listServers()) {
+      const metadata = this.store.getManagedMetadata(config.id);
+      if (metadata && RETIRED_MANAGED_PRESET_IDS.has(metadata.presetId)) {
+        this.store.deleteServer(config.id);
+        continue;
+      }
+      this.ensureEntry(config);
+    }
     for (const tool of this.store.listTools()) this.upsertRuntimeTool(tool);
   }
 

@@ -32,17 +32,5 @@ export const builtInMcpPresets: McpPreset[] = [
       args: ['/c', 'npx', '-y', '@upstash/context7-mcp'],
       authMode: 'none'
     }
-  },
-  {
-    id: 'memory',
-    name: 'Memory',
-    description: '为 MCP 客户端提供可持久化的本地知识图谱记忆工具。',
-    draft: {
-      name: 'Memory 本地记忆',
-      transport: 'stdio',
-      command: 'cmd',
-      args: ['/c', 'npx', '-y', '@modelcontextprotocol/server-memory'],
-      authMode: 'none'
-    }
   }
 ];
