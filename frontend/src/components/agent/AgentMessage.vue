@@ -10,6 +10,7 @@ import {
   MessageGroup
 } from '@/components/ui/message';
 import MarkdownMessage from '../conversation/MarkdownMessage.vue';
+import type { ResearchSource } from '../../types/research';
 
 type AuxiliaryStatus = 'idle' | 'running' | 'complete' | 'error';
 
@@ -26,12 +27,14 @@ const props = withDefaults(defineProps<{
   auxiliaryActivity?: string;
   auxiliaryCount?: number;
   auxiliaryStatus?: AuxiliaryStatus;
+  sources?: ResearchSource[];
 }>(), {
   streamingPlaceholder: '',
   auxiliaryLabel: '附件',
   auxiliaryActivity: '',
   auxiliaryCount: 0,
-  auxiliaryStatus: 'idle'
+  auxiliaryStatus: 'idle',
+  sources: () => []
 });
 
 const emit = defineEmits<{
@@ -114,6 +117,7 @@ const triggerClass = computed(() => [
         <MarkdownMessage
           :content="renderedContent"
           :streaming="message.status === 'streaming' && Boolean(message.content)"
+          :sources="sources"
           @citation="emit('citation', $event)"
         />
 

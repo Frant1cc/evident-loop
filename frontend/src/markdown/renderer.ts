@@ -1,5 +1,19 @@
 import DOMPurify from 'dompurify';
 import { Marked, type Tokens } from 'marked';
+import {
+  buildSourceLinkNumberMap,
+  isSourceLinkLabel,
+  normalizeSourceHref,
+  plainLinkLabel,
+  sourceNumber,
+  type MarkdownSource
+} from './sourceReferences';
+
+export type MarkdownRenderOptions = {
+  streaming?: boolean;
+  sources?: MarkdownSource[];
+  sourceLinkNumbers?: ReadonlyMap<string, number>;
+};
 
 type CitationToken = {
   type: 'citation';
@@ -8,6 +22,8 @@ type CitationToken = {
 };
 
 let renderingStreamingContent = false;
+let renderingSources: MarkdownSource[] = [];
+let renderingSourceLinkNumbers: ReadonlyMap<string, number> = new Map();
 
 const markdown = new Marked({
   gfm: true,
@@ -27,7 +43,12 @@ const markdown = new Marked({
       },
       renderer(token) {
         const { key } = token as CitationToken;
-        return `<button type="button" class="markdown-citation" data-citation-key="${key}" aria-label="查看来源 ${key}">[${key}]</button>`;
+        const source = renderingSources.find((item) => item.citationKey.toLowerCase() === key.toLowerCase());
+        return renderSourceMarker({
+          key,
+          number: sourceNumber(key, renderingSources.indexOf(source!)),
+          source
+        });
       }
     }
   ],
@@ -50,14 +71,41 @@ const markdown = new Marked({
         `<pre><code class="${language ? `language-${escapeHtml(language)}` : 'language-plaintext'}">${escapeHtml(token.text)}</code></pre>`,
         '</div>'
       ].join('');
+    },
+    link(token: Tokens.Link) {
+      const label = plainLinkLabel(token.text);
+      if (isSourceLinkLabel(label)) {
+        const normalizedHref = normalizeSourceHref(token.href);
+        const source = renderingSources.find((item) => normalizeSourceHref(item.file) === normalizedHref);
+        const number = source
+          ? sourceNumber(source.citationKey, renderingSources.indexOf(source))
+          : renderingSourceLinkNumbers.get(normalizedHref);
+
+        if (number !== undefined) {
+          return renderSourceMarker({
+            key: source?.citationKey,
+            number,
+            source,
+            href: token.href
+          });
+        }
+      }
+
+      const text = this.parser.parseInline(token.tokens);
+      const title = token.title ? ` title="${escapeHtml(token.title)}"` : '';
+      return `<a href="${escapeHtml(token.href)}"${title}>${text}</a>`;
     }
   }
 });
 
-export function renderMarkdown(content: string, streaming = false) {
+export function renderMarkdown(content: string, options: MarkdownRenderOptions = {}) {
   if (!content) return '';
   const previousStreamingState = renderingStreamingContent;
-  renderingStreamingContent = streaming;
+  const previousSources = renderingSources;
+  const previousSourceLinkNumbers = renderingSourceLinkNumbers;
+  renderingStreamingContent = options.streaming ?? false;
+  renderingSources = options.sources ?? [];
+  renderingSourceLinkNumbers = options.sourceLinkNumbers ?? buildSourceLinkNumberMap(content, renderingSources);
 
   try {
     const rendered = markdown.parse(content) as string;
@@ -69,13 +117,19 @@ export function renderMarkdown(content: string, streaming = false) {
         'data-code-state',
         'data-copy-code',
         'data-copy-label',
-        'data-language'
+        'data-language',
+        'data-source-number',
+        'data-source-url',
+        'rel',
+        'target'
       ],
       ADD_TAGS: ['button']
     });
-    return removeCitationsFromLinks(sanitized);
+    return removeSourceMarkersFromLinks(sanitized);
   } finally {
     renderingStreamingContent = previousStreamingState;
+    renderingSources = previousSources;
+    renderingSourceLinkNumbers = previousSourceLinkNumbers;
   }
 }
 
@@ -111,13 +165,40 @@ export function isClosedFencedCodeBlock(raw: string) {
     });
 }
 
-function removeCitationsFromLinks(html: string) {
+function removeSourceMarkersFromLinks(html: string) {
   const template = document.createElement('template');
   template.innerHTML = html;
-  for (const citation of template.content.querySelectorAll<HTMLButtonElement>('a .markdown-citation')) {
-    citation.replaceWith(document.createTextNode(citation.textContent ?? ''));
+  for (const marker of template.content.querySelectorAll<HTMLElement>('a .markdown-source-marker')) {
+    marker.replaceWith(document.createTextNode(marker.textContent ?? ''));
   }
   return template.innerHTML;
+}
+
+function renderSourceMarker(options: {
+  key?: string;
+  number: number;
+  source?: MarkdownSource;
+  href?: string;
+}) {
+  const explicitHref = options.href;
+  const href = explicitHref ?? options.source?.file;
+  const isWebSource = Boolean(href && /^https?:\/\//iu.test(href));
+  const label = options.source?.heading?.trim() || options.source?.title?.trim();
+  const ariaLabel = `${isWebSource ? '打开' : '查看'}来源 ${options.number}${label ? `：${label}` : ''}`;
+  const attributes = [
+    'class="markdown-source-marker"',
+    `data-source-number="${options.number}"`,
+    options.key ? `data-citation-key="${escapeHtml(options.key)}"` : '',
+    href ? `data-source-url="${escapeHtml(href)}"` : '',
+    `aria-label="${escapeHtml(ariaLabel)}"`
+  ].filter(Boolean).join(' ');
+  const number = `<span aria-hidden="true">${options.number}</span>`;
+
+  if (isWebSource) {
+    return `<a href="${escapeHtml(href!)}" target="_blank" rel="noopener noreferrer" ${attributes}>${number}</a>`;
+  }
+  if (explicitHref) return `<a href="${escapeHtml(explicitHref)}" ${attributes}>${number}</a>`;
+  return `<button type="button" ${attributes}>${number}</button>`;
 }
 
 export function normalizeLanguage(value?: string) {

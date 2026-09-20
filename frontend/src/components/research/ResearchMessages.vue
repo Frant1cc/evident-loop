@@ -8,12 +8,13 @@ import ConversationHistoryRail from '../conversation/ConversationHistoryRail.vue
 import DocumentStatusCard from '../documents/DocumentStatusCard.vue';
 import { useMessageAutoScroll } from '../../composables/useMessageAutoScroll';
 import type { ArtifactOutput, ResearchArtifactGeneration } from '../../types/artifacts';
-import type { ResearchMessage } from '../../types/research';
+import type { ResearchMessage, ResearchSource } from '../../types/research';
 import type { AuxiliaryState } from '../../lib/auxiliaryState';
 
 const props = defineProps<{
   conversationId?: string;
   messages: ResearchMessage[];
+  sources: ResearchSource[];
   generationsByMessageId: Map<string, ResearchArtifactGeneration[]>;
   auxiliaryStateByMessageId?: Map<string, AuxiliaryState>;
 }>();
@@ -33,6 +34,20 @@ const messageSignature = computed(() => {
     ? `${props.messages.length}:${lastMessage.id}:${lastMessage.content.length}:${lastMessage.status}`
     : 'empty';
 });
+
+const sourcesByMessageId = computed(() => {
+  const grouped = new Map<string, ResearchSource[]>();
+  for (const source of props.sources) {
+    const messageSources = grouped.get(source.messageId) ?? [];
+    messageSources.push(source);
+    grouped.set(source.messageId, messageSources);
+  }
+  return grouped;
+});
+
+function sourcesForMessage(messageId: string) {
+  return sourcesByMessageId.value.get(messageId) ?? [];
+}
 
 const auxiliarySummaryLabel = '生成的文档';
 const auxiliarySummaryActivity = '正在生成文档…';
@@ -153,6 +168,7 @@ defineExpose({ scrollContainer });
         >
           <AgentMessage
             :message="message"
+            :sources="sourcesForMessage(message.id)"
             streaming-placeholder="正在生成回复…"
             :auxiliary-status="auxiliaryStateFor(message.id).status"
             :auxiliary-label="auxiliaryStateFor(message.id).label"

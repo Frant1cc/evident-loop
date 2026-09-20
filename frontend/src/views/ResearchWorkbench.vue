@@ -1011,6 +1011,7 @@ const allGenerations = computed(() => generations.value);
         :title="activeConversation?.title"
         :conversation-id="activeConversationId"
         :messages="messages"
+        :sources="sources"
         :generations-by-message-id="generationsByMessageId"
         :auxiliary-state-by-message-id="auxiliaryStateByMessageId"
         :loading="loading"

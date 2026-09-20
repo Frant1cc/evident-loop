@@ -8,7 +8,7 @@ import ToolApprovalCard from '../approvals/ToolApprovalCard.vue';
 import type { ResearchSkillInfo, ResearchToolGroupInfo, ResearchToolInfo } from '../../api/research';
 import type { ToolApproval, ToolApprovalDecision } from '../../types/approvals';
 import type { ArtifactOutput, ResearchArtifactGeneration } from '../../types/artifacts';
-import type { ResearchMessage } from '../../types/research';
+import type { ResearchMessage, ResearchSource } from '../../types/research';
 import type { StreamConnectionState } from '../../types/streaming';
 import type { AuxiliaryState } from '../../lib/auxiliaryState';
 
@@ -16,6 +16,7 @@ defineProps<{
   title?: string;
   conversationId?: string;
   messages: ResearchMessage[];
+  sources: ResearchSource[];
   generationsByMessageId: Map<string, ResearchArtifactGeneration[]>;
   auxiliaryStateByMessageId?: Map<string, AuxiliaryState>;
   loading: boolean;
@@ -78,6 +79,7 @@ const emit = defineEmits<{
     <ResearchMessages
       :conversation-id="conversationId"
       :messages="messages"
+      :sources="sources"
       :generations-by-message-id="generationsByMessageId"
       :auxiliary-state-by-message-id="auxiliaryStateByMessageId"
       @citation="emit('citation', $event)"

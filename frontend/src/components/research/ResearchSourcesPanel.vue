@@ -41,6 +41,10 @@ function sourceLocation(source: ResearchSource) {
   return formatSourceLocator(source.locator, { startLine: source.startLine, endLine: source.endLine });
 }
 
+function sourceNumber(source: ResearchSource) {
+  return source.citationKey.replace(/^S/iu, '');
+}
+
 watch(
   () => props.selectedSourceId,
   async (sourceId) => {
@@ -93,7 +97,10 @@ watch(
                 >{{ source.file }}</a>
                 <p v-else class="m-0 mt-1 block w-full max-w-full overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[10px] leading-4 text-muted-foreground" :title="source.file">{{ source.file }}</p>
               </div>
-              <Badge variant="outline" class="shrink-0 font-mono">[{{ source.citationKey }}]</Badge>
+              <span
+                class="grid size-6 shrink-0 place-items-center rounded-full border border-primary/35 bg-secondary font-mono text-[10px] font-bold text-secondary-foreground"
+                :aria-label="`来源 ${sourceNumber(source)}`"
+              >{{ sourceNumber(source) }}</span>
             </div>
             <div class="mt-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
               <span v-if="source.score > 0" class="tabular-nums">相关度 {{ source.score.toFixed(3) }}</span>
@@ -134,7 +141,10 @@ watch(
               >{{ source.file }}</a>
               <p v-else class="m-0 mt-1 block w-full max-w-full overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[10px] leading-4 text-muted-foreground" :title="source.file">{{ source.file }}</p>
             </div>
-            <Badge variant="outline" class="shrink-0 font-mono">[{{ source.citationKey }}]</Badge>
+            <span
+              class="grid size-6 shrink-0 place-items-center rounded-full border border-primary/35 bg-secondary font-mono text-[10px] font-bold text-secondary-foreground"
+              :aria-label="`来源 ${sourceNumber(source)}`"
+            >{{ sourceNumber(source) }}</span>
           </div>
           <div class="mt-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
             <span v-if="source.score > 0" class="tabular-nums">相关度 {{ source.score.toFixed(3) }}</span>

@@ -1,17 +1,22 @@
 <script setup lang="ts">
 import DOMPurify from 'dompurify';
-import { computed, nextTick, onBeforeUnmount, ref, toRef, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, toRef, watch, type CSSProperties } from 'vue';
 
 import StreamingCodeBlock from '../markdown/StreamingCodeBlock.vue';
 import StreamingTableBlock from '../markdown/StreamingTableBlock.vue';
 import { useStreamingMarkdownDisplay } from '../../composables/useStreamingMarkdownDisplay';
 import { renderMarkdown } from '../../markdown/renderer';
+import { buildSourceLinkNumberMap, normalizeSourceHref } from '../../markdown/sourceReferences';
+import { formatSourceLocator } from '../../lib/sourceLocator';
+import type { ResearchSource } from '../../types/research';
 
 const props = withDefaults(defineProps<{
   content: string;
   streaming?: boolean;
+  sources?: ResearchSource[];
 }>(), {
-  streaming: false
+  streaming: false,
+  sources: () => []
 });
 
 const emit = defineEmits<{
@@ -21,33 +26,68 @@ const emit = defineEmits<{
 const root = ref<HTMLElement>();
 const finalHtml = ref('');
 const copyTimers = new Set<number>();
+const sourcePreview = ref<{
+  number: string;
+  title: string;
+  meta: string;
+  excerpt: string;
+  action: string;
+}>();
+const sourcePreviewStyle = ref<CSSProperties>({});
+let activePreviewMarker: HTMLElement | undefined;
+let previewPinned = false;
+let previewCloseTimer = 0;
 
 const { segments } = useStreamingMarkdownDisplay(toRef(props, 'content'), toRef(props, 'streaming'));
+const sourceLinkNumbers = computed(() => buildSourceLinkNumberMap(props.content, props.sources));
+const sourceSignature = computed(() => props.sources
+  .map((source) => `${source.id}:${source.citationKey}:${source.file}:${source.title}:${source.heading ?? ''}:${source.content.length}`)
+  .join('\u0000'));
 
 const renderedSegments = computed(() =>
   segments.value.map((segment) =>
     segment.kind === 'markdown'
-      ? { ...segment, html: renderMarkdown(segment.raw, true) }
+      ? {
+          ...segment,
+          html: renderMarkdown(segment.raw, {
+            streaming: true,
+            sources: props.sources,
+            sourceLinkNumbers: sourceLinkNumbers.value
+          })
+        }
       : segment
   )
 );
 
 watch(
-  () => [props.content, props.streaming] as const,
+  () => [props.content, props.streaming, sourceSignature.value] as const,
   ([content, streaming]) => {
     if (streaming) {
       finalHtml.value = '';
       return;
     }
-    finalHtml.value = renderMarkdown(content);
+    finalHtml.value = renderMarkdown(content, {
+      sources: props.sources,
+      sourceLinkNumbers: sourceLinkNumbers.value
+    });
     void enhanceCodeBlocks();
   },
   { immediate: true }
 );
 
+onMounted(() => {
+  document.addEventListener('pointerdown', handleDocumentPointerDown, true);
+  window.addEventListener('resize', closeSourcePreview);
+  window.addEventListener('scroll', closeSourcePreview, true);
+});
+
 onBeforeUnmount(() => {
   for (const timer of copyTimers) window.clearTimeout(timer);
   copyTimers.clear();
+  window.clearTimeout(previewCloseTimer);
+  document.removeEventListener('pointerdown', handleDocumentPointerDown, true);
+  window.removeEventListener('resize', closeSourcePreview);
+  window.removeEventListener('scroll', closeSourcePreview, true);
 });
 
 async function enhanceCodeBlocks() {
@@ -82,10 +122,151 @@ async function handleClick(event: MouseEvent) {
     return;
   }
 
-  const citation = target?.closest<HTMLElement>('[data-citation-key]');
-  if (!citation) return;
-  event.preventDefault();
-  emit('citation', citation.dataset.citationKey ?? '');
+  const marker = target?.closest<HTMLElement>('.markdown-source-marker');
+  if (!marker) {
+    closeSourcePreview();
+    return;
+  }
+
+  if (event.detail > 0 && isCoarsePointer() && (!previewPinned || activePreviewMarker !== marker)) {
+    event.preventDefault();
+    openSourcePreview(marker, true);
+    return;
+  }
+
+  closeSourcePreview();
+  const citationKey = marker.dataset.citationKey;
+  if (marker.tagName === 'BUTTON' && citationKey) {
+    event.preventDefault();
+    emit('citation', citationKey);
+  }
+}
+
+function handlePointerOver(event: PointerEvent) {
+  if (event.pointerType === 'touch') return;
+  const marker = (event.target as HTMLElement | null)?.closest<HTMLElement>('.markdown-source-marker');
+  if (!marker || marker === activePreviewMarker) return;
+  openSourcePreview(marker);
+}
+
+function handlePointerOut(event: PointerEvent) {
+  if (previewPinned) return;
+  const marker = (event.target as HTMLElement | null)?.closest<HTMLElement>('.markdown-source-marker');
+  if (!marker || marker.contains(event.relatedTarget as Node | null)) return;
+  schedulePreviewClose();
+}
+
+function handleFocusIn(event: FocusEvent) {
+  if (isCoarsePointer()) return;
+  const marker = (event.target as HTMLElement | null)?.closest<HTMLElement>('.markdown-source-marker');
+  if (marker) openSourcePreview(marker);
+}
+
+function handleFocusOut(event: FocusEvent) {
+  if (previewPinned) return;
+  const marker = (event.target as HTMLElement | null)?.closest<HTMLElement>('.markdown-source-marker');
+  if (!marker || marker.contains(event.relatedTarget as Node | null)) return;
+  schedulePreviewClose();
+}
+
+function openSourcePreview(marker: HTMLElement, pinned = false) {
+  window.clearTimeout(previewCloseTimer);
+  if (activePreviewMarker && activePreviewMarker !== marker) delete activePreviewMarker.dataset.previewOpen;
+
+  const source = resolveMarkerSource(marker);
+  const url = marker.dataset.sourceUrl ?? source?.file ?? '';
+  const webSource = /^https?:\/\//iu.test(url);
+  const number = marker.dataset.sourceNumber ?? source?.citationKey.replace(/^S/iu, '') ?? '';
+  const title = source?.heading?.trim() || source?.title?.trim() || sourceHost(url) || '来源详情';
+  const locator = source && !webSource
+    ? formatSourceLocator(source.locator, { startLine: source.startLine, endLine: source.endLine }).replace(/[–—]/gu, '-')
+    : '';
+  const meta = webSource ? sourceHost(url) : [source?.title, locator].filter(Boolean).join(' · ');
+  const excerpt = compactExcerpt(source?.content ?? '', 190)
+    || (webSource ? '打开原始网页查看完整内容。' : '在来源面板中查看完整证据片段。');
+  const rect = marker.getBoundingClientRect();
+  const width = Math.min(320, window.innerWidth - 32);
+  const left = Math.min(
+    Math.max(16, rect.left + rect.width / 2 - width / 2),
+    window.innerWidth - width - 16
+  );
+  const placeAbove = rect.top >= 190;
+
+  sourcePreview.value = {
+    number,
+    title,
+    meta,
+    excerpt,
+    action: marker.tagName === 'A'
+      ? `点击数字打开${webSource ? '原网页' : '来源'}`
+      : '点击数字定位完整来源'
+  };
+  sourcePreviewStyle.value = {
+    left: `${left}px`,
+    top: `${placeAbove ? rect.top - 10 : rect.bottom + 10}px`,
+    width: `${width}px`,
+    transform: placeAbove ? 'translateY(-100%)' : undefined,
+    transformOrigin: placeAbove ? 'bottom center' : 'top center'
+  };
+  activePreviewMarker = marker;
+  previewPinned = pinned;
+  marker.dataset.previewOpen = 'true';
+}
+
+function schedulePreviewClose() {
+  window.clearTimeout(previewCloseTimer);
+  previewCloseTimer = window.setTimeout(closeSourcePreview, 180);
+}
+
+function keepSourcePreviewOpen() {
+  window.clearTimeout(previewCloseTimer);
+}
+
+function handlePreviewPointerLeave() {
+  if (!previewPinned) schedulePreviewClose();
+}
+
+function closeSourcePreview() {
+  window.clearTimeout(previewCloseTimer);
+  if (activePreviewMarker) delete activePreviewMarker.dataset.previewOpen;
+  activePreviewMarker = undefined;
+  previewPinned = false;
+  sourcePreview.value = undefined;
+}
+
+function handleDocumentPointerDown(event: PointerEvent) {
+  const target = event.target as Node | null;
+  if (!activePreviewMarker || (target && activePreviewMarker.contains(target))) return;
+  closeSourcePreview();
+}
+
+function resolveMarkerSource(marker: HTMLElement) {
+  const key = marker.dataset.citationKey?.toLowerCase();
+  if (key) {
+    const byKey = props.sources.find((source) => source.citationKey.toLowerCase() === key);
+    if (byKey) return byKey;
+  }
+  const url = marker.dataset.sourceUrl;
+  return url
+    ? props.sources.find((source) => normalizeSourceHref(source.file) === normalizeSourceHref(url))
+    : undefined;
+}
+
+function compactExcerpt(value: string, limit: number) {
+  const compact = value.replace(/\s+/gu, ' ').trim();
+  return compact.length > limit ? `${compact.slice(0, limit).trimEnd()}…` : compact;
+}
+
+function sourceHost(value: string) {
+  try {
+    return new URL(value).hostname.replace(/^www\./iu, '');
+  } catch {
+    return value;
+  }
+}
+
+function isCoarsePointer() {
+  return window.matchMedia('(hover: none), (pointer: coarse)').matches;
 }
 
 async function copyCode(button: HTMLButtonElement) {
@@ -111,7 +292,15 @@ async function copyCode(button: HTMLButtonElement) {
 </script>
 
 <template>
-  <div ref="root" class="markdown-message" @click="handleClick">
+  <div
+    ref="root"
+    class="markdown-message"
+    @click="handleClick"
+    @pointerover="handlePointerOver"
+    @pointerout="handlePointerOut"
+    @focusin="handleFocusIn"
+    @focusout="handleFocusOut"
+  >
     <template v-if="streaming">
       <template v-for="segment in renderedSegments" :key="segment.id">
         <div v-if="segment.kind === 'markdown'" class="markdown-segment" v-html="segment.html" />
@@ -133,6 +322,31 @@ async function copyCode(button: HTMLButtonElement) {
       </template>
     </template>
     <div v-else-if="finalHtml" class="markdown-segment markdown-tail" v-html="finalHtml" />
+
+    <Teleport to="body">
+      <Transition name="source-preview">
+        <aside
+          v-if="sourcePreview"
+          class="source-preview-card pointer-events-auto fixed z-50 rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-lg"
+          :style="sourcePreviewStyle"
+          role="tooltip"
+          @pointerenter="keepSourcePreviewOpen"
+          @pointerleave="handlePreviewPointerLeave"
+        >
+          <div class="flex items-start gap-2.5">
+            <span class="grid size-6 shrink-0 place-items-center rounded-full bg-primary font-mono text-[11px] font-bold text-primary-foreground">
+              {{ sourcePreview.number }}
+            </span>
+            <div class="min-w-0 flex-1">
+              <p class="m-0 line-clamp-2 text-xs font-semibold leading-5">{{ sourcePreview.title }}</p>
+              <p v-if="sourcePreview.meta" class="m-0 mt-0.5 truncate font-mono text-[10px] text-muted-foreground">{{ sourcePreview.meta }}</p>
+            </div>
+          </div>
+          <p class="m-0 mt-2.5 line-clamp-3 text-xs leading-5 text-muted-foreground">{{ sourcePreview.excerpt }}</p>
+          <p class="m-0 mt-2 border-t border-border pt-2 text-[10px] font-medium text-muted-foreground">{{ sourcePreview.action }}</p>
+        </aside>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -195,24 +409,41 @@ async function copyCode(button: HTMLButtonElement) {
   text-underline-offset: 3px;
 }
 
-.markdown-message :deep(.markdown-citation) {
-  margin: 0 0.15rem;
-  border: 1px solid var(--agent-selected-border);
-  border-radius: 4px;
-  background: var(--agent-selected-bg);
-  color: var(--agent-selected-text);
-  padding: 0.03rem 0.3rem;
-  font: inherit;
-  font-weight: 700;
+.markdown-message :deep(.markdown-source-marker) {
+  display: inline-grid;
+  width: 1.28rem;
+  height: 1.28rem;
+  place-items: center;
+  margin: 0 0.1rem;
+  border: 1px solid color-mix(in oklch, var(--primary), transparent 56%);
+  border-radius: 999px;
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+  padding: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.66rem;
+  font-weight: 750;
+  line-height: 1;
+  text-decoration: none;
+  vertical-align: 0.08em;
   cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease;
+  transition: transform 120ms ease, background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 
-.markdown-message :deep(.markdown-citation:hover),
-.markdown-message :deep(.markdown-citation:focus-visible) {
-  border-color: var(--agent-text-muted);
-  background: var(--agent-surface);
-  outline: none;
+.markdown-message :deep(.markdown-source-marker:hover),
+.markdown-message :deep(.markdown-source-marker:focus-visible),
+.markdown-message :deep(.markdown-source-marker[data-preview-open='true']) {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  outline: 2px solid color-mix(in oklch, var(--ring), transparent 58%);
+  outline-offset: 2px;
+  text-decoration: none;
+  transform: translateY(-1px);
+}
+
+.markdown-message :deep(.markdown-source-marker:active) {
+  transform: scale(0.94);
 }
 
 .markdown-message :deep(ul),
@@ -416,9 +647,25 @@ async function copyCode(button: HTMLButtonElement) {
   50% { opacity: 1; transform: scale(1); }
 }
 
+.source-preview-enter-active,
+.source-preview-leave-active {
+  transition: opacity 120ms ease, scale 120ms ease;
+}
+
+.source-preview-enter-from,
+.source-preview-leave-to {
+  opacity: 0;
+  scale: 0.98;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .markdown-message :deep(.markdown-code-state::before) {
     animation: none;
+  }
+
+  .source-preview-enter-active,
+  .source-preview-leave-active {
+    transition: none;
   }
 }
 </style>
