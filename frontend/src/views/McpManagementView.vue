@@ -43,11 +43,11 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="h-full min-h-0 overflow-auto bg-background" aria-label="MCP 管理">
-    <div class="mx-auto grid w-full max-w-6xl gap-7 px-5 py-7 md:px-8 md:py-9">
+  <section class="min-w-0" aria-label="MCP 连接">
+    <div class="mx-auto grid w-full max-w-6xl gap-7">
       <header class="border-b border-border pb-6">
         <p class="m-0 flex items-center gap-2 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground"><PhTerminalWindow :size="13" weight="bold" aria-hidden="true" /> Tool connections</p>
-        <h1 class="m-0 mt-1.5 text-2xl font-semibold tracking-[-0.035em] text-foreground">MCP 管理</h1>
+        <h2 class="m-0 mt-1.5 text-2xl font-semibold tracking-[-0.035em] text-foreground">MCP 连接</h2>
         <p class="m-0 mt-1.5 max-w-2xl text-sm leading-6 text-muted-foreground">将本地或远程 MCP 工具接入研究工作台和 Agent 运行时。每个连接都必须先测试，再由你显式启用。</p>
       </header>
 

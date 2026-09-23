@@ -6,7 +6,6 @@ import {
   PhFlowArrow,
   PhGauge,
   PhGear,
-  PhPlugsConnected,
   PhMoon,
   PhSparkle,
   PhSun
@@ -32,14 +31,13 @@ const tabs = [
   { key: 'tasks', label: 'Agent 运行时', icon: PhFlowArrow },
   { key: 'evaluations', label: '质量评测', icon: PhGauge },
   { key: 'knowledge', label: '知识库', icon: PhBooks },
-  { key: 'mcp', label: 'MCP 管理', icon: PhPlugsConnected },
   { key: 'settings', label: '设置', icon: PhGear }
 ] satisfies Array<{ key: AppTabKey; label: string; icon: unknown }>;
 
 const { dark, toggleTheme } = useColorTheme();
 
 function isTabVisible(key: AppTabKey) {
-  return key === 'settings' || key === 'mcp' || props.tabVisibility[key];
+  return key === 'settings' || props.tabVisibility[key];
 }
 </script>
 

@@ -204,7 +204,7 @@ async function loadTools() {
     const { tools, groups } = await listResearchTools();
     availableTools.value = tools;
     availableToolGroups.value = groups;
-    // MCP tools are controlled by MCP Management and are not shown here.
+    // MCP tools are controlled in Settings and are not shown here.
     enabledToolGroups.value = Object.fromEntries(groups.map((group) => [group.id, false]));
     enabledStandaloneTools.value = Object.fromEntries(standaloneTools(tools, groups).map((tool) => [tool.name, false]));
   } catch {
@@ -270,7 +270,7 @@ async function createConversation() {
 }
 
 // Skill and selectable built-in tools belong to the Run. MCP tools are added by the backend
-// according to the connection state managed on the MCP page.
+// according to the connection state managed in Settings.
 function resetTurnDefaults() {
   selectedSkillId.value = undefined;
   for (const id of Object.keys(enabledToolGroups.value)) enabledToolGroups.value[id] = false;

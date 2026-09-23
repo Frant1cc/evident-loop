@@ -1,7 +1,7 @@
 export const configurableTabKeys = ['research', 'artifacts', 'tasks', 'evaluations', 'knowledge'] as const;
 
 export type ConfigurableTabKey = (typeof configurableTabKeys)[number];
-export type AppTabKey = ConfigurableTabKey | 'mcp' | 'settings';
+export type AppTabKey = ConfigurableTabKey | 'settings';
 export type TabVisibility = Record<ConfigurableTabKey, boolean>;
 
 export const defaultTabVisibility: TabVisibility = {

@@ -63,7 +63,7 @@ MCP 工具的 `annotations.readOnlyHint === true` 自动执行；为 `false` 或
 | OAuth callback | `GET /oauth/callback?serverId=...&code=...&state=...`（也可用 state 查找服务器） |
 | 删除 | `DELETE /servers/:id` |
 
-前端入口是“设置 → MCP 服务器”。新连接先保存为停用草稿，测试成功后才可启用；页面展示连接状态、工具 Schema/历史 tombstone、只读提示和授权状态，但不会回显凭证。Research Workbench 与 Task Console 通过 SSE/任务详情展示审批请求，并可批准或拒绝；通用审批 API 为 `GET /api/tool-approvals`、`GET /api/tool-approvals/:approvalId` 和 `POST /api/tool-approvals/:approvalId/decision`。
+前端入口是“设置 → MCP 连接”。新连接先保存为停用草稿，测试成功后才可启用；页面展示连接状态、工具 Schema/历史 tombstone、只读提示和授权状态，但不会回显凭证。Research Workbench 与 Task Console 通过 SSE/任务详情展示审批请求，并可批准或拒绝；通用审批 API 为 `GET /api/tool-approvals`、`GET /api/tool-approvals/:approvalId` 和 `POST /api/tool-approvals/:approvalId/decision`。
 
 ## 配置与本地安全
 
