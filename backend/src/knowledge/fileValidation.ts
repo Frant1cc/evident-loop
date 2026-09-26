@@ -20,6 +20,16 @@ const formatByExtension: Record<string, KnowledgeFormat> = {
 const pdfMagic = Buffer.from('%PDF-');
 const zipMagic = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 
+/** Multer/Busboy can expose UTF-8 multipart filenames as Latin-1 text. */
+export function decodeMultipartFilename(name: string) {
+  if (!/[\u0080-\u00ff]/u.test(name) || /[^\u0000-\u00ff]/u.test(name)) return name;
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(name, 'latin1'));
+  } catch {
+    return name;
+  }
+}
+
 export function sanitizeOriginalName(originalName: string) {
   const name = basename(originalName.replace(/\\/g, '/')).replace(/[\0-\x1f\x7f]/g, '').trim();
   if (!name || name === '.' || name === '..' || name.includes('..')) {

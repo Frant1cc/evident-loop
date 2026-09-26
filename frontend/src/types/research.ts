@@ -14,6 +14,12 @@ export type ResearchMessage = {
   content: string;
   status: 'streaming' | 'complete' | 'error';
   createdAt: string;
+  attachment?: {
+    id: string;
+    name: string;
+    format: 'md' | 'txt' | 'docx' | 'pdf';
+    size: number;
+  };
 };
 
 export type ResearchStep = {

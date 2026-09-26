@@ -5,6 +5,7 @@ import multer from 'multer';
 
 import { getKnowledgeMaxUploadBytes } from '../knowledge/config.js';
 import { KnowledgeImportError } from '../knowledge/errors.js';
+import { decodeMultipartFilename } from '../knowledge/fileValidation.js';
 import {
   assertDocumentEditable,
   deleteImportedDocument,
@@ -127,7 +128,7 @@ knowledgeRouter.post('/knowledge/documents/upload', (req, res) => {
 
       const result = await importKnowledgeUpload({
         upload: {
-          originalName: req.file.originalname,
+          originalName: decodeMultipartFilename(req.file.originalname),
           mimeType: req.file.mimetype,
           size: req.file.size,
           buffer: req.file.buffer

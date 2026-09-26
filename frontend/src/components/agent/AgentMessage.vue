@@ -21,6 +21,7 @@ const props = withDefaults(defineProps<{
     content: string;
     status: 'streaming' | 'complete' | 'error';
     createdAt?: string;
+    attachment?: { name: string; format: string; size: number };
   };
   streamingPlaceholder?: string;
   auxiliaryLabel?: string;
@@ -114,6 +115,10 @@ const triggerClass = computed(() => [
           ? 'w-fit rounded-br-md bg-muted px-4 py-3 text-foreground dark:bg-muted/80'
           : 'rounded-tl-md border border-border bg-card px-4 py-3.5 text-card-foreground shadow-xs dark:border-white/[0.06] dark:bg-card/75 dark:shadow-none'"
       >
+        <div v-if="message.attachment" class="mb-2 flex max-w-full items-center gap-1.5 rounded-lg border border-border/70 bg-background/50 px-2 py-1.5 text-xs text-foreground">
+          <PhPaperclip :size="14" class="shrink-0 text-muted-foreground" aria-hidden="true" />
+          <span class="truncate" :title="message.attachment.name">{{ message.attachment.name }}</span>
+        </div>
         <MarkdownMessage
           :content="renderedContent"
           :streaming="message.status === 'streaming' && Boolean(message.content)"

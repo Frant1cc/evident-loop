@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { onClickOutside } from '@vueuse/core';
-import { PhArrowUp, PhCaretDown, PhCheck, PhCircleNotch, PhLightbulb, PhStop, PhWrench } from '@phosphor-icons/vue';
+import { PhArrowUp, PhCaretDown, PhCheck, PhCircleNotch, PhFileText, PhLightbulb, PhPaperclip, PhStop, PhWrench, PhX } from '@phosphor-icons/vue';
 
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
@@ -9,6 +9,7 @@ import { Textarea } from '@/components/ui/textarea';
 import type { ResearchSkillInfo, ResearchToolGroupInfo, ResearchToolInfo } from '../../api/research';
 
 const model = defineModel<string>({ required: true });
+const attachment = defineModel<File | undefined>('attachment');
 
 const props = defineProps<{
   loading: boolean;
@@ -34,6 +35,8 @@ const toolsOpen = ref(false);
 const toolsMenu = ref<HTMLElement>();
 const skillsOpen = ref(false);
 const skillsMenu = ref<HTMLElement>();
+const fileInput = ref<HTMLInputElement>();
+const attachmentError = ref('');
 
 onClickOutside(toolsMenu, () => (toolsOpen.value = false));
 onClickOutside(skillsMenu, () => (skillsOpen.value = false));
@@ -66,6 +69,24 @@ function handleToggleStandaloneTool(name: string) {
   if (requiredToolNames.value.has(name)) return;
   emit('toggleStandaloneTool', name);
 }
+
+function selectAttachment(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  attachment.value = undefined;
+  if (!/\.(md|markdown|txt|docx|pdf)$/i.test(file.name)) {
+    attachmentError.value = '支持 MD、TXT、DOCX 和 PDF 文档。';
+    return;
+  }
+  if (file.size > 20_000_000) {
+    attachmentError.value = '文件不能超过 20 MB。';
+    return;
+  }
+  attachmentError.value = '';
+  attachment.value = file;
+}
 </script>
 
 <template>
@@ -73,6 +94,14 @@ function handleToggleStandaloneTool(name: string) {
     class="rounded-2xl border border-input bg-card p-2 shadow-[0_12px_40px_-24px_oklch(0.145_0_0_/_0.45)] transition-shadow focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/20 dark:border-white/[0.09] dark:bg-card/80 dark:shadow-[0_18px_48px_-30px_rgb(0_0_0_/_0.9)]"
     @submit.prevent="loading || emit('send')"
   >
+    <div v-if="attachment" class="mb-1.5 flex items-center gap-2 rounded-lg bg-muted/60 px-2.5 py-1.5 text-xs text-foreground">
+      <PhFileText :size="16" class="shrink-0 text-muted-foreground" aria-hidden="true" />
+      <span class="min-w-0 flex-1 truncate" :title="attachment.name">{{ attachment.name }}</span>
+      <button type="button" class="rounded p-0.5 text-muted-foreground hover:text-foreground" :disabled="loading" aria-label="移除附件" @click="attachment = undefined">
+        <PhX :size="13" aria-hidden="true" />
+      </button>
+    </div>
+    <p v-if="attachmentError" class="mb-1 px-2 text-xs text-destructive" role="alert">{{ attachmentError }}</p>
     <label for="research-prompt" class="sr-only">输入问题</label>
     <Textarea
       id="research-prompt"
@@ -86,6 +115,10 @@ function handleToggleStandaloneTool(name: string) {
 
     <div class="mt-1 flex items-center justify-between gap-3">
       <div class="flex min-w-0 items-center gap-2">
+        <input ref="fileInput" type="file" accept=".md,.markdown,.txt,.docx,.pdf" class="sr-only" tabindex="-1" @change="selectAttachment" />
+        <Button type="button" variant="ghost" size="icon" class="size-8 shrink-0" :disabled="loading" aria-label="添加文档" title="添加文档" @click="fileInput?.click()">
+          <PhPaperclip :size="17" weight="bold" aria-hidden="true" />
+        </Button>
         <div v-if="skills.length" ref="skillsMenu" class="relative">
           <Collapsible v-model:open="skillsOpen">
             <CollapsibleTrigger as-child>
@@ -199,7 +232,7 @@ function handleToggleStandaloneTool(name: string) {
         type="submit"
         size="icon"
         class="rounded-xl"
-        :disabled="!model.trim()"
+        :disabled="!model.trim() && !attachment"
         aria-label="发送消息"
       >
         <PhArrowUp :size="17" weight="bold" aria-hidden="true" />

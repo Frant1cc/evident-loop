@@ -82,6 +82,7 @@ const sources = ref<ResearchSource[]>([]);
 const notes = ref<ResearchNote[]>([]);
 const promptPreview = ref<ResearchPromptPreview>({ historyMessageCount: 0, currentMessage: '' });
 const input = ref('');
+const attachment = ref<File>();
 const loading = ref(false);
 const stopping = ref(false);
 const activeRun = ref<ResearchRun>();
@@ -290,6 +291,7 @@ async function selectConversation(id: string) {
   activeRun.value = undefined;
   resetTurnDefaults();
   error.value = '';
+  attachment.value = undefined;
   const detail = await getResearchConversation(id);
   activeConversationId.value = id;
   applyConversationDetail(detail);
@@ -303,10 +305,11 @@ async function selectConversation(id: string) {
 
 async function send() {
   const content = input.value.trim();
+  const inputAtSend = input.value;
+  const selectedAttachment = attachment.value;
   const conversationId = activeConversationId.value;
-  if (!content || !conversationId || loading.value) return;
+  if ((!content && !selectedAttachment) || !conversationId || loading.value) return;
 
-  input.value = '';
   error.value = '';
   loading.value = true;
   activeRailTab.value = 'timeline';
@@ -320,13 +323,17 @@ async function send() {
         enabledStandaloneTools.value
       )
     );
-    const started = await startResearchMessage(conversationId, content, toolPolicy, selectedSkillId.value);
+    const started = await startResearchMessage(conversationId, content, toolPolicy, selectedSkillId.value, selectedAttachment);
+    if (activeConversationId.value !== conversationId) return;
+    if (input.value === inputAtSend) input.value = '';
+    if (attachment.value === selectedAttachment) attachment.value = undefined;
     messageRenderer.upsert(started.userMessage);
     messageRenderer.upsert(started.assistantMessage);
     promptPreview.value = started.promptPreview;
     connectToRun(started.run);
     await loadConversations();
   } catch (err) {
+    if (activeConversationId.value !== conversationId) return;
     error.value = err instanceof Error ? err.message : '请求失败';
     await reloadActiveConversation();
     if (!activeRun.value) loading.value = false;
@@ -1008,6 +1015,7 @@ const allGenerations = computed(() => generations.value);
 
       <ResearchMainPanel
         v-model:input="input"
+        v-model:attachment="attachment"
         :title="activeConversation?.title"
         :conversation-id="activeConversationId"
         :messages="messages"

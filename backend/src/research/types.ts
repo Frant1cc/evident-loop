@@ -28,7 +28,17 @@ export type ResearchMessage = {
   content: string;
   status: ResearchMessageStatus;
   createdAt: string;
+  attachment?: ResearchAttachment;
 };
+
+export type ResearchAttachment = {
+  id: string;
+  name: string;
+  format: 'md' | 'txt' | 'docx' | 'pdf';
+  size: number;
+};
+
+export type ResearchAttachmentInput = Omit<ResearchAttachment, 'id'> & { content: string };
 
 export type ResearchStep = {
   id: string;

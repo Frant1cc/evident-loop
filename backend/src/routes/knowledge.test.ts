@@ -62,6 +62,14 @@ test('multipart upload accepts md/txt/docx/pdf and downloads original bytes', as
   assert.deepEqual(Buffer.from(await download.arrayBuffer()), pdfBytes);
 });
 
+test('multipart upload preserves a Chinese filename', async () => {
+  const response = await upload('中文笔记.md', Buffer.from('# 中文笔记\n\n正文。'), 'text/markdown');
+  assert.equal(response.status, 201);
+  const body = await response.json() as { data: { document: { originalName: string; path: string } } };
+  assert.equal(body.data.document.originalName, '中文笔记.md');
+  assert.equal(body.data.document.path, '中文笔记.md');
+});
+
 test('same path conflicts, oversize files and scanned PDFs do not create documents', async () => {
   const first = await upload('dup.md', Buffer.from('# Dup\n\ntext'), 'text/markdown');
   assert.equal(first.status, 201);

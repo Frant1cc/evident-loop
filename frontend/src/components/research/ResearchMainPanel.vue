@@ -36,6 +36,7 @@ defineProps<{
 }>();
 
 const input = defineModel<string>('input', { required: true });
+const attachment = defineModel<File | undefined>('attachment');
 
 const emit = defineEmits<{
   send: [];
@@ -109,6 +110,7 @@ const emit = defineEmits<{
         </p>
         <ResearchComposer
           v-model="input"
+          v-model:attachment="attachment"
           :loading="loading"
           :stopping="stopping"
           :tool-groups="toolGroups"

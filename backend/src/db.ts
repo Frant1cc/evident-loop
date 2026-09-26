@@ -183,6 +183,19 @@ export const initDb = () => {
       FOREIGN KEY (conversation_id) REFERENCES research_conversations(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS research_message_attachments (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL,
+      message_id TEXT NOT NULL UNIQUE,
+      original_name TEXT NOT NULL,
+      format TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      extracted_content TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (conversation_id) REFERENCES research_conversations(id) ON DELETE CASCADE,
+      FOREIGN KEY (message_id) REFERENCES research_messages(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS research_runs (
       id TEXT PRIMARY KEY,
       conversation_id TEXT NOT NULL,

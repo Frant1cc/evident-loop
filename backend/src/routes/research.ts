@@ -1,8 +1,10 @@
 import { Router } from 'express';
+import multer from 'multer';
 
 import { isTerminalEventType, SNAPSHOT_EVENT_TYPE, type StreamEventEnvelope } from '@evident-loop/stream-protocol';
 
 import { LlmNotConfiguredError } from '../llm/errors.js';
+import { decodeMultipartFilename, getKnowledgeMaxUploadBytes, KnowledgeImportError } from '../knowledge/index.js';
 import {
   ResearchSkillToolError,
   UnknownResearchSkillError,
@@ -15,6 +17,10 @@ import { createSseStream } from '../sse.js';
 /** HTTP/SSE adapter for research use cases. Persistence and tools are hidden behind the application boundary. */
 export function createResearchRouter(research: ResearchApplication) {
   const router = Router();
+  const uploadMessageFile = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: getKnowledgeMaxUploadBytes(), files: 1, fields: 3 }
+  }).single('file');
 
   router.get('/research/tools', (_req, res) => {
     res.json(success({ tools: research.listTools(), groups: research.listToolGroups() }));
@@ -90,33 +96,52 @@ export function createResearchRouter(research: ResearchApplication) {
   });
 
   router.post('/research/conversations/:conversationId/messages', (req, res) => {
-    const content = String(req.body?.content ?? '').trim();
-    if (!content) {
-      res.status(400).json(failure('content is required'));
-      return;
-    }
-    const skillId = req.body?.skillId === undefined || req.body?.skillId === null
-      ? undefined
-      : String(req.body.skillId);
-    try {
-      const started = research.startMessage(
-        req.params.conversationId,
-        content,
-        research.normalizeToolPolicy(req.body?.toolPolicy ?? req.body?.allowedTools),
-        skillId
-      );
-      res.status(202).json(success(started, 'Research task queued'));
-    } catch (error) {
-      const message = getErrorMessage(error);
-      const status = error instanceof LlmNotConfiguredError
-        ? 500
-        : error instanceof UnknownResearchSkillError
-          ? 400
-          : error instanceof ResearchSkillToolError
-            ? 409
-            : message === 'Research conversation not found' ? 404 : 409;
-      res.status(status).json(failure(message));
-    }
+    uploadMessageFile(req, res, async (uploadError) => {
+      if (uploadError) {
+        const tooLarge = uploadError instanceof multer.MulterError && uploadError.code === 'LIMIT_FILE_SIZE';
+        res.status(tooLarge ? 413 : 400).json(failure(tooLarge
+          ? `文件不能超过 ${Math.round(getKnowledgeMaxUploadBytes() / 1_000_000)} MB。`
+          : getErrorMessage(uploadError)));
+        return;
+      }
+      const content = String(req.body?.content ?? '').trim()
+        || (req.file ? '请概述这份文档。' : '');
+      if (!content) {
+        res.status(400).json(failure('content is required'));
+        return;
+      }
+      const skillId = req.body?.skillId === undefined || req.body?.skillId === null
+        ? undefined
+        : String(req.body.skillId);
+      try {
+        const rawPolicy = req.body?.toolPolicy ?? req.body?.allowedTools;
+        const policy = typeof rawPolicy === 'string' ? JSON.parse(rawPolicy) as unknown : rawPolicy;
+        const normalizedPolicy = research.normalizeToolPolicy(policy);
+        const started = req.file
+          ? await research.startMessageWithAttachment(
+              req.params.conversationId,
+              content,
+              normalizedPolicy,
+              skillId,
+              {
+                originalName: decodeMultipartFilename(req.file.originalname),
+                mimeType: req.file.mimetype,
+                size: req.file.size,
+                buffer: req.file.buffer
+              }
+            )
+          : research.startMessage(req.params.conversationId, content, normalizedPolicy, skillId);
+        res.status(202).json(success(started, 'Research task queued'));
+      } catch (error) {
+        const message = getErrorMessage(error);
+        const status = error instanceof KnowledgeImportError ? error.status
+          : error instanceof SyntaxError || error instanceof UnknownResearchSkillError ? 400
+          : error instanceof LlmNotConfiguredError ? 500
+          : error instanceof ResearchSkillToolError ? 409
+          : message === 'Research conversation not found' ? 404 : 409;
+        res.status(status).json(failure(message));
+      }
+    });
   });
 
   router.get('/research/runs/:runId/events', (req, res) => {

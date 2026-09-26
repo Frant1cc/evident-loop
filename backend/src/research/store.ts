@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { sqlite } from '../db.js';
+import { decodeMultipartFilename } from '../knowledge/index.js';
 import { redactToolArguments } from '../approvals/manager.js';
 import type { RagSource } from '../rag/types.js';
 import { parseLocator } from '../knowledge/locator.js';
@@ -9,6 +10,8 @@ import type { ContextState } from '../context/index.js';
 import type {
   ResearchConversation,
   ResearchConversationDetail,
+  ResearchAttachment,
+  ResearchAttachmentInput,
   ResearchMessage,
   ResearchMessageStatus,
   ResearchNote,
@@ -39,6 +42,16 @@ type MessageRow = {
   content: string;
   status: ResearchMessageStatus;
   created_at: string;
+};
+
+type AttachmentRow = {
+  id: string;
+  conversation_id: string;
+  message_id: string;
+  original_name: string;
+  format: ResearchAttachment['format'];
+  size: number;
+  extracted_content: string;
 };
 
 type StepRow = {
@@ -172,6 +185,11 @@ export function updateResearchMessage(id: string, changes: Pick<ResearchMessage,
 }
 
 export function listResearchMessages(conversationId: string) {
+  const attachments = new Map(
+    (sqlite.prepare(`SELECT id, message_id, original_name, format, size
+      FROM research_message_attachments WHERE conversation_id = ?`).all(conversationId) as AttachmentRow[])
+      .map((row) => [row.message_id, toAttachment(row)] as const)
+  );
   return sqlite
     // created_at has millisecond precision and concurrent inserts can share a
     // timestamp. rowid preserves the append order at that boundary so a
@@ -179,7 +197,33 @@ export function listResearchMessages(conversationId: string) {
     // the artifact snapshot is frozen.
     .prepare('SELECT * FROM research_messages WHERE conversation_id = ? ORDER BY created_at ASC, rowid ASC')
     .all(conversationId)
-    .map((row) => toMessage(row as MessageRow));
+    .map((row) => {
+      const message = toMessage(row as MessageRow);
+      const attachment = attachments.get(message.id);
+      return attachment ? { ...message, attachment } : message;
+    });
+}
+
+export function createResearchMessageAttachment(
+  conversationId: string,
+  messageId: string,
+  input: ResearchAttachmentInput
+): ResearchAttachment {
+  const id = randomUUID();
+  sqlite.prepare(`INSERT INTO research_message_attachments
+    (id, conversation_id, message_id, original_name, format, size, extracted_content, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, conversationId, messageId, input.name, input.format, input.size, input.content, new Date().toISOString());
+  return { id, name: input.name, format: input.format, size: input.size };
+}
+
+export function listResearchAttachmentContents(conversationId: string) {
+  const rows = sqlite.prepare(`SELECT message_id, original_name, extracted_content
+    FROM research_message_attachments WHERE conversation_id = ?`).all(conversationId) as AttachmentRow[];
+  return new Map(rows.map((row) => [row.message_id, {
+    name: decodeMultipartFilename(row.original_name),
+    content: row.extracted_content
+  }] as const));
 }
 
 export function createResearchRun(input: {
@@ -437,6 +481,10 @@ function toMessage(row: MessageRow): ResearchMessage {
     status: row.status,
     createdAt: row.created_at
   };
+}
+
+function toAttachment(row: Pick<AttachmentRow, 'id' | 'original_name' | 'format' | 'size'>): ResearchAttachment {
+  return { id: row.id, name: decodeMultipartFilename(row.original_name), format: row.format, size: row.size };
 }
 
 function toStep(row: StepRow): ResearchStep {

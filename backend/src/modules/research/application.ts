@@ -1,6 +1,8 @@
 import type { LlmProvider } from '../../llm/contracts.js';
 import type { ArtifactApplication } from '../artifacts/index.js';
 import { LlmNotConfiguredError } from '../../llm/errors.js';
+import { parseConversationAttachment, type KnowledgeUpload } from '../../knowledge/index.js';
+import type { ResearchAttachmentInput } from '../../research/types.js';
 import { buildResearchContext } from '../../context/research/history.js';
 import {
   cancelResearchRun,
@@ -48,6 +50,38 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
   const requireLlm = () => {
     if (!dependencies.llm) throw new LlmNotConfiguredError();
     return dependencies.llm;
+  };
+
+  const startMessage = (
+    conversationId: string,
+    content: string,
+    toolPolicy: ToolPolicy,
+    skillId?: string,
+    attachment?: ResearchAttachmentInput
+  ) => {
+    const effectiveToolPolicy = mergeAutomaticResearchTools(
+      toolPolicy,
+      dependencies.toolRuntime.listModules()
+    );
+    const registered = new Set(
+      dependencies.toolRuntime.getDefinitions().map((tool) => tool.function.name)
+    );
+    const skill = skillId
+      ? resolveSkillForRun(dependencies.skillRuntime, skillId, effectiveToolPolicy, registered)
+      : undefined;
+    return createAndStartResearchRun({
+      conversationId,
+      content,
+      ...(attachment ? { attachment } : {}),
+      toolPolicy: effectiveToolPolicy,
+      toolRuntime: dependencies.toolRuntime,
+      skill: skill?.snapshot,
+      skillRuntime: dependencies.skillRuntime,
+      llm: requireLlm(),
+      model: dependencies.model,
+      approvalManager: dependencies.approvalManager,
+      artifactDraftCoordinator: dependencies.artifactApplication
+    });
   };
 
   return {
@@ -114,35 +148,14 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
     },
     updateNote: updateResearchNote,
     deleteNote: deleteResearchNote,
-    startMessage: (
+    startMessage,
+    startMessageWithAttachment: async (
       conversationId: string,
       content: string,
       toolPolicy: ToolPolicy,
-      skillId?: string
-    ) => {
-      const effectiveToolPolicy = mergeAutomaticResearchTools(
-        toolPolicy,
-        dependencies.toolRuntime.listModules()
-      );
-      const registered = new Set(
-        dependencies.toolRuntime.getDefinitions().map((tool) => tool.function.name)
-      );
-      const skill = skillId
-        ? resolveSkillForRun(dependencies.skillRuntime, skillId, effectiveToolPolicy, registered)
-        : undefined;
-      return createAndStartResearchRun({
-        conversationId,
-        content,
-        toolPolicy: effectiveToolPolicy,
-        toolRuntime: dependencies.toolRuntime,
-        skill: skill?.snapshot,
-        skillRuntime: dependencies.skillRuntime,
-        llm: requireLlm(),
-        model: dependencies.model,
-        approvalManager: dependencies.approvalManager,
-        artifactDraftCoordinator: dependencies.artifactApplication
-      });
-    },
+      skillId: string | undefined,
+      upload: KnowledgeUpload
+    ) => startMessage(conversationId, content, toolPolicy, skillId, await parseConversationAttachment(upload)),
     getRun: getResearchRun,
     getRunSnapshot: (id: string) => getResearchRunSnapshot(id, dependencies.approvalManager),
     subscribeToRun: subscribeToResearchRun,

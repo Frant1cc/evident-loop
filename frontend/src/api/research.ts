@@ -109,8 +109,22 @@ export function startResearchMessage(
   conversationId: string,
   content: string,
   toolPolicy: ToolPolicy,
-  skillId?: string
+  skillId?: string,
+  file?: File
 ) {
+  if (file) {
+    const body = new FormData();
+    body.append('content', content);
+    body.append('toolPolicy', JSON.stringify(toolPolicy));
+    if (skillId) body.append('skillId', skillId);
+    body.append('file', file);
+    return requestMultipart<{
+      run: ResearchRun;
+      userMessage: ResearchMessage;
+      assistantMessage: ResearchMessage;
+      promptPreview: ResearchPromptPreview;
+    }>(`/api/research/conversations/${encodeURIComponent(conversationId)}/messages`, body);
+  }
   return request<{
     run: ResearchRun;
     userMessage: ResearchMessage;
@@ -120,6 +134,15 @@ export function startResearchMessage(
     method: 'POST',
     body: { content, toolPolicy, ...(skillId ? { skillId } : {}) }
   });
+}
+
+async function requestMultipart<T>(path: string, body: FormData): Promise<T> {
+  const response = await fetch(path, { method: 'POST', body });
+  const payload = await response.json() as ApiResponse<T>;
+  if (!response.ok || payload.code !== 1 || !payload.data) {
+    throw new Error(payload.message || `请求失败：${response.status}`);
+  }
+  return payload.data;
 }
 
 export function cancelResearchRun(runId: string) {
