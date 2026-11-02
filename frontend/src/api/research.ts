@@ -137,7 +137,7 @@ export function startResearchMessage(
 }
 
 async function requestMultipart<T>(path: string, body: FormData): Promise<T> {
-  const response = await fetch(path, { method: 'POST', body });
+  const response = await fetch(path, { method: 'POST', headers: { 'X-Requested-With': 'EvidentLoop' }, body });
   const payload = await response.json() as ApiResponse<T>;
   if (!response.ok || payload.code !== 1 || !payload.data) {
     throw new Error(payload.message || `请求失败：${response.status}`);
@@ -215,7 +215,7 @@ function toResearchStreamEvent(eventName: string, parsed: Record<string, unknown
 async function request<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
   const response = await fetch(path, {
     method: init.method,
-    headers: init.body === undefined ? undefined : { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'EvidentLoop' },
     body: init.body === undefined ? undefined : JSON.stringify(init.body)
   });
   const payload = await response.json() as ApiResponse<T>;

@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import multer from 'multer';
 
 import { isTerminalEventType, SNAPSHOT_EVENT_TYPE, type StreamEventEnvelope } from '@evident-loop/stream-protocol';
@@ -13,32 +13,39 @@ import {
 } from '../modules/research/index.js';
 import { failure, success } from '../response.js';
 import { createSseStream } from '../sse.js';
+import { DemoAccessError } from '../modules/demo/index.js';
 
 /** HTTP/SSE adapter for research use cases. Persistence and tools are hidden behind the application boundary. */
-export function createResearchRouter(research: ResearchApplication) {
+export function createResearchRouter(application: ResearchApplication | ((req: Request) => ResearchApplication)) {
   const router = Router();
+  const resolve = (req: Request) => typeof application === 'function' ? application(req) : application;
   const uploadMessageFile = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: getKnowledgeMaxUploadBytes(), files: 1, fields: 3 }
   }).single('file');
 
-  router.get('/research/tools', (_req, res) => {
+  router.get('/research/tools', (req, res) => {
+    const research = resolve(req);
     res.json(success({ tools: research.listTools(), groups: research.listToolGroups() }));
   });
 
-  router.get('/research/skills', (_req, res) => {
+  router.get('/research/skills', (req, res) => {
+    const research = resolve(req);
     res.json(success({ skills: research.listSkills() }));
   });
 
-  router.get('/research/conversations', (_req, res) => {
+  router.get('/research/conversations', (req, res) => {
+    const research = resolve(req);
     res.json(success({ conversations: research.listConversations() }));
   });
 
-  router.post('/research/conversations', (_req, res) => {
+  router.post('/research/conversations', (req, res) => {
+    const research = resolve(req);
     res.status(201).json(success({ conversation: research.createConversation() }));
   });
 
   router.get('/research/conversations/:conversationId', (req, res) => {
+    const research = resolve(req);
     const detail = research.getConversation(req.params.conversationId);
     if (!detail) {
       res.status(404).json(failure('Research conversation not found'));
@@ -48,6 +55,7 @@ export function createResearchRouter(research: ResearchApplication) {
   });
 
   router.delete('/research/conversations/:conversationId', async (req, res) => {
+    const research = resolve(req);
     try {
       if (!await Promise.resolve(research.deleteConversation(req.params.conversationId))) {
         res.status(404).json(failure('Research conversation not found'));
@@ -60,6 +68,7 @@ export function createResearchRouter(research: ResearchApplication) {
   });
 
   router.post('/research/conversations/:conversationId/notes', (req, res) => {
+    const research = resolve(req);
     const content = String(req.body?.content ?? '').trim();
     if (!content) {
       res.status(400).json(failure('content is required'));
@@ -74,6 +83,7 @@ export function createResearchRouter(research: ResearchApplication) {
   });
 
   router.put('/research/notes/:noteId', (req, res) => {
+    const research = resolve(req);
     const content = String(req.body?.content ?? '').trim();
     if (!content) {
       res.status(400).json(failure('content is required'));
@@ -88,6 +98,7 @@ export function createResearchRouter(research: ResearchApplication) {
   });
 
   router.delete('/research/notes/:noteId', (req, res) => {
+    const research = resolve(req);
     if (!research.deleteNote(req.params.noteId)) {
       res.status(404).json(failure('Research note not found'));
       return;
@@ -96,6 +107,7 @@ export function createResearchRouter(research: ResearchApplication) {
   });
 
   router.post('/research/conversations/:conversationId/messages', (req, res) => {
+    const research = resolve(req);
     uploadMessageFile(req, res, async (uploadError) => {
       if (uploadError) {
         const tooLarge = uploadError instanceof multer.MulterError && uploadError.code === 'LIMIT_FILE_SIZE';
@@ -134,17 +146,20 @@ export function createResearchRouter(research: ResearchApplication) {
         res.status(202).json(success(started, 'Research task queued'));
       } catch (error) {
         const message = getErrorMessage(error);
-        const status = error instanceof KnowledgeImportError ? error.status
+        const status = error instanceof DemoAccessError ? error.status
+          : error instanceof KnowledgeImportError ? error.status
           : error instanceof SyntaxError || error instanceof UnknownResearchSkillError ? 400
           : error instanceof LlmNotConfiguredError ? 500
           : error instanceof ResearchSkillToolError ? 409
           : message === 'Research conversation not found' ? 404 : 409;
+        if (error instanceof DemoAccessError && error.status === 429) res.setHeader('Retry-After', String(error.retryAfter));
         res.status(status).json(failure(message));
       }
     });
   });
 
   router.get('/research/runs/:runId/events', (req, res) => {
+    const research = resolve(req);
     const initial = research.getRunSnapshot(req.params.runId);
     if (!initial) {
       res.status(404).json(failure('Research task not found'));
@@ -198,6 +213,7 @@ export function createResearchRouter(research: ResearchApplication) {
   });
 
   router.post('/research/runs/:runId/cancel', (req, res) => {
+    const research = resolve(req);
     const current = research.getRun(req.params.runId);
     if (!current) {
       res.status(404).json(failure('Research task not found'));

@@ -70,3 +70,30 @@ test('批量 Embedding 拒绝重复或缺失的 provider index', async () => {
     else process.env.EMBEDDING_API_KEY = originalKey;
   }
 });
+
+test('Embedding cancellation aborts the active request and prevents retries', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env.EMBEDDING_API_KEY;
+  process.env.EMBEDDING_API_KEY = 'test-key';
+  const controller = new AbortController();
+  let calls = 0;
+  globalThis.fetch = (async (_url, init) => {
+    calls += 1;
+    return new Promise<Response>((_resolve, reject) => {
+      const signal = init!.signal!;
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    });
+  }) as typeof fetch;
+  try {
+    const request = createEmbedding('demo query', { signal: controller.signal });
+    controller.abort(new Error('Demo deadline reached'));
+    await assert.rejects(request, /Demo deadline reached/);
+    assert.equal(calls, 1);
+    await assert.rejects(createEmbedding('another query', { signal: controller.signal }), /Demo deadline reached/);
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) delete process.env.EMBEDDING_API_KEY;
+    else process.env.EMBEDDING_API_KEY = originalKey;
+  }
+});

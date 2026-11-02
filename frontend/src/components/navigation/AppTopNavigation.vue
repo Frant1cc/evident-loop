@@ -19,6 +19,7 @@ import type { AppTabKey, TabVisibility } from '../../types/navigation';
 const props = defineProps<{
   activeTab: AppTabKey;
   tabVisibility: TabVisibility;
+  demo?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -37,6 +38,7 @@ const tabs = [
 const { dark, toggleTheme } = useColorTheme();
 
 function isTabVisible(key: AppTabKey) {
+  if (props.demo) return key === 'research';
   return key === 'settings' || props.tabVisibility[key];
 }
 </script>

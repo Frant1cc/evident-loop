@@ -20,13 +20,17 @@ import type { ToolCatalog } from './tools/contracts.js';
 import { createToolCatalog, toolCatalog } from './tools/registry.js';
 import { createToolRuntime } from './tools/runtime.js';
 import { createStartDocumentGenerationTool } from './tools/documentGenerationTool.js';
-import { createDefaultResearchSkillRuntime } from './skills/runtime.js';
+import { createDefaultResearchSkillRuntime, createResearchSkillRuntime } from './skills/runtime.js';
+import { createResearchSkillRegistry } from './skills/registry.js';
 import type { McpManager } from './mcp/contracts.js';
 import { createMcpManager } from './mcp/manager.js';
 import { createMcpRouter, mcpSecurityMiddleware } from './mcp/routes.js';
 import type { ToolRuntime } from './tools/contracts.js';
 import { createApprovalManager, createToolApprovalRouter } from './approvals/index.js';
 import type { ApprovalManager } from './approvals/contracts.js';
+import { createPublicDemoApplication, createDemoToolRuntime, getDemoConfig, isPublicDemoEnabled, type DemoConfig, type PublicDemoApplication } from './modules/demo/index.js';
+import { createDemoRouter, demoErrorHandler, demoVisitor } from './routes/demo.js';
+import { builtInToolGroups } from './tools/groups.js';
 
 export type AppDependencies = {
   llm?: LlmProvider;
@@ -36,6 +40,7 @@ export type AppDependencies = {
   mcpManager?: McpManager;
   approvalManager?: ApprovalManager;
   artifactApplication?: ArtifactApplication;
+  publicDemo?: false | { config?: DemoConfig; now?: () => number };
 };
 
 export function createApp(dependencies: AppDependencies = {}) {
@@ -53,9 +58,19 @@ export function createApp(dependencies: AppDependencies = {}) {
     ...toolCatalog.values(),
     createStartDocumentGenerationTool(artifactApplication)
   ]);
-  const toolRuntime = dependencies.toolRuntime ?? createToolRuntime(tools);
+  const publicDemoEnabled = dependencies.publicDemo !== false && (Boolean(dependencies.publicDemo) || isPublicDemoEnabled());
+  const sourceRuntime = dependencies.toolRuntime ?? createToolRuntime(tools);
+  const toolRuntime = publicDemoEnabled ? createDemoToolRuntime(sourceRuntime) : sourceRuntime;
+  const demo = publicDemoEnabled ? createPublicDemoApplication({
+    config: dependencies.publicDemo ? dependencies.publicDemo.config ?? getDemoConfig() : getDemoConfig(),
+    now: dependencies.publicDemo ? dependencies.publicDemo.now : undefined,
+    llm,
+    tools: toolRuntime
+  }) : undefined;
+  app.locals.publicDemo = demo;
+  if (demo?.config.trustProxy) app.set('trust proxy', demo.config.trustProxy);
   const approvalManager = dependencies.approvalManager ?? createApprovalManager();
-  const skillRuntime = createDefaultResearchSkillRuntime({
+  const skillRuntime = demo ? createResearchSkillRuntime(createResearchSkillRegistry([], { knownToolNames: new Set() })) : createDefaultResearchSkillRuntime({
     knownToolNames: new Set(toolRuntime.getDefinitions().map((tool) => tool.function.name))
   });
 
@@ -63,10 +78,10 @@ export function createApp(dependencies: AppDependencies = {}) {
   // Applying the guard here also protects approval decisions and legacy routes,
   // while requests without an Origin header still need a matching local Host.
   app.use('/api', mcpSecurityMiddleware);
-  app.use(cors());
-  app.use(express.json({ limit: '2mb' }));
-
   app.use('/api', healthRouter);
+  app.use('/api', createDemoRouter(demo));
+  if (!demo) app.use(cors());
+  app.use(express.json({ limit: demo ? '16kb' : '2mb' }));
   app.use('/api', knowledgeRouter);
   app.use('/api', deepseekRouter);
   app.use('/api', evaluationsRouter);
@@ -76,17 +91,31 @@ export function createApp(dependencies: AppDependencies = {}) {
   app.use('/api', createAgentRouter(createLegacyToolRuntime(toolRuntime)));
   app.use('/api', createToolApprovalRouter(approvalManager));
   app.use('/api', createArtifactsRouter(artifactStore, artifactApplication));
-  app.use('/api', createResearchRouter(createResearchApplication({
+  const research = createResearchApplication({
     llm,
     model,
     toolRuntime,
     skillRuntime,
     approvalManager,
-    artifactApplication
-  })));
+    artifactApplication: demo ? undefined : artifactApplication,
+    toolGroups: demo ? builtInToolGroups.filter((group) => group.toolNames.every((name) =>
+      toolRuntime.getDefinitions().some((tool) => tool.function.name === name))) : undefined
+  });
+  app.use('/api', createResearchRouter(demo ? (req) => {
+    const visitor = demoVisitor(req);
+    return demo.scopeResearch(research, visitor.id, visitor.ip);
+  } : research));
   app.use('/api', createTasksRouter(createTaskApplication({ llm, model, toolRuntime, approvalManager })));
   app.use('/api', dbTestRouter);
   if (dependencies.mcpManager) app.use('/api/mcp', createMcpRouter(dependencies.mcpManager));
+  app.use(demoErrorHandler);
+  if (demo) {
+    app.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+      if (res.headersSent) { next(error); return; }
+      const status = error && typeof error === 'object' && 'status' in error ? Number(error.status) : 500;
+      res.status(status === 413 ? 413 : status === 400 ? 400 : 500).json({ code: 0, message: status === 413 ? '请求内容过大。' : '体验请求未能完成，请稍后再试。', data: null });
+    });
+  }
 
   return app;
 }
@@ -115,8 +144,10 @@ export function createProductionApp(options: { host?: string; port?: number } = 
   const runtime = createToolRuntime(runtimeCatalog as ToolCatalog);
   const mcpManager = createMcpManager({ runtime, host: options.host, port: options.port });
   const approvalManager = createApprovalManager({ mcpManager });
+  const app = createApp({ toolRuntime: runtime, artifactApplication, mcpManager, approvalManager });
   return {
-    app: createApp({ toolRuntime: runtime, artifactApplication, mcpManager, approvalManager }),
+    app,
+    publicDemo: app.locals.publicDemo as PublicDemoApplication | undefined,
     toolRuntime: runtime,
     mcpManager,
     approvalManager,

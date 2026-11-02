@@ -67,7 +67,9 @@ export function createSseStream(
 export function prepareSseResponse(res: Response) {
   res.status(200);
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  const existingCacheControl = String(res.getHeader('Cache-Control') ?? '');
+  res.setHeader('Cache-Control', existingCacheControl.includes('no-store')
+    ? 'private, no-store, no-transform' : 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();

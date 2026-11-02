@@ -147,6 +147,10 @@ evident-loop/
 
 EvidentLoop 面向可信的本地或私有环境。公网多用户部署还需要外部认证、租户隔离、速率限制与生产级网络安全加固。扫描型 PDF OCR，以及文档中未列出的办公格式导入，不在当前能力范围内。
 
+专用试用实例可启用[每 24 小时执行的数据清理](./docs/development/demo-data-retention.md)，清理闲置满 24 小时的会话、任务及关联文稿；默认关闭，此功能不替代访问权限和费用控制。
+
+设置 `PUBLIC_DEMO_ENABLED=true` 可启用[免注册公开试用模式](./docs/development/public-demo.md)：访客会话隔离，每访客每天默认 10 次研究，配合 IP/全站额度与后台并发限制，并自动启用每日清理；仅开放研究对话和公共示例知识检索。
+
 ## License
 
 EvidentLoop 基于 [Apache License 2.0](./LICENSE) 开源。

@@ -21,13 +21,13 @@ export function getEmbeddingModel() {
   return process.env.EMBEDDING_MODEL ?? defaultEmbeddingModel;
 }
 
-export async function createEmbedding(input: string): Promise<number[]> {
-  const embeddings = await createEmbeddings([input]);
+export async function createEmbedding(input: string, options: { signal?: AbortSignal } = {}): Promise<number[]> {
+  const embeddings = await createEmbeddings([input], options);
   return embeddings[0]!;
 }
 
 /** Creates embeddings in one provider request and preserves the input order. */
-export async function createEmbeddings(inputs: string[]): Promise<number[][]> {
+export async function createEmbeddings(inputs: string[], options: { signal?: AbortSignal } = {}): Promise<number[][]> {
   if (!inputs.length) return [];
   const apiKey = process.env.EMBEDDING_API_KEY;
 
@@ -37,7 +37,7 @@ export async function createEmbeddings(inputs: string[]): Promise<number[][]> {
 
   const baseUrl = (process.env.EMBEDDING_BASE_URL ?? defaultEmbeddingBaseUrl).replace(/\/$/, '');
   const model = process.env.EMBEDDING_MODEL ?? defaultEmbeddingModel;
-  const response = await fetchEmbeddingWithRetry(`${baseUrl}/embeddings`, apiKey, model, inputs);
+  const response = await fetchEmbeddingWithRetry(`${baseUrl}/embeddings`, apiKey, model, inputs, options.signal);
 
   const data = (await response.json()) as EmbeddingResponse;
   const rows = data.data;
@@ -70,10 +70,11 @@ export async function createEmbeddings(inputs: string[]): Promise<number[][]> {
   return embeddings as number[][];
 }
 
-async function fetchEmbeddingWithRetry(url: string, apiKey: string, model: string, inputs: string[]) {
+async function fetchEmbeddingWithRetry(url: string, apiKey: string, model: string, inputs: string[], signal?: AbortSignal) {
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= defaultMaxRetries; attempt += 1) {
+    signal?.throwIfAborted();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), defaultTimeoutMs);
     try {
@@ -84,7 +85,7 @@ async function fetchEmbeddingWithRetry(url: string, apiKey: string, model: strin
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({ input: inputs, model }),
-        signal: controller.signal
+        signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal
       });
 
       if (response.ok) return response;
@@ -95,6 +96,7 @@ async function fetchEmbeddingWithRetry(url: string, apiKey: string, model: strin
       }
       lastError = error;
     } catch (error) {
+      signal?.throwIfAborted();
       if (error instanceof NonRetryableEmbeddingError) throw error;
       if (error instanceof Error && error.name !== 'AbortError' && attempt >= defaultMaxRetries) throw error;
       lastError = error instanceof Error && error.name === 'AbortError'
@@ -104,12 +106,18 @@ async function fetchEmbeddingWithRetry(url: string, apiKey: string, model: strin
       clearTimeout(timeout);
     }
 
-    if (attempt < defaultMaxRetries) await delay(250 * 2 ** attempt);
+    if (attempt < defaultMaxRetries) await delay(250 * 2 ** attempt, signal);
   }
 
   throw lastError instanceof Error ? lastError : new Error('Embedding request failed');
 }
 
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function delay(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    signal?.throwIfAborted();
+    const finish = () => { signal?.removeEventListener('abort', abort); resolve(); };
+    const timer = setTimeout(finish, ms);
+    const abort = () => { clearTimeout(timer); reject(signal?.reason); };
+    signal?.addEventListener('abort', abort, { once: true });
+  });
 }

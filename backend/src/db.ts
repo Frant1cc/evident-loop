@@ -30,6 +30,20 @@ export const db = drizzle({ client: sqlite });
 
 export const initDb = () => {
   sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS demo_visitors (
+      id TEXT PRIMARY KEY, created_at TEXT NOT NULL, expires_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS demo_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS demo_usage (
+      period TEXT NOT NULL, bucket TEXT NOT NULL, subject TEXT NOT NULL,
+      count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (period, bucket, subject)
+    );
+    CREATE TABLE IF NOT EXISTS demo_operations (
+      id TEXT PRIMARY KEY, visitor_id TEXT NOT NULL, run_id TEXT,
+      status TEXT NOT NULL CHECK (status IN ('active', 'finished')),
+      created_at TEXT NOT NULL, finished_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS demo_operations_active_idx ON demo_operations(status, visitor_id);
     CREATE TABLE IF NOT EXISTS test_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       message TEXT NOT NULL,
@@ -172,6 +186,12 @@ export const initDb = () => {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS demo_conversation_owners (
+      conversation_id TEXT PRIMARY KEY REFERENCES research_conversations(id) ON DELETE CASCADE,
+      visitor_id TEXT NOT NULL REFERENCES demo_visitors(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS demo_conversation_visitor_idx ON demo_conversation_owners(visitor_id);
 
     CREATE TABLE IF NOT EXISTS research_messages (
       id TEXT PRIMARY KEY,

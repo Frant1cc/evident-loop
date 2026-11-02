@@ -83,7 +83,7 @@ export async function retrieveKnowledge(
   const mode = options.mode ?? getDefaultRetrievalMode();
   const queryRewrite = options.queryRewrite ?? getDefaultQueryRewriteEnabled();
   const candidateLimit = queryRewrite ? Math.max(8, limit * 2) : limit;
-  const original = await retrieveSingleQuery(query, candidateLimit, collection, mode, file);
+  const original = await retrieveSingleQuery(query, candidateLimit, collection, mode, file, options.signal);
   const baseDiagnostics = {
     retrievalQueries: [query],
     queryCount: 1,
@@ -127,7 +127,7 @@ export async function retrieveKnowledge(
   }
 
   const rewritten = await Promise.all(rewrite.queries.map((rewrittenQuery) =>
-    retrieveSingleQuery(rewrittenQuery, candidateLimit, collection, mode, file)
+    retrieveSingleQuery(rewrittenQuery, candidateLimit, collection, mode, file, options.signal)
   ));
   const results = mergeRewriteFallback(
     original.results,
@@ -151,9 +151,10 @@ async function retrieveSingleQuery(
   limit: number,
   collection: string,
   mode: RetrievalMode,
-  file?: string
+  file?: string,
+  signal?: AbortSignal
 ): Promise<RetrievalConfidence & { results: RagSource[] }> {
-  const queryEmbedding = await createEmbedding(query);
+  const queryEmbedding = await createEmbedding(query, { signal });
 
   if (mode === 'dense') {
     const candidates = await searchChunks(queryEmbedding, Math.max(denseCandidateCount, limit * 3), collection, file);
@@ -171,7 +172,7 @@ async function retrieveSingleQuery(
 
 export async function searchKnowledge(
   args: unknown,
-  options: Pick<RetrieveKnowledgeOptions, 'signal'> = {}
+  options: Pick<RetrieveKnowledgeOptions, 'signal' | 'queryRewrite'> = {}
 ): Promise<{ query: string } & RetrieveKnowledgeResult> {
   const { query, file, limit } = parseSearchKnowledgeArgs(args);
   const retrieval = await retrieveKnowledge(query, limit, { ...options, file });

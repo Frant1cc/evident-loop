@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Textarea } from '@/components/ui/textarea';
 import type { ResearchSkillInfo, ResearchToolGroupInfo, ResearchToolInfo } from '../../api/research';
+import { demoStatus } from '../../api/demo';
 
 const model = defineModel<string>({ required: true });
 const attachment = defineModel<File | undefined>('attachment');
@@ -57,6 +58,7 @@ const requiredToolNames = computed(() => new Set(selectedSkill.value?.requiredTo
 function handleKeydown(event: KeyboardEvent) {
   if (event.key !== 'Enter' || event.shiftKey || event.isComposing || props.loading) return;
   event.preventDefault();
+  if (demoStatus.value.enabled && demoStatus.value.remaining === 0) return;
   emit('send');
 }
 
@@ -92,7 +94,7 @@ function selectAttachment(event: Event) {
 <template>
   <form
     class="rounded-2xl border border-input bg-card p-2 shadow-[0_12px_40px_-24px_oklch(0.145_0_0_/_0.45)] transition-shadow focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/20 dark:border-white/[0.09] dark:bg-card/80 dark:shadow-[0_18px_48px_-30px_rgb(0_0_0_/_0.9)]"
-    @submit.prevent="loading || emit('send')"
+    @submit.prevent="loading || (demoStatus.enabled && demoStatus.remaining === 0) || emit('send')"
   >
     <div v-if="attachment" class="mb-1.5 flex items-center gap-2 rounded-lg bg-muted/60 px-2.5 py-1.5 text-xs text-foreground">
       <PhFileText :size="16" class="shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -108,6 +110,7 @@ function selectAttachment(event: Event) {
       v-model="model"
       rows="1"
       placeholder="输入问题…"
+      :maxlength="demoStatus.enabled ? demoStatus.maxMessageChars : undefined"
       autocomplete="off"
       class="max-h-44 min-h-12 resize-none border-0 bg-transparent px-2.5 py-2.5 shadow-none focus-visible:ring-0 dark:bg-transparent"
       @keydown="handleKeydown"
@@ -115,8 +118,8 @@ function selectAttachment(event: Event) {
 
     <div class="mt-1 flex items-center justify-between gap-3">
       <div class="flex min-w-0 items-center gap-2">
-        <input ref="fileInput" type="file" accept=".md,.markdown,.txt,.docx,.pdf" class="sr-only" tabindex="-1" @change="selectAttachment" />
-        <Button type="button" variant="ghost" size="icon" class="size-8 shrink-0" :disabled="loading" aria-label="添加文档" title="添加文档" @click="fileInput?.click()">
+        <input v-if="!demoStatus.enabled" ref="fileInput" type="file" accept=".md,.markdown,.txt,.docx,.pdf" class="sr-only" tabindex="-1" @change="selectAttachment" />
+        <Button v-if="!demoStatus.enabled" type="button" variant="ghost" size="icon" class="size-8 shrink-0" :disabled="loading" aria-label="添加文档" title="添加文档" @click="fileInput?.click()">
           <PhPaperclip :size="17" weight="bold" aria-hidden="true" />
         </Button>
         <div v-if="skills.length" ref="skillsMenu" class="relative">
@@ -232,7 +235,7 @@ function selectAttachment(event: Event) {
         type="submit"
         size="icon"
         class="rounded-xl"
-        :disabled="!model.trim() && !attachment"
+        :disabled="(!model.trim() && !attachment) || (demoStatus.enabled && demoStatus.remaining === 0)"
         aria-label="发送消息"
       >
         <PhArrowUp :size="17" weight="bold" aria-hidden="true" />

@@ -157,6 +157,9 @@ export function createAndStartResearchRun(options: {
   approvalManager?: ApprovalManager;
   schedule?: (callback: () => void) => void;
   artifactDraftCoordinator?: ArtifactDraftCoordinator;
+  signal?: AbortSignal;
+  maxToolRounds?: number;
+  onSettled?: () => void;
 }) {
   let conversation = getResearchConversation(options.conversationId);
   if (!conversation) throw new Error('Research conversation not found');
@@ -225,7 +228,11 @@ export function createAndStartResearchRun(options: {
       toolRuntime: options.toolRuntime,
       skillRuntime: options.skillRuntime,
       approvalManager: options.approvalManager,
-      artifactDraftCoordinator: options.artifactDraftCoordinator
+      artifactDraftCoordinator: options.artifactDraftCoordinator,
+      signal: options.signal,
+      maxToolRounds: options.maxToolRounds
+    }).finally(options.onSettled).catch(() => {
+      console.error('Research background execution failed');
     });
   });
 
@@ -350,6 +357,8 @@ async function executePersistedResearchRun(options: {
   skillRuntime?: ResearchSkillRuntime;
   approvalManager?: ApprovalManager;
   artifactDraftCoordinator?: ArtifactDraftCoordinator;
+  signal?: AbortSignal;
+  maxToolRounds?: number;
 }) {
   let run = getResearchRun(options.runId);
   const runInput = getResearchRunInput(options.runId);
@@ -361,14 +370,21 @@ async function executePersistedResearchRun(options: {
   const executionMode = runInput.executionMode ?? 'research';
 
   const abortController = new AbortController();
+  const abort = () => abortController.abort(options.signal?.reason);
+  if (options.signal?.aborted) abort();
+  else options.signal?.addEventListener('abort', abort, { once: true });
   activeControllers.set(run.id, abortController);
   if (options.approvalManager) activeApprovalManagers.set(run.id, options.approvalManager);
   run = updateResearchRun(run.id, { status: 'running', startedAt: new Date().toISOString() }) ?? run;
   emit(run.id, { type: 'run_updated', run });
 
   if (executionMode === 'quick') {
-    await runQuickConversation({ run, runInput, llm: options.llm, model: options.model, abortController });
-    activeApprovalManagers.delete(run.id);
+    try {
+      await runQuickConversation({ run, runInput, llm: options.llm, model: options.model, abortController });
+    } finally {
+      options.signal?.removeEventListener('abort', abort);
+      activeApprovalManagers.delete(run.id);
+    }
     return;
   }
 
@@ -413,11 +429,12 @@ async function executePersistedResearchRun(options: {
       contextMessages: runInput.contextMessages,
       model: options.model,
       systemPrompt,
-      maxToolRounds: DEFAULT_MAX_TOOL_ROUNDS,
+      maxToolRounds: options.maxToolRounds ?? DEFAULT_MAX_TOOL_ROUNDS,
       contextManager,
       toolPolicy,
       toolRuntime: options.toolRuntime,
       requiredToolName: isExplicitDocumentRequest(runInput.content)
+        && options.toolRuntime.getDefinitions().some((tool) => tool.function.name === 'start_document_generation')
         ? 'start_document_generation'
         : undefined,
       signal: abortController.signal,
@@ -508,6 +525,7 @@ async function executePersistedResearchRun(options: {
     }
     if (failedRun) emit(run.id, { type: 'error', message, assistantMessage: failedMessage, run: failedRun });
   } finally {
+    options.signal?.removeEventListener('abort', abort);
     activeControllers.delete(run.id);
     activeApprovalManagers.delete(run.id);
   }

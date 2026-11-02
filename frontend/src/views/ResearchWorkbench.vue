@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { PhTrash } from '@phosphor-icons/vue';
+import { demoStatus, refreshDemoStatus } from '../api/demo';
 
 import {
   cancelResearchRun,
@@ -337,6 +338,8 @@ async function send() {
     error.value = err instanceof Error ? err.message : '请求失败';
     await reloadActiveConversation();
     if (!activeRun.value) loading.value = false;
+  } finally {
+    if (demoStatus.value.enabled) void refreshDemoStatus().catch(() => {});
   }
 }
 
@@ -559,6 +562,7 @@ async function confirmDeleteConversation() {
 }
 
 function withExplicitArtifactTool(content: string, policy: ToolPolicy): ToolPolicy {
+  if (demoStatus.value.enabled) return policy;
   if (!isExplicitDocumentRequest(content) || !availableTools.value.some((tool) => tool.name === 'start_document_generation')) {
     return policy;
   }
@@ -652,6 +656,11 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
 }
 
 async function loadGenerations(conversationId: string, options: { openForRunId?: string } = {}) {
+  if (demoStatus.value.enabled) {
+    generations.value = [];
+    artifactDraftRequests.value = [];
+    return;
+  }
   const sequence = ++artifactLoadSequence;
   const request = {
     conversationId,

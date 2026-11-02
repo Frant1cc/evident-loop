@@ -1,4 +1,5 @@
 export { createTaskApplication, type TaskApplication } from './application.js';
+export { pruneExpiredTaskData } from './retention.js';
 export { InvalidTaskTransitionError } from '../../runtime/stateMachine.js';
 export {
   agentTaskStatuses,

@@ -174,7 +174,9 @@ export function mcpSecurityMiddleware(req: Request, res: Response, next: NextFun
   const rawHost = requestHost;
   const host = (rawHost.startsWith('[') ? rawHost.slice(1, rawHost.indexOf(']')) : rawHost.split(':')[0]).toLowerCase();
   const normalizedConfigured = configuredHost.replace(/^\[|\]$/g, '').toLowerCase();
-  const accepted = !host || host === normalizedConfigured || isLoopback(configuredHost) && isLoopback(host);
+  const configuredHosts = (process.env.APP_HOSTS ?? '').split(',').map((value) => value.trim().toLowerCase()).filter(Boolean);
+  const accepted = configuredHosts.length ? configuredHosts.includes(host)
+    : !host || host === normalizedConfigured || isLoopback(configuredHost) && isLoopback(host);
   if (!accepted) {
     res.status(403).json(failure('Host is not allowed'));
     return;

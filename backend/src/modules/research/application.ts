@@ -44,6 +44,14 @@ export type ResearchApplicationDependencies = {
   artifactApplication?: Pick<ArtifactApplication, 'deleteConversationArtifacts' | 'flushPendingDrafts' | 'finalizePendingDrafts' | 'listDraftRequests'>;
 };
 
+export type ResearchExecutionLimits = {
+  llm: LlmProvider;
+  toolRuntime: ToolRuntime;
+  signal: AbortSignal;
+  maxToolRounds: number;
+  onSettled: () => void;
+};
+
 /** Use-case boundary for research conversations and durable background runs. */
 export function createResearchApplication(dependencies: ResearchApplicationDependencies) {
   const toolGroups = validateToolGroups(dependencies.toolGroups ?? builtInToolGroups, dependencies.toolRuntime.listModules());
@@ -57,7 +65,8 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
     content: string,
     toolPolicy: ToolPolicy,
     skillId?: string,
-    attachment?: ResearchAttachmentInput
+    attachment?: ResearchAttachmentInput,
+    execution?: ResearchExecutionLimits
   ) => {
     const effectiveToolPolicy = mergeAutomaticResearchTools(
       toolPolicy,
@@ -74,13 +83,16 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
       content,
       ...(attachment ? { attachment } : {}),
       toolPolicy: effectiveToolPolicy,
-      toolRuntime: dependencies.toolRuntime,
+      toolRuntime: execution?.toolRuntime ?? dependencies.toolRuntime,
       skill: skill?.snapshot,
       skillRuntime: dependencies.skillRuntime,
-      llm: requireLlm(),
+      llm: execution?.llm ?? requireLlm(),
       model: dependencies.model,
       approvalManager: dependencies.approvalManager,
-      artifactDraftCoordinator: dependencies.artifactApplication
+      artifactDraftCoordinator: dependencies.artifactApplication,
+      signal: execution?.signal,
+      maxToolRounds: execution?.maxToolRounds,
+      onSettled: execution?.onSettled
     });
   };
 
@@ -148,7 +160,8 @@ export function createResearchApplication(dependencies: ResearchApplicationDepen
     },
     updateNote: updateResearchNote,
     deleteNote: deleteResearchNote,
-    startMessage,
+    startMessage: (conversationId: string, content: string, toolPolicy: ToolPolicy, skillId?: string, execution?: ResearchExecutionLimits) =>
+      startMessage(conversationId, content, toolPolicy, skillId, undefined, execution),
     startMessageWithAttachment: async (
       conversationId: string,
       content: string,

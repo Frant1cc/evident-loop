@@ -157,12 +157,12 @@ export class ArtifactStore {
 
 export const artifactStore = new ArtifactStore();
 
-export function startArtifactCleanup() {
+export function startArtifactCleanup(intervalMs = 60 * 60 * 1_000) {
   const interval = setInterval(() => {
     artifactStore.cleanupExpired().catch((error) => {
       console.error('Artifact cleanup failed', error);
     });
-  }, 60 * 60 * 1_000);
+  }, intervalMs);
   interval.unref();
   return interval;
 }
