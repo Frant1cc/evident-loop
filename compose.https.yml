@@ -1,0 +1,11 @@
+# Use together with compose.production.yml after obtaining a domain certificate.
+services:
+  backend:
+    environment:
+      APP_ORIGINS: https://${SITE_HOST:?Set SITE_HOST in deploy/.env}
+      DEMO_COOKIE_SECURE: 'true'
+  nginx:
+    ports:
+      - '${HTTP_BIND:-127.0.0.1}:${HTTPS_PORT:-443}:443'
+    volumes:
+      - ./deploy/nginx/https.conf.template:/etc/nginx/templates/default.conf.template:ro

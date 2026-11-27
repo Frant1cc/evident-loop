@@ -1,14 +1,17 @@
-import { Router, type Response } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 
 import { artifactStore, type ArtifactStore } from '../artifacts/store.js';
 import type { ArtifactApplication } from '../modules/artifacts/index.js';
+import { DemoAccessError, type PublicDemoApplication } from '../modules/demo/index.js';
 import { failure } from '../response.js';
 
 type ArtifactReader = Pick<ArtifactStore, 'get'>;
+type ArtifactScope = (req: Request) => ReturnType<PublicDemoApplication['scopeArtifacts']>;
 
 export function createArtifactsRouter(
   store: ArtifactReader = artifactStore,
-  generation?: ArtifactApplication
+  generation?: ArtifactApplication,
+  scope?: ArtifactScope
 ) {
   const router = Router();
 
@@ -20,7 +23,7 @@ export function createArtifactsRouter(
     await sendArtifact(store, req.params.artifactId, res, 'inline');
   });
 
-  if (generation) registerGenerationRoutes(router, generation);
+  if (generation) registerGenerationRoutes(router, generation, scope);
 
   return router;
 }
@@ -54,7 +57,23 @@ async function sendArtifact(
   });
 }
 
-function registerGenerationRoutes(router: Router, generation: ArtifactApplication) {
+function registerGenerationRoutes(router: Router, generation: ArtifactApplication, scope?: ArtifactScope) {
+  if (scope) {
+    const ownershipChecks = {
+      conversationId: 'ownsConversation',
+      generationId: 'ownsGeneration',
+      outputId: 'ownsOutput'
+    } as const;
+    for (const [parameter, check] of Object.entries(ownershipChecks)) {
+      router.param(parameter, (req, res, next, id: string) => {
+        if (!isOpaqueId(id) || !scope(req)[check](id)) {
+          res.status(404).json(failure('文稿或会话不存在。'));
+          return;
+        }
+        next();
+      });
+    }
+  }
   router.get('/artifacts/generations', (_req, res) => {
     try {
       res.json({ code: 1, message: 'success', data: { generations: generation.listAllGenerations() } });
@@ -63,16 +82,16 @@ function registerGenerationRoutes(router: Router, generation: ArtifactApplicatio
     }
   });
 
-  router.post('/research/conversations/:conversationId/artifacts/drafts', async (req, res) => {
+  router.post('/research/conversations/:conversationId/artifacts/drafts', async (req, res, next) => {
     if (!isOpaqueId(req.params.conversationId)) {
       res.status(404).json(failure('Research conversation not found'));
       return;
     }
     try {
-      const draft = await generation.createDraft(req.params.conversationId, req.body);
+      const draft = await (scope?.(req) ?? generation).createDraft(req.params.conversationId, req.body);
       res.status(201).json({ code: 1, message: 'Artifact draft created', data: { generation: draft } });
     } catch (error) {
-      respondArtifactError(res, error);
+      respondArtifactError(res, error, next);
     }
   });
 
@@ -134,16 +153,16 @@ function registerGenerationRoutes(router: Router, generation: ArtifactApplicatio
     }
   });
 
-  router.post('/artifacts/generations/:generationId/render', (req, res) => {
+  router.post('/artifacts/generations/:generationId/render', (req, res, next) => {
     if (!isOpaqueId(req.params.generationId)) {
       res.status(404).json(failure('Artifact generation not found'));
       return;
     }
     try {
-      const item = generation.startRender(req.params.generationId);
+      const item = (scope?.(req) ?? generation).startRender(req.params.generationId);
       res.status(202).json({ code: 1, message: 'Artifact rendering started', data: { generation: item } });
     } catch (error) {
-      respondArtifactError(res, error);
+      respondArtifactError(res, error, next);
     }
   });
 
@@ -158,7 +177,7 @@ function registerGenerationRoutes(router: Router, generation: ArtifactApplicatio
       const consent = generation.confirmImageUse(req.params.generationId, imageUrl, sourceId);
       res.status(201).json({ code: 1, message: 'Image usage confirmed', data: { consent } });
     } catch (error) {
-      respondArtifactError(res, error, 400);
+      respondArtifactError(res, error);
     }
   });
 
@@ -181,7 +200,7 @@ function registerGenerationRoutes(router: Router, generation: ArtifactApplicatio
       });
       res.status(201).json({ code: 1, message: 'Authorized source image stored', data: { asset } });
     } catch (error) {
-      respondArtifactError(res, error, 400);
+      respondArtifactError(res, error);
     }
   });
 
@@ -215,16 +234,16 @@ function registerGenerationRoutes(router: Router, generation: ArtifactApplicatio
     }
   });
 
-  router.post('/artifacts/outputs/:outputId/retry', (req, res) => {
+  router.post('/artifacts/outputs/:outputId/retry', (req, res, next) => {
     if (!isOpaqueId(req.params.outputId)) {
       res.status(404).json(failure('Artifact output not found'));
       return;
     }
     try {
-      const item = generation.retryOutput(req.params.outputId);
+      const item = (scope?.(req) ?? generation).retryOutput(req.params.outputId);
       res.status(202).json({ code: 1, message: 'Artifact output retry started', data: { generation: item } });
     } catch (error) {
-      respondArtifactError(res, error);
+      respondArtifactError(res, error, next);
     }
   });
 
@@ -262,9 +281,10 @@ function registerGenerationRoutes(router: Router, generation: ArtifactApplicatio
 
 }
 
-function respondArtifactError(res: Response, error: unknown, defaultStatus = 400) {
+function respondArtifactError(res: Response, error: unknown, next?: NextFunction) {
+  if (next && error instanceof DemoAccessError) { next(error); return; }
   const code = error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code) : '';
-  const status = code === 'artifact_not_found' ? 404 : code === 'artifact_snapshot_stale' ? 409 : defaultStatus;
+  const status = code === 'artifact_not_found' ? 404 : code === 'artifact_snapshot_stale' ? 409 : 400;
   res.status(status).json(failure(error instanceof Error ? error.message : 'Artifact request failed'));
 }
 

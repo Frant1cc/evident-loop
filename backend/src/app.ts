@@ -28,7 +28,7 @@ import { createMcpRouter, mcpSecurityMiddleware } from './mcp/routes.js';
 import type { ToolRuntime } from './tools/contracts.js';
 import { createApprovalManager, createToolApprovalRouter } from './approvals/index.js';
 import type { ApprovalManager } from './approvals/contracts.js';
-import { createPublicDemoApplication, createDemoToolRuntime, getDemoConfig, isPublicDemoEnabled, type DemoConfig, type PublicDemoApplication } from './modules/demo/index.js';
+import { createPublicDemoApplication, createDemoToolRuntime, getDemoConfig, isPublicDemoEnabled, limitDemoArtifactProvider, type DemoConfig, type PublicDemoApplication } from './modules/demo/index.js';
 import { createDemoRouter, demoErrorHandler, demoVisitor } from './routes/demo.js';
 import { builtInToolGroups } from './tools/groups.js';
 
@@ -48,17 +48,12 @@ export function createApp(dependencies: AppDependencies = {}) {
   const configuredLlm = createConfiguredLlm();
   const model = dependencies.model ?? configuredLlm.model;
   const llm = dependencies.llm ?? configuredLlm.llm;
-  const artifactApplication = dependencies.artifactApplication ?? createArtifactApplication({
-    llm,
-    model,
-    artifactModel: process.env.ARTIFACT_MODEL?.trim() || undefined,
-    isResearchConversationActive: (conversationId) => Boolean(getActiveResearchRun(conversationId))
-  });
+  const publicDemoEnabled = dependencies.publicDemo !== false && (Boolean(dependencies.publicDemo) || isPublicDemoEnabled());
+  const artifactApplication = dependencies.artifactApplication ?? createConfiguredArtifactApplication(llm, model, publicDemoEnabled);
   const tools = dependencies.tools ?? createToolCatalog([
     ...toolCatalog.values(),
     createStartDocumentGenerationTool(artifactApplication)
   ]);
-  const publicDemoEnabled = dependencies.publicDemo !== false && (Boolean(dependencies.publicDemo) || isPublicDemoEnabled());
   const sourceRuntime = dependencies.toolRuntime ?? createToolRuntime(tools);
   const toolRuntime = publicDemoEnabled ? createDemoToolRuntime(sourceRuntime) : sourceRuntime;
   const demo = publicDemoEnabled ? createPublicDemoApplication({
@@ -81,6 +76,7 @@ export function createApp(dependencies: AppDependencies = {}) {
   app.use('/api', healthRouter);
   app.use('/api', createDemoRouter(demo));
   if (!demo) app.use(cors());
+  if (demo) app.patch('/api/artifacts/generations/:generationId', express.json({ limit: '2mb' }));
   app.use(express.json({ limit: demo ? '16kb' : '2mb' }));
   app.use('/api', knowledgeRouter);
   app.use('/api', deepseekRouter);
@@ -90,14 +86,17 @@ export function createApp(dependencies: AppDependencies = {}) {
   // callers and receive the approval interceptor below.
   app.use('/api', createAgentRouter(createLegacyToolRuntime(toolRuntime)));
   app.use('/api', createToolApprovalRouter(approvalManager));
-  app.use('/api', createArtifactsRouter(artifactStore, artifactApplication));
+  app.use('/api', createArtifactsRouter(artifactStore, artifactApplication, demo ? (req) => {
+    const visitor = demoVisitor(req);
+    return demo.scopeArtifacts(artifactApplication, visitor.id, visitor.ip);
+  } : undefined));
   const research = createResearchApplication({
     llm,
     model,
     toolRuntime,
     skillRuntime,
     approvalManager,
-    artifactApplication: demo ? undefined : artifactApplication,
+    artifactApplication,
     toolGroups: demo ? builtInToolGroups.filter((group) => group.toolNames.every((name) =>
       toolRuntime.getDefinitions().some((tool) => tool.function.name === name))) : undefined
   });
@@ -127,16 +126,12 @@ export function createProductionApp(options: { host?: string; port?: number } = 
   // `app` export so MCP upserts cannot leak into a second runtime instance.
   const runtimeCatalog = new Map(toolCatalog);
   const configuredLlm = createConfiguredLlm();
-  const artifactApplication = createArtifactApplication({
-    llm: configuredLlm.llm,
-    model: configuredLlm.model,
-    artifactModel: process.env.ARTIFACT_MODEL?.trim() || undefined,
-    isResearchConversationActive: (conversationId) => Boolean(getActiveResearchRun(conversationId))
-  });
+  const publicDemoEnabled = isPublicDemoEnabled();
+  const artifactApplication = createConfiguredArtifactApplication(configuredLlm.llm, configuredLlm.model, publicDemoEnabled);
   // A process restart cannot safely resume an in-flight planning LLM call.
   // Mark that request terminal and leave queued requests bound to their
   // originating research run for explicit completion/failure handling.
-  artifactApplication.recoverPendingDrafts();
+  if (!publicDemoEnabled) artifactApplication.recoverPendingDrafts();
   runtimeCatalog.set(
     'start_document_generation',
     createStartDocumentGenerationTool(artifactApplication)
@@ -159,6 +154,15 @@ export function createProductionApp(options: { host?: string; port?: number } = 
 // local scripts). Production creates the MCP manager after initDb() via
 // createProductionApp(); this export intentionally has no MCP side effects.
 export const app = createApp();
+
+function createConfiguredArtifactApplication(llm: LlmProvider | undefined, model: string, demo: boolean) {
+  return createArtifactApplication({
+    llm: demo ? limitDemoArtifactProvider(llm) : llm,
+    model,
+    artifactModel: process.env.ARTIFACT_MODEL?.trim() || undefined,
+    isResearchConversationActive: (conversationId) => Boolean(getActiveResearchRun(conversationId))
+  });
+}
 
 function createLegacyToolRuntime(runtime: ToolRuntime): ToolRuntime {
   const artifactToolNames = new Set([

@@ -16,6 +16,8 @@ backend/data/
 *.sqlite-wal
 .rag-eval/
 reports/
+backups/
+deploy/certificates/
 .tmp/
 
 # Local tools and operating-system files

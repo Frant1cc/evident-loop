@@ -1,12 +1,14 @@
 import { sqlite } from '../../db.js';
 import type { LlmProvider } from '../../llm/contracts.js';
 import type { ToolRuntime } from '../../tools/contracts.js';
+import type { ArtifactApplication } from '../artifacts/index.js';
 import type { ResearchApplication } from '../research/index.js';
 import { createDemoRunBudget } from '../../demo/budget.js';
 import { DemoAccessError, demoDay, type DemoConfig } from '../../demo/config.js';
 import {
   bindDemoRun, consumeDemoRequest, createOwnedConversation, finishDemoRun, hashClientIp,
-  ownedConversationIds, ownsConversation, ownsNote, ownsRun, recoverDemoOperations, resolveDemoVisitor,
+  ownedConversationIds, ownsArtifactGeneration, ownsArtifactOutput, ownsConversation, ownsNote, ownsRun,
+  recoverDemoArtifacts, recoverDemoOperations, resolveDemoVisitor,
   reserveDemoRun, usage
 } from '../../demo/store.js';
 
@@ -41,7 +43,43 @@ export function createPublicDemoApplication(options: {
         maxMessageChars: config.maxMessageChars
       };
     },
-    recoverInterrupted: () => recoverDemoOperations(now()),
+    recoverInterrupted: () => {
+      const time = now();
+      recoverDemoOperations(time);
+      recoverDemoArtifacts(time);
+    },
+    scopeArtifacts: (base: ArtifactApplication, visitorId: string, ip: string) => {
+      const reserve = () => {
+        const id = reserveDemoRun(visitorId, ip, config, now());
+        return { signal: AbortSignal.timeout(config.maxRunMs), finish: () => finishDemoRun(id, now()) };
+      };
+      const startRender = (start: (signal: AbortSignal) => ReturnType<ArtifactApplication['startRender']>) => {
+        const { signal, finish } = reserve();
+        try {
+          const generation = start(signal);
+          void base.waitForRender(generation.id).then(finish, finish);
+          return generation;
+        } catch (error) {
+          finish();
+          throw error;
+        }
+      };
+      return {
+        ownsConversation: (id: string) => ownsConversation(visitorId, id),
+        ownsGeneration: (id: string) => ownsArtifactGeneration(visitorId, id),
+        ownsOutput: (id: string) => ownsArtifactOutput(visitorId, id),
+        createDraft: async (id: string, preferences: unknown) => {
+          const { signal, finish } = reserve();
+          try {
+            return await base.createDraft(id, preferences, signal);
+          } finally {
+            finish();
+          }
+        },
+        startRender: (id: string) => startRender((signal) => base.startRender(id, signal)),
+        retryOutput: (id: string) => startRender((signal) => base.retryOutput(id, signal))
+      };
+    },
     scopeResearch: (base: ResearchApplication, visitorId: string, ip: string): ResearchApplication => ({
       ...base,
       listConversations: () => {

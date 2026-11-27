@@ -1,0 +1,99 @@
+name: evident-loop-demo
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
+services:
+  backend:
+    image: evident-loop/backend:${APP_VERSION:-local}
+    build:
+      context: .
+      target: backend
+    init: true
+    restart: unless-stopped
+    env_file:
+      - ./deploy/.env
+    environment:
+      NODE_ENV: production
+      PUBLIC_DEMO_ENABLED: 'true'
+      HOST: 0.0.0.0
+      PORT: '3000'
+      APP_HOSTS: ${SITE_HOST:?Set SITE_HOST in deploy/.env},127.0.0.1
+      APP_ORIGINS: ${APP_ORIGIN:?Set APP_ORIGIN in deploy/.env}
+      DEMO_COOKIE_SECURE: 'false'
+      DEMO_TRUST_PROXY: ${NGINX_INTERNAL_IP:-172.30.240.10}
+      SQLITE_DB_PATH: /data/evident-loop.sqlite
+      KNOWLEDGE_FILES_DIR: /data/knowledge-files
+      ARTIFACTS_DIR: /data/artifacts
+      ARTIFACT_BINARY_DIR: /data/artifact-binaries
+      QDRANT_URL: http://qdrant:6333
+      RAG_QUERY_REWRITE: 'off'
+    volumes:
+      - backend_data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    depends_on:
+      qdrant:
+        condition: service_started
+    stop_grace_period: 30s
+    logging: *logging
+
+  nginx:
+    image: evident-loop/nginx:${APP_VERSION:-local}
+    build:
+      context: .
+      target: nginx
+    restart: unless-stopped
+    environment:
+      SITE_HOST: ${SITE_HOST:?Set SITE_HOST in deploy/.env}
+    ports:
+      - '${HTTP_BIND:-127.0.0.1}:${HTTP_PORT:-8080}:80'
+    volumes:
+      - ./deploy/nginx/http.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - acme_webroot:/var/www/certbot:ro
+      - certificates:/etc/letsencrypt:ro
+    networks:
+      default:
+        ipv4_address: ${NGINX_INTERNAL_IP:-172.30.240.10}
+    security_opt: [no-new-privileges:true]
+    depends_on:
+      backend:
+        condition: service_healthy
+    logging: *logging
+
+  qdrant:
+    image: qdrant/qdrant:v1.18.0
+    restart: unless-stopped
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-}
+    volumes:
+      - qdrant_data:/qdrant/storage
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+
+  certbot:
+    image: certbot/certbot:v5.9.0
+    profiles: [tools]
+    volumes:
+      - acme_webroot:/var/www/certbot
+      - certificates:/etc/letsencrypt
+    logging: *logging
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${DEMO_NETWORK_SUBNET:-172.30.240.0/24}
+
+volumes:
+  backend_data:
+  qdrant_data:
+  acme_webroot:
+  certificates:

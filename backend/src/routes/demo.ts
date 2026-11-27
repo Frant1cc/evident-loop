@@ -14,7 +14,13 @@ const allowed = [
   ['POST', new RegExp(`^/research/conversations/${opaque}/(messages|notes)$`)],
   ['PUT|DELETE', new RegExp(`^/research/notes/${opaque}$`)],
   ['GET', new RegExp(`^/research/runs/${opaque}/events$`)],
-  ['POST', new RegExp(`^/research/runs/${opaque}/cancel$`)]
+  ['POST', new RegExp(`^/research/runs/${opaque}/cancel$`)],
+  ['GET', new RegExp(`^/research/conversations/${opaque}/(artifacts|artifact-requests)$`)],
+  ['POST', new RegExp(`^/research/conversations/${opaque}/artifacts/drafts$`)],
+  ['GET|PATCH|DELETE', new RegExp(`^/artifacts/generations/${opaque}$`)],
+  ['POST', new RegExp(`^/artifacts/generations/${opaque}/(render|cancel)$`)],
+  ['POST', new RegExp(`^/artifacts/outputs/${opaque}/retry$`)],
+  ['GET|HEAD', new RegExp(`^/artifact-files/${opaque}/(preview|download)$`)]
 ] as const;
 
 export function demoVisitor(req: Request): Visitor {

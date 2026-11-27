@@ -1,0 +1,23 @@
+server {
+    listen 80 default_server;
+    server_name ${SITE_HOST};
+    if ($host != "${SITE_HOST}") { return 444; }
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        try_files $uri =404;
+    }
+    location / { return 301 https://${SITE_HOST}$request_uri; }
+}
+
+server {
+    listen 443 ssl default_server;
+    server_name ${SITE_HOST};
+    if ($host != "${SITE_HOST}") { return 444; }
+    ssl_certificate /etc/letsencrypt/live/evident-loop/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/evident-loop/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:TLS:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+    include /etc/nginx/snippets/application.conf;
+}

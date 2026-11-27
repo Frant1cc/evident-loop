@@ -181,7 +181,7 @@ function clampMargin(value: number) {
 async function request<T>(path: string, init: { method?: string; body?: unknown } = {}) {
   const response = await fetch(path, {
     method: init.method,
-    headers: init.body === undefined ? undefined : { 'Content-Type': 'application/json' },
+    headers: init.method ? { 'Content-Type': 'application/json', 'X-Requested-With': 'EvidentLoop' } : undefined,
     body: init.body === undefined ? undefined : JSON.stringify(init.body)
   });
   const payload = await response.json() as ApiResponse<T>;

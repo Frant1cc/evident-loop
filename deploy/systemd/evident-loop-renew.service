@@ -1,0 +1,12 @@
+[Unit]
+Description=Renew EvidentLoop domain TLS certificate and reload Nginx
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/evident-loop
+ExecStart=/usr/bin/docker compose --env-file deploy/.env -f compose.production.yml -f compose.https.yml run --rm --no-deps certbot renew --quiet --no-random-sleep-on-renew
+ExecStart=/usr/bin/docker compose --env-file deploy/.env -f compose.production.yml -f compose.https.yml exec -T nginx nginx -t
+ExecStart=/usr/bin/docker compose --env-file deploy/.env -f compose.production.yml -f compose.https.yml exec -T nginx nginx -s reload

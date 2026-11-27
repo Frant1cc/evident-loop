@@ -4,7 +4,40 @@ import { createToolRuntime } from '../tools/runtime.js';
 import { searchKnowledge } from '../rag/index.js';
 import type { DemoConfig } from './config.js';
 
-const allowedTools = new Set(['search_knowledge', 'read_document', 'read_evidence']);
+const allowedTools = new Set(['search_knowledge', 'read_document', 'read_evidence', 'start_document_generation']);
+
+export function limitDemoArtifactProvider(llm: LlmProvider | undefined): LlmProvider | undefined {
+  if (!llm) return undefined;
+  const callsByOperation = new WeakMap<AbortSignal, number>();
+  return {
+    ...llm,
+    complete: async (input) => {
+      const signal = input.signal;
+      if (!signal) throw new Error('文稿任务缺少运行期限。');
+      signal.throwIfAborted();
+      const calls = (callsByOperation.get(signal) ?? 0) + 1;
+      callsByOperation.set(signal, calls);
+      if (calls > 12) throw new Error('本次文稿已达到模型调用上限。');
+      if (JSON.stringify(input.messages).length > 200_000) {
+        throw new Error('文稿内容超过试用上限，请缩小研究范围后重试。');
+      }
+      try {
+        const result = await llm.complete({
+          ...input,
+          maxTokens: Math.min(input.maxTokens ?? 16_000, 16_000),
+          maxRetries: 0,
+          reasoning: false,
+          timeoutMs: Math.min(input.timeoutMs ?? 45_000, 45_000)
+        });
+        signal.throwIfAborted();
+        return result;
+      } catch {
+        signal.throwIfAborted();
+        throw new Error('文稿模型服务暂时不可用，请稍后再试。');
+      }
+    }
+  };
+}
 
 export function createDemoToolRuntime(runtime: ToolRuntime) {
   return createToolRuntime(new Map(runtime.listModules()
@@ -21,6 +54,7 @@ export function createDemoRunBudget(llm: LlmProvider, runtime: ToolRuntime, conf
   timer.unref();
   let calls = 0;
   let toolCalls = 0;
+  let documentRequested = false;
   let finished = false;
   const stop = (message: string): never => {
     const error = new Error(message);
@@ -77,6 +111,10 @@ export function createDemoRunBudget(llm: LlmProvider, runtime: ToolRuntime, conf
       controller.signal.throwIfAborted();
       if (++toolCalls > config.maxToolCalls) stop('本次体验已达到工具调用上限。');
       if (JSON.stringify(args).length > 4_000) stop('工具请求过长，请缩小问题范围。');
+      if (tool.definition.function.name === 'start_document_generation') {
+        if (documentRequested) throw new Error('每轮研究只能创建一份文稿草稿，可在同一请求中选择多种格式。');
+        documentRequested = true;
+      }
       return tool.execute(args, { ...context, signal: context?.signal
         ? AbortSignal.any([context.signal, controller.signal]) : controller.signal });
     }

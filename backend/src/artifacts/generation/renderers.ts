@@ -70,7 +70,9 @@ export class DefaultPptxRenderer implements ArtifactRenderer {
         `PPTX renderer unavailable: Chromium could not start (${error instanceof Error ? error.message : 'launch failed'})`
       );
     }
+    const detachAbort = closeBrowserOnAbort(browser, context?.signal);
     try {
+      throwIfAborted(context?.signal);
       const browserContext = await browser.newContext({
         viewport: pptxViewport,
         deviceScaleFactor: 1,
@@ -136,6 +138,7 @@ export class DefaultPptxRenderer implements ArtifactRenderer {
         }
       };
     } finally {
+      detachAbort();
       await browser.close();
     }
   }
@@ -159,11 +162,15 @@ export class DefaultPdfRenderer implements ArtifactRenderer {
         `PDF renderer unavailable: Chromium could not start (${error instanceof Error ? error.message : 'launch failed'})`
       );
     }
+    const detachAbort = closeBrowserOnAbort(browser, context?.signal);
     try {
+      throwIfAborted(context?.signal);
       const page = await browser.newPage({
         viewport: { width: 1_248, height: 1_764 },
-        deviceScaleFactor: 1
+        deviceScaleFactor: 1,
+        javaScriptEnabled: false
       });
+      await page.route('**/*', (route: { abort: (code: string) => Promise<void> }) => route.abort('blockedbyclient'));
       await page.setContent(createReportHtml(spec, snapshot, context?.assets), { waitUntil: 'load' });
       throwIfAborted(context?.signal);
       let domMetrics: PdfDomMetrics | undefined;
@@ -231,6 +238,7 @@ export class DefaultPdfRenderer implements ArtifactRenderer {
         layoutManifest: createPdfLayoutManifest(spec, domMetrics, context?.assets ?? [])
       };
     } finally {
+      detachAbort();
       await browser.close();
     }
   }
@@ -914,6 +922,12 @@ function escapeHtml(value: string) {
     '"': '&quot;',
     "'": '&#39;'
   }[character] ?? character));
+}
+
+function closeBrowserOnAbort(browser: { close: () => Promise<void> }, signal?: AbortSignal) {
+  const close = () => { void browser.close().catch(() => {}); };
+  signal?.addEventListener('abort', close, { once: true });
+  return () => signal?.removeEventListener('abort', close);
 }
 
 function throwIfAborted(signal?: AbortSignal) {

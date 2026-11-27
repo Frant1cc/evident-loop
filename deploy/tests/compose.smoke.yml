@@ -1,0 +1,31 @@
+# Only use through smoke.mjs: a separate project, volumes, network and loopback ports.
+services:
+  backend:
+    env_file: !reset []
+    environment:
+      LLM_PROVIDER: deepseek
+      DEEPSEEK_API_KEY: smoke-test-key
+      DEEPSEEK_BASE_URL: http://provider:4000/v1
+      EMBEDDING_API_KEY: smoke-test-key
+      EMBEDDING_BASE_URL: http://provider:4000/v1
+      QDRANT_API_KEY: ''
+      DEMO_VISITOR_DAILY_LIMIT: '10'
+      DEMO_IP_DAILY_LIMIT: '10'
+      DEMO_GLOBAL_DAILY_LIMIT: '100'
+    depends_on:
+      provider:
+        condition: service_started
+  nginx:
+    ports: !override
+      - '127.0.0.1:18080:80'
+      - '127.0.0.1:18443:443'
+  qdrant:
+    environment:
+      QDRANT__SERVICE__API_KEY: ''
+  provider:
+    image: node:22-bookworm-slim
+    command: [node, /test/provider.mjs]
+    healthcheck:
+      disable: true
+    volumes:
+      - ./deploy/tests/provider.mjs:/test/provider.mjs:ro

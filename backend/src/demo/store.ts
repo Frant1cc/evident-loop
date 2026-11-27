@@ -76,6 +76,19 @@ export function ownsRun(visitorId: string, id: string) {
     WHERE r.id = ? AND o.visitor_id = ?`).get(id, visitorId));
 }
 
+export function ownsArtifactGeneration(visitorId: string, id: string) {
+  return Boolean(sqlite.prepare(`SELECT 1 FROM research_artifacts g
+    JOIN demo_conversation_owners o ON o.conversation_id = g.conversation_id
+    WHERE g.id = ? AND o.visitor_id = ?`).get(id, visitorId));
+}
+
+export function ownsArtifactOutput(visitorId: string, id: string) {
+  return Boolean(sqlite.prepare(`SELECT 1 FROM research_artifact_outputs f
+    JOIN research_artifacts g ON g.id = f.generation_id
+    JOIN demo_conversation_owners o ON o.conversation_id = g.conversation_id
+    WHERE f.id = ? AND o.visitor_id = ?`).get(id, visitorId));
+}
+
 export function createOwnedConversation<T extends { id: string }>(visitorId: string, create: () => T): T {
   return sqlite.transaction(() => {
     if (ownedConversationIds(visitorId).size >= 10) throw new DemoAccessError('最多保留 10 个体验会话，请先删除不需要的会话。');
@@ -96,7 +109,7 @@ export function reserveDemoRun(visitorId: string, ip: string, config: DemoConfig
       if (usage(day, bucket, subject) >= limit) throw new DemoAccessError(message, 429, retryAfter);
     }
     const active = sqlite.prepare("SELECT visitor_id FROM demo_operations WHERE status = 'active'").all() as Array<{ visitor_id: string }>;
-    if (active.some((row) => row.visitor_id === visitorId)) throw new DemoAccessError('你已有一个研究正在运行，请等待完成或停止后再试。');
+    if (active.some((row) => row.visitor_id === visitorId)) throw new DemoAccessError('已有研究或文稿任务正在运行，请等待完成后再试。');
     if (active.length >= config.globalConcurrency) throw new DemoAccessError('体验人数较多，请稍后再试。');
     increment(day, 'research_visitor', visitorId);
     increment(day, 'research_ip', ip);
@@ -120,6 +133,29 @@ export function finishDemoRun(id: string, now: number) {
 export function recoverDemoOperations(now: number) {
   sqlite.prepare("UPDATE demo_operations SET status = 'finished', finished_at = ? WHERE status = 'active'")
     .run(new Date(now).toISOString());
+}
+
+export function recoverDemoArtifacts(now: number) {
+  const time = new Date(now).toISOString();
+  const message = '服务重启中断了文稿任务，请重试。';
+  sqlite.transaction(() => {
+    sqlite.prepare(`UPDATE research_artifact_draft_requests
+      SET status = 'failed', error = ?, updated_at = ?, completed_at = ?
+      WHERE status IN ('queued', 'running') AND conversation_id IN
+      (SELECT conversation_id FROM demo_conversation_owners)`).run(message, time, time);
+    sqlite.prepare(`UPDATE research_artifact_outputs SET status = 'failed', error = ?, updated_at = ?
+      WHERE status IN ('pending', 'rendering', 'validating') AND generation_id IN
+      (SELECT g.id FROM research_artifacts g JOIN demo_conversation_owners o ON o.conversation_id = g.conversation_id)`)
+      .run(message, time);
+    sqlite.prepare(`UPDATE research_artifacts AS g SET status = CASE
+      WHEN NOT EXISTS (SELECT 1 FROM research_artifact_outputs f WHERE f.generation_id = g.id AND f.status = 'completed')
+        THEN 'failed'
+      WHEN EXISTS (SELECT 1 FROM research_artifact_outputs f WHERE f.generation_id = g.id AND f.status != 'completed')
+        THEN 'partial'
+      ELSE 'completed' END, updated_at = ?
+      WHERE status IN ('rendering', 'validating', 'repairing') AND conversation_id IN
+      (SELECT conversation_id FROM demo_conversation_owners)`).run(time);
+  })();
 }
 
 export function pruneDemoMetadata(now = Date.now()) {

@@ -149,7 +149,9 @@ EvidentLoop 面向可信的本地或私有环境。公网多用户部署还需�
 
 专用试用实例可启用[每 24 小时执行的数据清理](./docs/development/demo-data-retention.md)，清理闲置满 24 小时的会话、任务及关联文稿；默认关闭，此功能不替代访问权限和费用控制。
 
-设置 `PUBLIC_DEMO_ENABLED=true` 可启用[免注册公开试用模式](./docs/development/public-demo.md)：访客会话隔离，每访客每天默认 10 次研究，配合 IP/全站额度与后台并发限制，并自动启用每日清理；仅开放研究对话和公共示例知识检索。
+设置 `PUBLIC_DEMO_ENABLED=true` 可启用[免注册公开试用模式](./docs/development/public-demo.md)，开放研究对话、公共示例知识检索和会话内的 Word、PDF、PPT 文稿生成。访客会话与文稿相互隔离，研究和文稿任务共用默认每天 10 次的访客额度，并自动启用每日清理。
+
+首次上线可按 [Docker 与 Nginx 分步部署](./docs/development/docker-deployment.md) 操作：先通过公网 IP 做 HTTP 试用，之后配置域名 HTTPS 与自动续期。
 
 ## License
 

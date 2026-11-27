@@ -11,8 +11,8 @@ test('infers pptx or pdf from explicit user wording and does not treat a generic
 });
 
 test('requested formats win over inferred wording', () => {
-  assert.deepEqual(normalizeArtifactFormats(['pdf', 'pptx', 'pdf', 'docx']), ['pptx', 'pdf']);
+  assert.deepEqual(normalizeArtifactFormats(['pdf', 'pptx', 'pdf', 'docx']), ['pptx', 'docx', 'pdf']);
   assert.deepEqual(resolveArtifactFormats({ requested: ['pdf'], userText: '请生成 PPT' }), ['pdf']);
   assert.deepEqual(resolveArtifactFormats({ userText: '只要幻灯片' }), ['pptx']);
-  assert.deepEqual(resolveArtifactFormats({}), ['pptx', 'pdf']);
+  assert.deepEqual(resolveArtifactFormats({}), ['pptx', 'docx', 'pdf']);
 });

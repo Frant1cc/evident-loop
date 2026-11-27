@@ -20,10 +20,9 @@ export function isExplicitWordDocumentRequest(message: string) {
 export function isExplicitDocumentRequest(message: string) {
   const normalized = message.toLowerCase();
   const mentionsDocument =
-    /\bdocx\b|\bword\b|微软\s*word|\bpptx?\b|幻灯片|演示文稿|slides?|presentation/.test(normalized) ||
-    /\bpdf\b.*(报告|report)|(报告|report).*\bpdf\b/.test(normalized);
+    /\b(?:docx?|word|pdf|pptx?|slides?|presentation|powerpoint)\b|幻灯片|演示文稿|长篇文档|长篇报告/.test(normalized);
   const requestsArtifact =
-    /(生成|创建|制作|导出|下载|保存|整理成|转成|输出|提供)/.test(normalized) ||
+    /(生成|创建|制作|导出|下载|保存|整理成|转成|输出|提供|做成|转换|产出)/.test(normalized) ||
     /\b(generate|create|export|download|save|produce|make|convert)\b/.test(normalized);
   return mentionsDocument && requestsArtifact;
 }

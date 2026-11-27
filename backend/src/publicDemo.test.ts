@@ -5,11 +5,14 @@ import { setTimeout as delay } from 'node:timers/promises';
 import test, { beforeEach } from 'node:test';
 
 import { createApp } from './app.js';
+import { createArtifactGenerationService } from './artifacts/generation/index.js';
+import { createArtifactApplication } from './modules/artifacts/index.js';
+import { createPublicDemoApplication } from './modules/demo/index.js';
 import { initDb, sqlite } from './db.js';
 import { getDemoConfig, demoDay, DemoAccessError } from './demo/config.js';
-import { createDemoRunBudget, createDemoToolRuntime } from './demo/budget.js';
-import { consumeDemoRequest, hashClientIp, resolveDemoVisitor, reserveDemoRun, finishDemoRun, recoverDemoOperations, usage } from './demo/store.js';
-import { createResearchConversation, getResearchRun } from './research/store.js';
+import { createDemoRunBudget, createDemoToolRuntime, limitDemoArtifactProvider } from './demo/budget.js';
+import { consumeDemoRequest, createOwnedConversation, hashClientIp, resolveDemoVisitor, reserveDemoRun, finishDemoRun, recoverDemoOperations, usage } from './demo/store.js';
+import { createResearchConversation, createResearchMessage, getResearchRun } from './research/store.js';
 import { createToolRuntime } from './tools/runtime.js';
 import { toolCatalog } from './tools/registry.js';
 import type { ChatCompletionRequest, LlmProvider } from './llm/contracts.js';
@@ -113,16 +116,16 @@ test('two visitors cannot read, mutate, cancel or subscribe to each other’s da
   });
 });
 
-test('demo endpoints deny legacy LLM, downloads, artifacts, tasks, approvals, management, uploads and cross-site writes', async () => {
+test('demo endpoints deny legacy LLM and downloads, global artifact access, tasks, approvals, management, uploads and cross-site writes', async () => {
   await withServer(async (url) => {
     const visitor = client(url);
     for (const [method, path] of [
       ['GET', '/mcp/servers'], ['POST', '/mcp/servers'], ['GET', '/tasks'],
       ['GET', '/tool-approvals'], ['GET', '/knowledge/documents'], ['POST', '/knowledge/documents/upload'],
       ['GET', '/artifacts/generations'], ['GET', `/artifacts/${randomUUID()}/download`],
-      ['GET', `/artifact-files/${randomUUID()}/preview`], ['POST', '/agent/chat'],
+      ['POST', `/artifacts/generations/${randomUUID()}/image-consents`], ['POST', '/agent/chat'],
       ['POST', '/llm/chat/stream'], ['POST', '/deepseek/chat/stream'], ['GET', '/db-test'],
-      ['POST', '/web/evaluations'], ['GET', `/research/conversations/${randomUUID()}/artifacts`]
+      ['POST', '/web/evaluations']
     ]) assert.equal((await visitor.request(path!, method!, method === 'GET' ? undefined : {})).status, 403, path);
     assert.equal(sqlite.prepare('SELECT * FROM demo_visitors').all().length, 0);
     assert.equal((await fetch(url + '/research/conversations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 403);
@@ -134,8 +137,107 @@ test('demo endpoints deny legacy LLM, downloads, artifacts, tasks, approvals, ma
     });
     assert.equal(multipart.status, 403);
     const tools = (await (await visitor.request('/research/tools')).json()).data.tools;
-    assert.deepEqual(tools.map((tool: { name: string }) => tool.name).sort(), ['read_document', 'search_knowledge']);
+    assert.deepEqual(tools.map((tool: { name: string }) => tool.name).sort(), ['read_document', 'search_knowledge', 'start_document_generation']);
+    assert.equal((await visitor.request(`/artifact-files/${randomUUID()}/preview`)).status, 404);
+    assert.equal((await visitor.request(`/research/conversations/${randomUUID()}/artifacts`)).status, 404);
   });
+});
+
+test('demo artifact API serves only the owning visitor and charges drafting and rendering', async () => {
+  const provider: LlmProvider = {
+    ...llm,
+    complete: async (request) => request.messages[0]?.content.includes('ArtifactAgent content planner')
+      ? { choices: [{ message: { role: 'assistant', content: '' } }] }
+      : answer
+  };
+  await withServer(async (url) => {
+    const alice = client(url);
+    const bob = client(url);
+    const conversation = await createConversation(alice);
+    createResearchMessage({ conversationId: conversation, role: 'assistant', content: '试用报告的研究结论', status: 'complete' });
+    const drafts = `/research/conversations/${conversation}/artifacts/drafts`;
+    assert.equal((await bob.request(drafts, 'POST', { formats: ['docx'] })).status, 404);
+    const created = await alice.request(drafts, 'POST', { formats: ['docx'] });
+    assert.equal(created.status, 201);
+    const draft = (await created.json()).data.generation;
+    const path = `/artifacts/generations/${draft.id}`;
+    for (const method of ['GET', 'PATCH', 'DELETE']) {
+      assert.equal((await bob.request(path, method)).status, 404);
+    }
+    assert.equal((await bob.request(path + '/render', 'POST')).status, 404);
+    const updated = await alice.request(path, 'PATCH', { spec: { ...draft.spec, title: '已编辑报告' } });
+    assert.equal(updated.status, 200);
+    const rendering = await alice.request(path + '/render', 'POST');
+    assert.equal(rendering.status, 202);
+    const generation = (await rendering.json()).data.generation;
+    const outputPath = `/artifact-files/${generation.outputs[0].id}`;
+    let download = await alice.request(outputPath + '/download');
+    for (let attempt = 0; attempt < 40 && download.status === 404; attempt += 1) {
+      await delay(15);
+      download = await alice.request(outputPath + '/download');
+    }
+    assert.equal(download.status, 200);
+    assert.equal(Buffer.from(await download.arrayBuffer()).subarray(0, 2).toString(), 'PK');
+    assert.equal((await alice.request(outputPath + '/preview')).status, 200);
+    assert.equal((await bob.request(outputPath + '/download')).status, 404);
+    assert.equal((await bob.request(`/artifacts/outputs/${generation.outputs[0].id}/retry`, 'POST')).status, 404);
+    assert.equal((await (await alice.request('/demo')).json()).data.remaining, 0);
+    const limit = await alice.request(drafts, 'POST', { formats: ['pdf'] });
+    assert.equal(limit.status, 429);
+    assert.ok(Number(limit.headers.get('retry-after')) > 0);
+    assert.equal((await alice.request(`/research/conversations/${conversation}`, 'DELETE')).status, 200);
+    assert.equal((await alice.request(outputPath + '/download')).status, 404);
+  }, { visitorDailyLimit: 2 }, provider);
+});
+
+test('demo artifact lifecycle keeps the shared slot until rendering settles and produces a Word file', async () => {
+  const bytes = new Map<string, Buffer>();
+  const generationService = createArtifactGenerationService({
+    model: 'test',
+    binaryStore: {
+      put: async (key, value) => { bytes.set(key, value); },
+      get: async (key) => bytes.get(key) ?? null,
+      delete: async (key) => { bytes.delete(key); }
+    }
+  });
+  const artifacts = createArtifactApplication({ model: 'test', generationService });
+  const demo = createPublicDemoApplication({ config, tools: createToolRuntime(toolCatalog), now: () => now });
+  const alice = demo.openSession(undefined, '127.0.0.1');
+  const bob = demo.openSession(undefined, '127.0.0.1');
+  const conversation = createOwnedConversation(alice.id, createResearchConversation);
+  createResearchMessage({ conversationId: conversation.id, role: 'assistant', content: '文稿内容', status: 'complete' });
+  const owner = demo.scopeArtifacts(artifacts, alice.id, alice.ip);
+  const other = demo.scopeArtifacts(artifacts, bob.id, bob.ip);
+  const draft = await owner.createDraft(conversation.id, { formats: ['docx'] });
+  assert.equal(other.ownsConversation(conversation.id), false);
+  assert.equal(other.ownsGeneration(draft.id), false);
+  const generation = owner.startRender(draft.id);
+  const output = generation.outputs[0]!;
+  assert.equal(owner.ownsOutput(output.id), true);
+  assert.equal(other.ownsOutput(output.id), false);
+  assert.throws(() => reserveDemoRun(alice.id, alice.ip, config, now), DemoAccessError);
+  await artifacts.waitForRender(generation.id);
+  assert.equal(artifacts.getGeneration(generation.id)?.status, 'completed');
+  assert.equal((await artifacts.readOutput(output.id))?.buffer.subarray(0, 2).toString(), 'PK');
+  assert.equal(demo.status(alice.id).remaining, config.visitorDailyLimit - 2);
+  const reservation = reserveDemoRun(alice.id, alice.ip, config, now);
+  finishDemoRun(reservation, now);
+});
+
+test('demo artifact provider caps requests per operation', async () => {
+  const requests: ChatCompletionRequest[] = [];
+  const provider = limitDemoArtifactProvider({
+    ...llm,
+    complete: async (request) => { requests.push(request); return answer; }
+  })!;
+  const signal = new AbortController().signal;
+  const request = { model: 'test', messages: [], signal, maxTokens: 100_000, maxRetries: 9 };
+  for (let i = 0; i < 12; i += 1) await provider.complete(request);
+  await assert.rejects(provider.complete(request), /模型调用上限/);
+  await provider.complete({ ...request, signal: new AbortController().signal });
+  assert.equal(requests.length, 13);
+  assert.equal(requests[0]?.maxTokens, 16_000);
+  assert.equal(requests[0]?.maxRetries, 0);
 });
 
 test('daily quota survives conversation deletion, new application instances and browser identity resets', async () => {

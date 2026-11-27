@@ -562,7 +562,6 @@ async function confirmDeleteConversation() {
 }
 
 function withExplicitArtifactTool(content: string, policy: ToolPolicy): ToolPolicy {
-  if (demoStatus.value.enabled) return policy;
   if (!isExplicitDocumentRequest(content) || !availableTools.value.some((tool) => tool.name === 'start_document_generation')) {
     return policy;
   }
@@ -574,8 +573,8 @@ function withExplicitArtifactTool(content: string, policy: ToolPolicy): ToolPoli
 
 function isExplicitDocumentRequest(content: string) {
   const normalized = content.toLowerCase();
-  const mentionsFormat = /\b(?:pptx?|pdf|docx?)\b|幻灯片|演示文稿|长篇报告|文档|word/.test(normalized);
-  const asksToCreate = /生成|创建|制作|导出|下载|转换|做成|产出/.test(normalized);
+  const mentionsFormat = /\b(?:pptx?|pdf|docx?|word|slides?|powerpoint)\b|幻灯片|演示文稿|长篇报告|文档/.test(normalized);
+  const asksToCreate = /\b(?:generate|create|export|download|convert|make)\b|生成|创建|制作|导出|下载|转换|做成|产出/.test(normalized);
   return mentionsFormat && asksToCreate;
 }
 
@@ -656,11 +655,6 @@ function upsert<T extends { id: string }>(items: { value: T[] }, item: T) {
 }
 
 async function loadGenerations(conversationId: string, options: { openForRunId?: string } = {}) {
-  if (demoStatus.value.enabled) {
-    generations.value = [];
-    artifactDraftRequests.value = [];
-    return;
-  }
   const sequence = ++artifactLoadSequence;
   const request = {
     conversationId,
@@ -837,6 +831,7 @@ async function confirmWorkbenchGenerate() {
   error.value = '';
   try {
     const rendered = await renderResearchArtifact(generation.id);
+    if (demoStatus.value.enabled) void refreshDemoStatus().catch(() => {});
     const generationResult = normalizeGeneration(rendered.generation);
     upsert({ value: generations.value }, generationResult);
     if (activeWorkbenchGeneration.value?.id === generation.id) {
@@ -874,6 +869,7 @@ async function workbenchRetryOutput(generation: ResearchArtifactGeneration, outp
   error.value = '';
   try {
     const updated = await retryResearchArtifactOutput(outputId);
+    if (demoStatus.value.enabled) void refreshDemoStatus().catch(() => {});
     const generationResult = normalizeGeneration(updated.generation);
     upsert({ value: generations.value }, generationResult);
     if (activeWorkbenchGeneration.value?.id === generation.id) {

@@ -197,7 +197,7 @@ test('conversation artifact deletion compensates binary removal failures before 
     binaryStore
   });
 
-  const draft = await service.createDraft(conversation.id);
+  const draft = await service.createDraft(conversation.id, { formats: ['pptx', 'pdf'] });
   const generation = service.startRender(draft.id);
   await service.waitForRender(generation.id);
   assert.equal(binary.size, 2);
@@ -329,11 +329,19 @@ test('ArtifactAgent sends only the frozen snapshot to the text model and validat
   let htmlSystemPrompt = '';
   const reasoningValues: Array<boolean | undefined> = [];
   const htmlBatchSizes: number[] = [];
+  const themeCss = [
+    '.slide { background: #f5f1e8; }',
+    ...['title', 'summary', 'metric', 'comparison', 'timeline', 'chart', 'quote']
+      .map((name) => `.slide .deck-${name} { color: #242424; }`)
+  ].join('\n');
   const llm = {
     complete: async (request: { reasoning?: boolean; messages: Array<{ role: string; content: string }> }) => {
       const systemPrompt = request.messages[0]?.content ?? '';
       const userPrompt = request.messages[1]?.content ?? '';
       reasoningValues.push(request.reasoning);
+      if (systemPrompt.includes('presentation design-system author')) {
+        return { choices: [{ message: { role: 'assistant' as const, content: JSON.stringify({ themeCss }) } }] };
+      }
       if (systemPrompt.includes('presentation HTML designer')) {
         htmlSystemPrompt = systemPrompt;
         const input = JSON.parse(userPrompt) as { slides: Array<{ id: string; title: string }> };
@@ -394,7 +402,7 @@ test('ArtifactAgent sends only the frozen snapshot to the text model and validat
   const spec = await createArtifactAgent({ llm, model: 'artifact-model' }).plan(snapshot);
   assert.equal(spec.title, '研究');
   assert.equal(spec.presentation.slides.length, spec.presentation.targetSlideCount);
-  assert.equal(spec.presentation.themeCss, '.slide { background: #f5f1e8; }');
+  assert.ok(spec.presentation.themeCss?.startsWith(themeCss));
   assert.match(spec.presentation.slides[0]?.html ?? '', /<h1>研究<\/h1>/);
   assert.deepEqual(htmlBatchSizes, [2, 2, 2, 2]);
   assert.equal(reasoningValues.every((value) => value === false), true);
@@ -595,7 +603,7 @@ test('renderer_unavailable fails outputs without spending repair attempts', asyn
     renderers: { pptx: unavailable, pdf: unavailable },
     qualityInspector: { inspect: async () => ({ ok: true, diagnostics: [] }) }
   });
-  const draft = await service.createDraft(conversation.id);
+  const draft = await service.createDraft(conversation.id, { formats: ['pptx', 'pdf'] });
   const generation = service.startRender(draft.id);
   await service.waitForRender(generation.id);
   const completed = service.get(generation.id)!;
@@ -738,12 +746,15 @@ test('concurrent format retries are independently drained before generation dele
   let phase: 'fail' | 'block' = 'fail';
   let active = 0;
   let finished = 0;
+  let notifyStarted!: () => void;
+  const bothStarted = new Promise<void>((resolve) => { notifyStarted = resolve; });
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const renderer: ArtifactRenderer = {
     render: async (_spec, _snapshot, context) => {
       if (phase === 'fail') throw new Error('initial render failure');
       active += 1;
+      if (active === 2) notifyStarted();
       try {
         await gate;
         return { buffer: Buffer.from('artifact'), fileName: 'retry.bin', contentType: 'application/octet-stream' };
@@ -760,14 +771,14 @@ test('concurrent format retries are independently drained before generation dele
     renderers: { pptx: renderer, pdf: renderer },
     qualityInspector: { inspect: async () => ({ ok: true, diagnostics: [] }) }
   });
-  const draft = await service.createDraft(conversation.id);
+  const draft = await service.createDraft(conversation.id, { formats: ['pptx', 'pdf'] });
   const generation = service.startRender(draft.id);
   await service.waitForRender(generation.id);
   const failed = service.get(generation.id)!;
   phase = 'block';
   service.retryOutput(failed.outputs.find((output) => output.format === 'pptx')!.id);
   service.retryOutput(failed.outputs.find((output) => output.format === 'pdf')!.id);
-  await Promise.resolve();
+  await bothStarted;
   assert.equal(active, 2);
   const deleting = service.deleteGeneration(generation.id);
   await Promise.resolve();

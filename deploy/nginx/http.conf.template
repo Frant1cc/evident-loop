@@ -1,0 +1,12 @@
+server {
+    listen 80 default_server;
+    server_name ${SITE_HOST};
+    if ($host != "${SITE_HOST}") { return 444; }
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        try_files $uri =404;
+    }
+
+    include /etc/nginx/snippets/application.conf;
+}

@@ -131,6 +131,10 @@ export function createArtifactGenerationService(options: {
       })
     };
     const spec = await agent.plan(snapshot, preferences, signal);
+    signal?.throwIfAborted();
+    if (deletingConversations.has(conversationId)) {
+      throw new ArtifactStateError('Research conversation artifacts are being deleted');
+    }
     // A run can start while the text model is planning. Re-check immediately
     // before persistence so a draft can never be created from a moving
     // conversation boundary; callers should queue it for the run-complete

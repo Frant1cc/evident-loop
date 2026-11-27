@@ -78,12 +78,16 @@ test('artifact library requests the Agent report collection', async () => {
 
 test('artifact render API is explicit and never uses a download URL as a render command', async () => {
   let requestUrl = '';
-  globalThis.fetch = async (input) => {
+  let headers: Headers | undefined;
+  globalThis.fetch = async (input, init) => {
     requestUrl = String(input);
+    headers = new Headers(init?.headers);
     return new Response(JSON.stringify({ code: 1, message: 'started', data: { generation: { id: 'g' } } }), { status: 202 });
   };
   await renderResearchArtifact('generation-1');
   assert.equal(requestUrl, '/api/artifacts/generations/generation-1/render');
+  assert.equal(headers?.get('x-requested-with'), 'EvidentLoop');
+  assert.equal(headers?.get('content-type'), 'application/json');
 });
 
 test('authorized source-image API keeps the consent id in its request body', async () => {
